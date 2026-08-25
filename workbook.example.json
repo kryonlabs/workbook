@@ -1,0 +1,42 @@
+{
+  "rows": [
+    {
+      "section": "crypto",
+      "label": "cold wallet",
+      "id": "bitcoin",
+      "units": 0.25
+    },
+    {
+      "section": "crypto",
+      "label": "exchange",
+      "id": "ethereum",
+      "units": 2.5
+    },
+    {
+      "section": "banks",
+      "label": "demo checking",
+      "id": "USD",
+      "units": 1250
+    },
+    {
+      "section": "banks",
+      "label": "travel savings",
+      "id": "EUR",
+      "units": 900
+    },
+    {
+      "section": "pending",
+      "label": "milestone invoice",
+      "id": "USD",
+      "units": 750,
+      "units_expr": "500+250"
+    }
+  ],
+  "rates": {
+    "bitcoin": 65000,
+    "ethereum": 3200,
+    "USD": 1,
+    "EUR": 1.1
+  },
+  "updated": "2026-01-01T00:00:00Z"
+}

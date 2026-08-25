@@ -1,0 +1,12 @@
+*.~
+.~*
+*.prev
+/cell
+/geld
+/workbook
+/geld.json
+/workbook.json
+*.tmp
+.env
+private/
+dist/

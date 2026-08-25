@@ -1,0 +1,10 @@
+{
+  "name": "geld",
+  "command": "geld",
+  "script": "scripts/geld",
+  "display_name": "Geld",
+  "description": "Finance workbook profile",
+  "data_env": "GELD_DIR",
+  "desktop": true,
+  "categories": "Office;Finance;"
+}
