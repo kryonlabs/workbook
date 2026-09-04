@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	cellRefRE  = regexp.MustCompile(`\b([A-H])([0-9]+)\b`)
+	cellRefRE  = regexp.MustCompile(`(?i)\b([A-H])([0-9]+)\b`)
 	sumRangeRE = regexp.MustCompile(`(?i)SUM\(([A-H])([0-9]+):([A-H])([0-9]+)\)`)
 )
 
@@ -262,7 +262,7 @@ func (a *app) evalTableFormula(expr string, curRow int, seen map[string]bool) (f
 		return 0, replaceErr
 	}
 	replaced = cellRefRE.ReplaceAllStringFunc(replaced, func(ref string) string {
-		col := int(ref[0] - 'A')
+		col := int(strings.ToUpper(ref[:1])[0] - 'A')
 		row, err := strconv.Atoi(ref[1:])
 		if err != nil || row <= 0 {
 			return "0"
@@ -324,6 +324,14 @@ func (a *app) cellNumber(row, col int, seen map[string]bool) (float64, bool) {
 	}
 	seen[key] = true
 	defer delete(seen, key)
+	if raw, ok := a.wb.CellValues[key]; ok {
+		if strings.HasPrefix(strings.TrimSpace(raw), "=") {
+			v, err := a.evalTableFormula(raw, row, seen)
+			return v, err == nil
+		}
+		v, err := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(raw), ",", ""), 64)
+		return v, err == nil
+	}
 	as := a.wb.Rows[row]
 	eval := func(expr string) (float64, bool) {
 		v, err := a.evalTableFormula(expr, row, seen)
@@ -409,7 +417,7 @@ func (a *app) formulaRefGroups(expr string) []formulaRefGroup {
 		}
 	}
 	for _, match := range cellRefRE.FindAllStringSubmatch(s, -1) {
-		col := int(match[1][0] - 'A')
+		col := int(strings.ToUpper(match[1])[0] - 'A')
 		row, err := strconv.Atoi(match[2])
 		if err != nil || row <= 0 || row > len(a.wb.Rows) || col < 0 || col > 7 {
 			continue

@@ -105,17 +105,17 @@ func (u *uiState) rowAt(y float32) int {
 
 func ctxRect(u *uiState) rl.Rectangle {
 	x, y := u.ctxX, u.ctxY
-	h := float32(28)
-	if u.ctxCol < 0 {
+	h := float32(112)
+	if u.ctxCol < 0 || u.ctxHeader {
 		h = 84
 	}
-	if x > winW-140 {
-		x = winW - 140
+	if x > winW-190 {
+		x = winW - 190
 	}
 	if y > winH-h-8 {
 		y = winH - h - 8
 	}
-	return rl.NewRectangle(x, y, 130, h)
+	return rl.NewRectangle(x, y, 180, h)
 }
 
 func normID(s string) string {
@@ -283,6 +283,7 @@ func (a *app) clearRowCell(u *uiState, idx, col int) {
 		return
 	}
 	as := a.wb.Rows[idx]
+	delete(a.wb.CellValues, cellFormatKey(idx, col))
 	switch col {
 	case 0:
 		as.Section = ""
@@ -314,7 +315,9 @@ func (a *app) insertRowRelative(u *uiState, idx int, below bool) {
 	if below {
 		pos++
 	}
+	a.rewriteWorkbookFormulaRows(pos, true)
 	a.shiftCellFormatsForInsert(pos)
+	a.shiftCellValuesForRowInsert(pos)
 	a.wb.Rows = append(a.wb.Rows, Row{})
 	copy(a.wb.Rows[pos+1:], a.wb.Rows[pos:])
 	a.wb.Rows[pos] = Row{}
@@ -335,7 +338,9 @@ func (a *app) deleteRow(u *uiState, idx int) {
 		return
 	}
 	id := a.wb.Rows[idx].ID
+	a.rewriteWorkbookFormulaRows(idx, false)
 	a.shiftCellFormatsForDelete(idx)
+	a.shiftCellValuesForRowDelete(idx)
 	a.wb.Rows = append(a.wb.Rows[:idx], a.wb.Rows[idx+1:]...)
 	u.selRow = -1
 	u.disp = a.dispRows()
@@ -349,13 +354,34 @@ func (a *app) setRowCell(idx, col int, raw string) bool {
 	formula := strings.HasPrefix(strings.TrimSpace(raw), "=")
 	s := stripExpr(raw)
 	as := a.wb.Rows[idx]
+	key := cellFormatKey(idx, col)
+	if a.wb.CellValues == nil {
+		a.wb.CellValues = map[string]string{}
+	}
+	previousRaw, hadPreviousRaw := a.wb.CellValues[key]
+	delete(a.wb.CellValues, key)
 	switch col {
 	case 0:
-		as.Section = strings.ToLower(s)
+		if formula {
+			a.wb.CellValues[key] = strings.TrimSpace(raw)
+			as.Section = ""
+		} else {
+			as.Section = s
+		}
 	case 1:
-		as.Label = s
+		if formula {
+			a.wb.CellValues[key] = strings.TrimSpace(raw)
+			as.Label = ""
+		} else {
+			as.Label = s
+		}
 	case 2:
-		as.ID = normID(s)
+		if formula {
+			a.wb.CellValues[key] = strings.TrimSpace(raw)
+			as.ID = ""
+		} else {
+			as.ID = normID(s)
+		}
 	case 3:
 		if strings.TrimSpace(s) == "" {
 			as.Units, as.Expr = 0, ""
@@ -370,6 +396,14 @@ func (a *app) setRowCell(idx, col int, raw string) bool {
 			v, err = evalUnits(s)
 		}
 		if err != nil {
+			if !formula {
+				a.wb.CellValues[key] = raw
+				as.Units, as.Expr = 0, ""
+				break
+			}
+			if hadPreviousRaw {
+				a.wb.CellValues[key] = previousRaw
+			}
 			a.err = "bad units: " + raw
 			return false
 		}
@@ -379,23 +413,19 @@ func (a *app) setRowCell(idx, col int, raw string) bool {
 		}
 	case 4:
 		if !setNumericCell(raw, &as.Rate, &as.RateExpr) {
-			a.err = "bad rate: " + raw
-			return false
+			a.wb.CellValues[key] = raw
 		}
 	case 5:
 		if !setPctCell(raw, &as.Pct, &as.PctExpr) {
-			a.err = "bad percent: " + raw
-			return false
+			a.wb.CellValues[key] = raw
 		}
 	case 6:
 		if !setNumericCell(raw, &as.USD, &as.USDExpr) {
-			a.err = "bad usd: " + raw
-			return false
+			a.wb.CellValues[key] = raw
 		}
 	case 7:
 		if !setNumericCell(raw, &as.DUSD, &as.DUSDExpr) {
-			a.err = "bad delta usd: " + raw
-			return false
+			a.wb.CellValues[key] = raw
 		}
 	}
 	a.wb.Rows[idx] = as
@@ -536,6 +566,9 @@ func (a *app) tableDisplayCopyText(u *uiState) (string, bool) {
 func (a *app) rowCellEditText(idx, col int) string {
 	if idx < 0 || idx >= len(a.wb.Rows) {
 		return ""
+	}
+	if raw, ok := a.wb.CellValues[cellFormatKey(idx, col)]; ok {
+		return raw
 	}
 	as := a.wb.Rows[idx]
 	switch col {

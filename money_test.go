@@ -51,7 +51,7 @@ func TestEvalExprs(t *testing.T) {
 	}
 }
 
-func TestWorkbookPersistenceUsesWorkbookJSON(t *testing.T) {
+func TestWorkbookPersistenceUsesKryFile(t *testing.T) {
 	dir := t.TempDir()
 	wb := &Workbook{
 		Rows:  []Row{{Section: "banks", Label: "checking", ID: "USD", Units: 100}},
@@ -67,7 +67,7 @@ func TestWorkbookPersistenceUsesWorkbookJSON(t *testing.T) {
 	}
 	legacyRowsKey := `"ass` + `ets"`
 	if strings.Contains(string(data), legacyRowsKey) || !strings.Contains(string(data), `"rows"`) {
-		t.Fatalf("workbook json schema = %s, want rows key and no legacy rows key", data)
+		t.Fatalf("workbook kry schema = %s, want rows key and no legacy rows key", data)
 	}
 	loaded, _, err := loadWorkbook(dir)
 	if err != nil {
@@ -75,6 +75,29 @@ func TestWorkbookPersistenceUsesWorkbookJSON(t *testing.T) {
 	}
 	if len(loaded.Rows) != 1 || loaded.Rows[0].Label != "checking" || loaded.Rates["USD"] != 1 {
 		t.Fatalf("loaded workbook = %#v", loaded)
+	}
+}
+
+func TestLoadMigratesLegacyWorkbookJSONToKry(t *testing.T) {
+	dir := t.TempDir()
+	legacyPath := filepath.Join(dir, legacyWorkbookFile)
+	legacy := `{"rows":[{"label":"legacy","id":"USD","units":7}],"rates":{"USD":1}}`
+	if err := os.WriteFile(legacyPath, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, from, err := loadWorkbook(dir)
+	if err != nil {
+		t.Fatalf("load legacy workbook failed: %v", err)
+	}
+	if from != legacyWorkbookFile || len(loaded.Rows) != 1 || loaded.Rows[0].Label != "legacy" {
+		t.Fatalf("migration result = from %q, workbook %#v", from, loaded)
+	}
+	if _, err := os.Stat(filepath.Join(dir, workbookFile)); err != nil {
+		t.Fatalf("migrated workbook was not written: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy workbook still exists after migration: %v", err)
 	}
 }
 

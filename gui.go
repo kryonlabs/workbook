@@ -50,11 +50,12 @@ type uiState struct {
 	editTotal int
 	editBar   bool
 
-	ctx    bool // right-click row/cell menu
-	ctxIdx int
-	ctxCol int // -1 row action, otherwise editable data column
-	ctxX   float32
-	ctxY   float32
+	ctx       bool // right-click row/cell menu
+	ctxIdx    int
+	ctxCol    int  // -1 row action, otherwise editable data column
+	ctxHeader bool // column-header action rather than a cell action
+	ctxX      float32
+	ctxY      float32
 
 	filling      bool
 	fillStartRow int

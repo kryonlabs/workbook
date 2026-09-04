@@ -16,6 +16,7 @@ const (
 	menuIDTextColor
 	menuIDBackgroundColor
 	menuIDClearFormat
+	menuIDConditionalFormat
 )
 
 const (
@@ -98,6 +99,7 @@ func (a *app) topMenus(u *uiState) []rl.Menu {
 				{Kind: rl.MenuCommand, Label: "Text color", ID: menuIDTextColor, Disabled: !canCell},
 				{Kind: rl.MenuCommand, Label: "Background color", ID: menuIDBackgroundColor, Disabled: !canCell},
 				{Kind: rl.MenuCommand, Label: "Clear formatting", ID: menuIDClearFormat, Disabled: !canCell},
+				{Kind: rl.MenuCommand, Label: "Conditional: positive/negative", ID: menuIDConditionalFormat, Disabled: !canCell},
 			},
 		},
 		{
@@ -156,6 +158,14 @@ func (a *app) handleMenuAction(u *uiState, id int32) {
 		a.applyNextBackgroundColor(u)
 	case menuIDClearFormat:
 		a.clearSelectedFormat(u)
+	case menuIDConditionalFormat:
+		cells := a.selectedRangeDataCells(u)
+		for _, cell := range cells {
+			a.toggleCellConditional(cell.row, cell.col)
+		}
+		if len(cells) > 0 {
+			a.save("conditional formatting")
+		}
 	}
 }
 

@@ -94,11 +94,23 @@ func (a *app) clearCellFormat(row, col int) {
 }
 
 func (a *app) setCellFormat(key string, format CellFormat) {
-	if strings.TrimSpace(format.TextColor) == "" && strings.TrimSpace(format.BackgroundColor) == "" {
+	if strings.TrimSpace(format.TextColor) == "" && strings.TrimSpace(format.BackgroundColor) == "" && strings.TrimSpace(format.Conditional) == "" {
 		delete(a.wb.CellFormats, key)
 		return
 	}
 	a.wb.CellFormats[key] = format
+}
+
+func (a *app) toggleCellConditional(row, col int) {
+	a.ensureCellFormats()
+	key := cellFormatKey(row, col)
+	format := a.wb.CellFormats[key]
+	if format.Conditional == "sign" {
+		format.Conditional = ""
+	} else {
+		format.Conditional = "sign"
+	}
+	a.setCellFormat(key, format)
 }
 
 func (a *app) ensureCellFormats() {
@@ -137,6 +149,44 @@ func (a *app) shiftCellFormatsForDelete(pos int) {
 		}
 		if row > pos {
 			row--
+		}
+		next[cellFormatKey(row, col)] = format
+	}
+	a.wb.CellFormats = next
+}
+
+func (a *app) shiftCellFormatsForColumnInsert(pos int) {
+	if len(a.wb.CellFormats) == 0 {
+		return
+	}
+	next := map[string]CellFormat{}
+	for key, format := range a.wb.CellFormats {
+		row, col, ok := splitCellFormatKey(key)
+		if !ok {
+			continue
+		}
+		if col >= pos {
+			col++
+		}
+		if col < 8 {
+			next[cellFormatKey(row, col)] = format
+		}
+	}
+	a.wb.CellFormats = next
+}
+
+func (a *app) shiftCellFormatsForColumnDelete(pos int) {
+	if len(a.wb.CellFormats) == 0 {
+		return
+	}
+	next := map[string]CellFormat{}
+	for key, format := range a.wb.CellFormats {
+		row, col, ok := splitCellFormatKey(key)
+		if !ok || col == pos {
+			continue
+		}
+		if col > pos {
+			col--
 		}
 		next[cellFormatKey(row, col)] = format
 	}

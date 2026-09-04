@@ -22,8 +22,17 @@ func draw(a *app, u *uiState) {
 		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			m := rl.GetMousePosition()
 			u.ctx = false
-			if rl.CheckCollisionPointRec(m, ctxRect(u)) && u.ctxIdx >= 0 && u.ctxIdx < len(a.wb.Rows) {
-				if u.ctxCol < 0 {
+			if rl.CheckCollisionPointRec(m, ctxRect(u)) {
+				if u.ctxHeader {
+					switch rowContextAction(u, m.Y) {
+					case 0:
+						a.mutateColumn(u, u.ctxCol, true)
+					case 1:
+						a.mutateColumn(u, clampInt(u.ctxCol+1, 0, 7), true)
+					case 2:
+						a.mutateColumn(u, u.ctxCol, false)
+					}
+				} else if u.ctxIdx >= 0 && u.ctxIdx < len(a.wb.Rows) && u.ctxCol < 0 {
 					switch rowContextAction(u, m.Y) {
 					case 0:
 						a.insertRowRelative(u, u.ctxIdx, false)
@@ -32,20 +41,38 @@ func draw(a *app, u *uiState) {
 					case 2:
 						a.deleteRow(u, u.ctxIdx)
 					}
-				} else {
-					a.clearRowCell(u, u.ctxIdx, u.ctxCol)
+				} else if u.ctxIdx >= 0 && u.ctxIdx < len(a.wb.Rows) {
+					switch int((m.Y - ctxRect(u).Y) / 28) {
+					case 0:
+						a.clearRowCell(u, u.ctxIdx, u.ctxCol)
+					case 1:
+						a.setCellTextColor(u.ctxIdx, u.ctxCol, nextPaletteColor(a.cellFormat(u.ctxIdx, u.ctxCol).TextColor, formatPalette))
+						a.save("text color")
+					case 2:
+						a.setCellBackgroundColor(u.ctxIdx, u.ctxCol, nextPaletteColor(a.cellFormat(u.ctxIdx, u.ctxCol).BackgroundColor, backgroundPalette))
+						a.save("background color")
+					case 3:
+						a.toggleCellConditional(u.ctxIdx, u.ctxCol)
+						a.save("conditional formatting")
+					}
 				}
 			}
 		}
 		r := ctxRect(u)
 		rl.DrawRectangleRec(r, colPanel)
 		rl.DrawRectangleLinesEx(r, 1, colRed)
-		if u.ctxCol < 0 {
+		if u.ctxHeader {
+			for i, label := range []string{"insert column left", "insert column right", "delete column"} {
+				txt(label, r.X+10, r.Y+7+float32(i*28), 13, colRed)
+			}
+		} else if u.ctxCol < 0 {
 			for i, label := range []string{"insert above", "insert below", "delete row"} {
 				txt(label, r.X+10, r.Y+7+float32(i*28), 13, colRed)
 			}
 		} else {
-			txt("clear cell", r.X+10, r.Y+7, 13, colRed)
+			for i, label := range []string{"clear cell", "text color", "background color", "conditional: sign"} {
+				txt(label, r.X+10, r.Y+7+float32(i*28), 13, colRed)
+			}
 		}
 	}
 	a.drawTopChrome(u)
@@ -89,6 +116,20 @@ func (a *app) drawNativeTable(u *uiState) {
 	pastedText := ""
 	pastedRow, pastedCol := int32(-1), int32(-1)
 	props := a.workbookTableProps(u, &tableSelectedRow, &tableSelectedCol, &rangeStartRow, &rangeStartCol, &rangeEndRow, &rangeEndCol, &activatedRow, &activatedCol, &rightRow, &rightCol, &sortCol, &scroll)
+	manualHeaderRightCol := int32(-1)
+	if !u.editing && rl.IsMouseButtonPressed(rl.MouseButtonRight) {
+		mouse := rl.GetMousePosition()
+		if mouse.Y >= tableViewTop && mouse.Y < tableTop {
+			x := float32(24)
+			for col, width := range props.ColumnWidths {
+				if mouse.X >= x && mouse.X < x+float32(width) {
+					manualHeaderRightCol = int32(col)
+					break
+				}
+				x += float32(width)
+			}
+		}
+	}
 	if !u.editing {
 		if copyText, ok := a.tableCopyText(u); ok {
 			props.CopyText = &copyText
@@ -98,6 +139,9 @@ func (a *app) drawNativeTable(u *uiState) {
 		props.PastedColumn = &pastedCol
 	}
 	changed := rl.TableView(props)
+	if rightCol < 0 && manualHeaderRightCol >= 0 {
+		rightCol = manualHeaderRightCol
+	}
 	if !u.editing && (pastedText != "" || pastedRow >= 0 || pastedCol >= 0) {
 		u.selRow, u.selCol = workbookSelectionFromTable(tableSelectedRow, tableSelectedCol)
 		a.pasteTableText(u, pastedRow, pastedCol, pastedText)
@@ -144,6 +188,13 @@ func (a *app) drawNativeTable(u *uiState) {
 
 	if !u.editing {
 		switch {
+		case rightRow < 0 && rightCol > 0:
+			if dataCol := dataColFromTableCol(rightCol); dataCol >= 0 {
+				m := rl.GetMousePosition()
+				u.selRow, u.selCol = -1, int(rightCol)
+				u.ctx, u.ctxHeader, u.ctxIdx, u.ctxCol = true, true, -1, dataCol
+				u.ctxX, u.ctxY = m.X, m.Y
+			}
 		case rightRow >= 0 && int(rightRow) < len(u.disp) && u.disp[rightRow].kind == dispRow:
 			ctxCol := -2
 			if rightCol == 0 {
@@ -154,7 +205,7 @@ func (a *app) drawNativeTable(u *uiState) {
 			if ctxCol != -2 {
 				m := rl.GetMousePosition()
 				u.selRow, u.selCol = workbookSelectionFromTable(rightRow, rightCol)
-				u.ctx, u.ctxIdx, u.ctxCol = true, u.disp[rightRow].idx, ctxCol
+				u.ctx, u.ctxHeader, u.ctxIdx, u.ctxCol = true, false, u.disp[rightRow].idx, ctxCol
 				u.ctxX, u.ctxY = m.X, m.Y
 			}
 		case rl.IsKeyPressed(rl.KeyBackspace) && u.selRow >= 0 && u.selRow < len(u.disp) && a.rowCanEdit(u.disp[u.selRow], dataColFromTableCol(int32(u.selCol))):
@@ -593,6 +644,19 @@ func (a *app) workbookDataRow(dr displayRow) rl.UITableRow {
 		usdText,
 		dusdText,
 	}}
+	for i, dataCol := range visibleDataCols {
+		if raw, ok := a.wb.CellValues[cellFormatKey(dr.idx, dataCol)]; ok {
+			if strings.HasPrefix(strings.TrimSpace(raw), "=") {
+				if value, ok := a.cellNumber(dr.idx, dataCol, map[string]bool{}); ok {
+					row.Cells[i] = strconv.FormatFloat(value, 'f', -1, 64)
+				} else {
+					row.Cells[i] = "#REF!"
+				}
+			} else {
+				row.Cells[i] = raw
+			}
+		}
+	}
 	row.TextColors = make([]rl.Color, len(visibleTableColumns))
 	row.BackgroundColors = make([]rl.Color, len(visibleTableColumns))
 	for i, dataCol := range visibleDataCols {
@@ -602,6 +666,11 @@ func (a *app) workbookDataRow(dr displayRow) rl.UITableRow {
 		}
 		if color, ok := parseColorHex(format.BackgroundColor); ok {
 			row.BackgroundColors[i+1] = color
+		}
+		if format.Conditional == "sign" {
+			if value, ok := a.cellNumber(dr.idx, dataCol, map[string]bool{}); ok {
+				row.TextColors[i+1] = signColor(value)
+			}
 		}
 	}
 	return row

@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const workbookFile = "workbook.json"
+const (
+	workbookFile       = "workbook.kry"
+	legacyWorkbookFile = "workbook.json"
+)
 
 // fiat codes accepted as row ids, besides coingecko ids.
 var fiatCodes = map[string]bool{
@@ -40,6 +43,7 @@ type Row struct {
 type CellFormat struct {
 	TextColor       string `json:"text_color,omitempty"`
 	BackgroundColor string `json:"background_color,omitempty"`
+	Conditional     string `json:"conditional,omitempty"`
 }
 
 // evalExprs recomputes Units from Expr where set, so milestone formulas stay
@@ -54,28 +58,48 @@ func (wb *Workbook) evalExprs() {
 	}
 }
 
-// Workbook is everything persisted in workbook.json.
+// Workbook is everything persisted in workbook.kry.
 type Workbook struct {
-	Rows              []Row                 `json:"rows"`
-	Rates             map[string]float64    `json:"rates"` // id -> usd per unit, last known
-	CellFormats       map[string]CellFormat `json:"cell_formats,omitempty"`
-	TotalPendingCells []string              `json:"total_pending_cells,omitempty"`
-	TotalCells        []string              `json:"total_cells,omitempty"`
-	Updated           time.Time             `json:"updated"`
+	Rows        []Row                 `json:"rows"`
+	Rates       map[string]float64    `json:"rates"` // id -> usd per unit, last known
+	CellFormats map[string]CellFormat `json:"cell_formats,omitempty"`
+	// CellValues holds free-form values which do not fit the legacy finance
+	// fields. The sparse map keeps older workbook schemas compatible while
+	// allowing every visible cell to contain ordinary text.
+	CellValues        map[string]string `json:"cell_values,omitempty"`
+	TotalPendingCells []string          `json:"total_pending_cells,omitempty"`
+	TotalCells        []string          `json:"total_cells,omitempty"`
+	Updated           time.Time         `json:"updated"`
 }
 
 func newWorkbook() *Workbook {
-	return &Workbook{Rates: map[string]float64{}, CellFormats: map[string]CellFormat{}}
+	return &Workbook{Rates: map[string]float64{}, CellFormats: map[string]CellFormat{}, CellValues: map[string]string{}}
 }
 
-// loadWorkbook loads workbook.json, creating an empty private workbook on first
-// run.
+// loadWorkbook loads workbook.kry, migrating the legacy workbook.json name on
+// first use, or creating an empty private workbook when neither exists.
 func loadWorkbook(dir string) (*Workbook, string, error) {
 	path := filepath.Join(dir, workbookFile)
-	if data, err := os.ReadFile(path); err == nil {
+	data, err := os.ReadFile(path)
+	from := ""
+	if os.IsNotExist(err) {
+		legacyPath := filepath.Join(dir, legacyWorkbookFile)
+		if legacyData, legacyErr := os.ReadFile(legacyPath); legacyErr == nil {
+			data = legacyData
+			err = nil
+			from = legacyWorkbookFile
+		} else if !os.IsNotExist(legacyErr) {
+			return nil, "", legacyErr
+		}
+	}
+	if err == nil {
 		wb := newWorkbook()
 		if err := json.Unmarshal(data, wb); err != nil {
-			return nil, "", fmt.Errorf("%s: %w", path, err)
+			source := path
+			if from != "" {
+				source = filepath.Join(dir, legacyWorkbookFile)
+			}
+			return nil, "", fmt.Errorf("%s: %w", source, err)
 		}
 		if wb.Rates == nil {
 			wb.Rates = map[string]float64{}
@@ -83,8 +107,16 @@ func loadWorkbook(dir string) (*Workbook, string, error) {
 		if wb.CellFormats == nil {
 			wb.CellFormats = map[string]CellFormat{}
 		}
+		if wb.CellValues == nil {
+			wb.CellValues = map[string]string{}
+		}
 		wb.evalExprs()
-		return wb, "", nil
+		if from != "" {
+			if err := os.Rename(filepath.Join(dir, legacyWorkbookFile), path); err != nil {
+				return nil, "", fmt.Errorf("migrate %s to %s: %w", legacyWorkbookFile, workbookFile, err)
+			}
+		}
+		return wb, from, nil
 	} else if !os.IsNotExist(err) {
 		return nil, "", err
 	}
@@ -122,8 +154,8 @@ func (wb *Workbook) groupSections() {
 	wb.Rows = out
 }
 
-// saveWorkbook writes workbook.json atomically, keeping the previous copy in
-// workbook.json.prev.
+// saveWorkbook writes workbook.kry atomically, keeping the previous copy in
+// workbook.kry.prev.
 func saveWorkbook(dir string, wb *Workbook) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

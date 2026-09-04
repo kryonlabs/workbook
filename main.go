@@ -40,7 +40,7 @@ type refreshResult struct {
 
 func main() {
 	profile := flag.String("profile", defaultProfile(os.Args[0]), "workbook profile: workbook or geld")
-	dir := flag.String("dir", "", "data directory (default: profile env, cwd workbook.json, then user data dir)")
+	dir := flag.String("dir", "", "data directory (default: profile env, cwd workbook.kry, then user data dir)")
 	update := flag.Bool("update", false, "update profile data headlessly, print the table and exit")
 	cli := flag.Bool("cli", false, "interactive terminal mode (no window)")
 	flag.Parse()
@@ -104,6 +104,9 @@ func defaultDataDir(profile string) (string, error) {
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		if _, err := os.Stat(filepath.Join(cwd, workbookFile)); err == nil {
+			return cwd, nil
+		}
+		if _, err := os.Stat(filepath.Join(cwd, legacyWorkbookFile)); err == nil {
 			return cwd, nil
 		}
 	}

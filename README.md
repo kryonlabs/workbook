@@ -34,7 +34,11 @@ bar. Drag the small handle at the bottom-right of a formula cell to fill it
 across rows with row references shifted.
 
 The top menu and toolbar provide save, row insertion/deletion, and per-cell
-text/background color formatting. Formatting is saved in `workbook.json`.
+text/background color formatting. Cells accept text, numbers, or formulas.
+Right-click a cell for formatting and positive/negative conditional coloring;
+right-click a row or column header to insert or delete it. Structural row and
+column edits rewrite formula references to follow the cells that moved.
+Formatting and free-form values are saved in `workbook.kry`.
 
 ## profiles
 
@@ -53,14 +57,15 @@ again while the window stays open, so editing cannot be interrupted by network
 refreshes. Restart `geld`, run `geld -update`, or open `geld -cli` to fetch a
 new snapshot.
 
-Profile commands are installed from `profiles/*.json`. To add a custom workbook
+Profile commands are installed from `profiles/*.kry`. To add a custom workbook
 version, add a manifest with a unique `name` and `command`; `make install`
 generates the wrapper command that invokes `workbook -profile <name>`.
 
 ## data
 
 Data loads from `-dir`, then the profile environment variable, then a
-`workbook.json` in the current directory, then the profile data dir.
+`workbook.kry` in the current directory, then the profile data dir. Existing
+`workbook.json` data is renamed to `workbook.kry` automatically on first use.
 
     WORKBOOK_DIR      generic workbook override
     CELL_DIR          legacy alias for WORKBOOK_DIR
@@ -68,8 +73,8 @@ Data loads from `-dir`, then the profile environment variable, then a
     ~/.local/share/workbook
     ~/.local/share/geld
 
-`workbook.json` holds private workbook data and is intentionally ignored by
-git. `workbook.example.json` is safe sample data for demos.
+`workbook.kry` holds private workbook data and is intentionally ignored by
+git. `workbook.example.kry` is safe sample data for demos.
 
 ## rates
 

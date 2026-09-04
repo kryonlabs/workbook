@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// runCLI is the terminal mode: a tiny shell over the same workbook.json the gui
+// runCLI is the terminal mode: a tiny shell over the same workbook.kry the gui
 // edits — list/add/set/rm — for when a window is not at hand.
 
 const cliHelp = `commands:
@@ -110,6 +110,9 @@ func runCLI(a *app) {
 			}
 			if i := findByLabel(a, fields[1]); i >= 0 {
 				id := a.wb.Rows[i].ID
+				a.rewriteWorkbookFormulaRows(i, false)
+				a.shiftCellFormatsForDelete(i)
+				a.shiftCellValuesForRowDelete(i)
 				a.wb.Rows = append(a.wb.Rows[:i], a.wb.Rows[i+1:]...)
 				a.save("deleted " + id)
 				printTable(a)

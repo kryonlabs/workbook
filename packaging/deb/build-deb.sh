@@ -19,7 +19,7 @@ install -m 0755 workbook "$root/usr/bin/workbook"
 install -m 0755 scripts/cell "$root/usr/bin/cell"
 go run ./cmd/profile-install -root "$root" -profiles profiles -bin-dir /usr/bin -app-dir /usr/share/applications -binary workbook
 install -m 0644 README.md "$root/usr/share/doc/workbook/README.md"
-install -m 0644 workbook.example.json "$root/usr/share/doc/workbook/workbook.example.json"
+install -m 0644 workbook.example.kry "$root/usr/share/doc/workbook/workbook.example.kry"
 
 installed_size="$(du -sk "$root/usr" | awk '{print $1}')"
 cat > "$root/DEBIAN/control" <<EOF
@@ -31,7 +31,7 @@ Architecture: ${arch}
 Maintainer: Waozi <waozi@proton.me>
 Installed-Size: ${installed_size}
 Depends: libc6, libsdl2-2.0-0, libgl1, libgtk-3-0, libssl3, zlib1g, libbrotli1, libzstd1, libasound2, libpulse0, libsamplerate0, libx11-6
-Homepage: https://github.com/waozixyz/workbook
+Homepage: https://github.com/kryonlabs/workbook
 Description: Native workbook tracker
  Workbook is a standalone Kryon spreadsheet-style workbook. Installed profile
  commands such as geld start specialized workbook profiles with their own data

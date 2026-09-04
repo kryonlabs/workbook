@@ -46,7 +46,7 @@ func main() {
 }
 
 func readProfiles(dir string) ([]profileManifest, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	matches, err := filepath.Glob(filepath.Join(dir, "*.kry"))
 	if err != nil {
 		return nil, err
 	}

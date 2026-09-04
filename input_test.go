@@ -773,6 +773,19 @@ func TestRightClickRowNumberAndCellContexts(t *testing.T) {
 	}
 }
 
+func TestRightClickColumnHeaderOpensColumnContext(t *testing.T) {
+	a := &app{dir: t.TempDir(), profile: profileWorkbook, wb: &Workbook{Rows: []Row{{Label: "one"}}, Rates: map[string]float64{}, CellFormats: map[string]CellFormat{}, CellValues: map[string]string{}}}
+	u := &uiState{selRow: -1, selCol: -1, disp: a.dispRows(), editText: make([]byte, 128)}
+	host := rl.NewHost(rl.AppConfig{Width: winW, Height: winH})
+	defer host.Close()
+	defer rl.SetRuntime(nil)
+	host.Runtime().(interface{ QueueMouseButton(int32, float32, float32) }).QueueMouseButton(rl.MouseButtonRight, 172, tableTestHeaderY())
+	host.Draw(func() { rl.BeginFrame(); a.drawNativeTable(u); rl.EndFrame() })
+	if !u.ctx || !u.ctxHeader || u.ctxCol != 1 {
+		t.Fatalf("column context = %#v", u)
+	}
+}
+
 func TestRowContextInsertsBelow(t *testing.T) {
 	a := &app{
 		dir: t.TempDir(),
