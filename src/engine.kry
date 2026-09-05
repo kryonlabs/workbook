@@ -7305,6 +7305,954 @@ FnGetpivotdata :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Va
     return ValNumber(cellv->number)
 }
 
+Cplx :: struct {
+    re: double
+    im: double
+}
+
+CxParse :: (src_in: const char *, dst: Cplx *, unit: int *) -> int {
+    src: const char * = src_in
+    end: char * = NULL
+    x: double = 0
+    y: double = 0
+    sign: int = 0
+    unit[0] = 105
+    dst->re = 0
+    dst->im = 0
+    while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    if src[0] == 45 {
+        sign = -1
+        src += 1
+        while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    }
+else if src[0] == 43 {
+        sign = 1
+        src += 1
+        while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    }
+else {
+        sign = 0
+    }
+    if (src[0] == 105 || src[0] == 106) {
+        x = 1
+    }
+else {
+        x = strtod(src,&end)
+        if (end == src || x - x != 0) { return -1 }
+        src = end
+        while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    }
+    if sign < 0 { x = 0 - x }
+    if src[0] == 0 {
+        dst->re = x
+        dst->im = 0
+        unit[0] = 105
+        return 0
+    }
+    if (src[0] == 105 || src[0] == 106) && src[1] == 0 {
+        unit[0] = src[0]
+        dst->re = 0
+        dst->im = x
+        return 0
+    }
+    if src[0] == 43 {
+        sign = 1
+        src += 1
+        while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    }
+else if src[0] == 45 {
+        sign = -1
+        src += 1
+        while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    }
+else {
+        return -1
+    }
+    if (src[0] == 105 || src[0] == 106) {
+        y = 1
+    }
+else {
+        y = strtod(src,&end)
+        if (end == src || y - y != 0) { return -1 }
+        src = end
+        while (src[0] == 32 || (src[0] >= 9 && src[0] <= 13)) { src += 1 }
+    }
+    if sign < 0 { y = 0 - y }
+    if (src[0] == 105 || src[0] == 106) && src[1] == 0 {
+        unit[0] = src[0]
+        dst->re = x
+        dst->im = y
+        return 0
+    }
+    return -1
+}
+
+CxArg :: (args: Val *, count: int, index: int, dst: Cplx *, unit: int *) -> int {
+    txt: [256] char = ""
+    if index >= count { return -1 }
+    if args[index].kind == VAL_FLOAT || args[index].kind == VAL_BOOL {
+        dst->re = args[index].number
+        dst->im = 0
+        return 0
+    }
+    if TextArg(args,count,index,txt,sizeof(txt)) < 0 { return -1 }
+    return CxParse(txt,dst,unit)
+}
+
+CxToString :: (c: Cplx, unit: int, out: char *, cap: int) {
+    have_real: int = 0
+    tmp: [64] char = ""
+    n: int = 0
+    out[0] = 0
+    if (c.re != 0 || c.im == 0) {
+        FormatNumber(c.re,tmp,sizeof(tmp))
+        snprintf(out,cap,"%s",tmp)
+        have_real = 1
+    }
+    if c.im != 0 {
+        if c.im == 1 {
+            if have_real != 0 {
+                n = (int)strlen(out)
+                snprintf(out + n,cap - n,"+")
+            }
+        }
+else if c.im == -1 {
+            n = (int)strlen(out)
+            snprintf(out + n,cap - n,"-")
+        }
+else {
+            FormatNumber(c.im,tmp,sizeof(tmp))
+            n = (int)strlen(out)
+            if (have_real != 0 && tmp[0] != 45 && tmp[0] != 43) {
+                if c.im >= 0 {
+                    snprintf(out + n,cap - n,"+%s",tmp)
+                }
+else {
+                    snprintf(out + n,cap - n,"%s",tmp)
+                }
+            }
+else {
+                snprintf(out + n,cap - n,"%s",tmp)
+            }
+        }
+        n = (int)strlen(out)
+        out[n] = (char)unit
+        out[n + 1] = 0
+    }
+}
+
+CxVal :: (c: Cplx, unit: int) -> Val {
+    buf: [128] char = ""
+    if (c.re - c.re != 0 || c.im - c.im != 0) { return ValError(ERR_NUM) }
+    CxToString(c,unit,buf,sizeof(buf))
+    return ValString(wb_strdup(buf))
+}
+
+CxAdd :: (a: Cplx, b: Cplx) -> Cplx {
+    r: Cplx = {a.re + b.re,a.im + b.im}
+    return r
+}
+
+CxSub :: (a: Cplx, b: Cplx) -> Cplx {
+    r: Cplx = {a.re - b.re,a.im - b.im}
+    return r
+}
+
+CxNeg :: (a: Cplx) -> Cplx {
+    r: Cplx = {0 - a.re,0 - a.im}
+    return r
+}
+
+CxConj :: (a: Cplx) -> Cplx {
+    r: Cplx = {a.re,0 - a.im}
+    return r
+}
+
+CxScale :: (a: Cplx, s: double) -> Cplx {
+    r: Cplx = {a.re * s,a.im * s}
+    return r
+}
+
+CxMul :: (a: Cplx, b: Cplx) -> Cplx {
+    r: Cplx = {a.re * b.re - a.im * b.im,a.re * b.im + a.im * b.re}
+    return r
+}
+
+CxMulImag :: (a: Cplx, y: double) -> Cplx {
+    r: Cplx = {0 - y * a.im,y * a.re}
+    return r
+}
+
+CxDiv :: (a: Cplx, b: Cplx) -> Cplx {
+    a_re: double = a.re
+    a_im: double = a.im
+    b_re: double = b.re
+    b_im: double = b.im
+    asize: double = fabs(a_re) > fabs(a_im) ? fabs(a_re) : fabs(a_im)
+    bsize: double = fabs(b_re) > fabs(b_im) ? fabs(b_re) : fabs(b_im)
+    bmodsqr: double = 0
+    q_re: double = 0
+    q_im: double = 0
+    e: int = 0
+    r: Cplx = {0.0 / 0.0,0.0 / 0.0}
+    if (asize - asize != 0 || bsize - bsize != 0 || bsize == 0) { return r }
+    if b_im == 0 {
+        r.re = a_re / b_re
+        r.im = a_im / b_re
+        return r
+    }
+    if b_re == 0 {
+        r.re = a_im / b_im
+        r.im = 0 - a_re / b_im
+        return r
+    }
+    if (asize + bsize > 1e100 || asize < 1e-100 || bsize < 1e-100) {
+        ea: int = ilogb(asize)
+        eb: int = ilogb(bsize)
+        a_re = scalbn(a_re,-ea)
+        a_im = scalbn(a_im,-ea)
+        b_re = scalbn(b_re,-eb)
+        b_im = scalbn(b_im,-eb)
+        e = ea - eb
+    }
+    bmodsqr = b_re * b_re + b_im * b_im
+    q_re = (a_re * b_re + a_im * b_im) / bmodsqr
+    q_im = (a_im * b_re - a_re * b_im) / bmodsqr
+    if e != 0 {
+        q_re = scalbn(q_re,e)
+        q_im = scalbn(q_im,e)
+    }
+    r.re = q_re
+    r.im = q_im
+    return r
+}
+
+CxInv :: (a: Cplx) -> Cplx {
+    one: Cplx = {1,0}
+    return CxDiv(one,a)
+}
+
+CxMod :: (a: Cplx) -> double {
+    return hypot(a.re,a.im)
+}
+
+CxAngle :: (a: Cplx) -> double {
+    return atan2(a.im,a.re)
+}
+
+CxAnglePi :: (a: Cplx) -> double {
+    return GoAtan2Pi(a.im,a.re)
+}
+
+CxFromPolar :: (mod: double, angle: double) -> Cplx {
+    r: Cplx = {mod * cos(angle),mod * sin(angle)}
+    return r
+}
+
+CxFromPolarPi :: (mod: double, angle: double) -> Cplx {
+    r: Cplx = {mod * GoCosPi(angle),mod * GoSinpi(angle)}
+    return r
+}
+
+CxSqrt :: (a: Cplx) -> Cplx {
+    msrc: Cplx = {0,0}
+    rr: Cplx = {0,0}
+    m: double = 0
+    sm: double = 0
+    r: Cplx = {0,0}
+    if (a.re < 0 && 0 - a.re > fabs(a.im)) {
+        msrc.re = 0 - a.re
+        msrc.im = 0 - a.im
+        rr = CxSqrt(msrc)
+        if a.im >= 0 {
+            r.re = 0 - rr.im
+            r.im = rr.re
+        }
+else {
+            r.re = rr.im
+            r.im = 0 - rr.re
+        }
+        return r
+    }
+    m = CxMod(a)
+    if (m - m == 0) {
+        sm = sqrt(m)
+    }
+else {
+        sm = 2 * sqrt(hypot(a.re / 4,a.im / 4))
+    }
+    return CxFromPolarPi(sm,CxAnglePi(a) / 2)
+}
+
+CxExp :: (a: Cplx) -> Cplx {
+    return CxFromPolar(exp(a.re),a.im)
+}
+
+CxLn :: (a: Cplx) -> Cplx {
+    x: double = fabs(a.re)
+    y: double = fabs(a.im)
+    lm: double = 0
+    r: Cplx = {0,0}
+    if x > y {
+        lm = log(x) + 0.5 * log1p((y / x) * (y / x))
+    }
+else {
+        lm = log(y) + 0.5 * log1p((x / y) * (x / y))
+    }
+    r.re = lm
+    r.im = CxAngle(a)
+    return r
+}
+
+CxSin :: (a: Cplx) -> Cplx {
+    r: Cplx = {sin(a.re) * cosh(a.im),cos(a.re) * sinh(a.im)}
+    return r
+}
+
+CxCos :: (a: Cplx) -> Cplx {
+    r: Cplx = {cos(a.re) * cosh(a.im),0 - sin(a.re) * sinh(a.im)}
+    return r
+}
+
+CxTan :: (a: Cplx) -> Cplx {
+    R: double = a.re
+    I: double = a.im
+    sr: double = sin(R)
+    cr: double = cos(R)
+    r: Cplx = {0,0}
+    if fabs(I) < 1 {
+        shi: double = sinh(I)
+        D: double = cr * cr + shi * shi
+        r.re = sr * cr / D
+        r.im = 0.5 * sinh(2 * I) / D
+    }
+else {
+        u: double = exp(0 - fabs(I))
+        C: double = 2 * u / (1 - u * u)
+        S: double = C * C
+        D: double = 1 + cr * cr * S
+        T: double = 1 / tanh(fabs(I))
+        r.re = sr * cr * S / D
+        if I < 0 {
+            r.im = 0 - T / D
+        }
+else {
+            r.im = T / D
+        }
+    }
+    return r
+}
+
+CxPowInt :: (x: Cplx, n: int) -> Cplx {
+    res: Cplx = {1,0}
+    xn: Cplx = x
+    dy: int = n
+    while dy > 0 {
+        if (dy % 2) != 0 {
+            res = CxMul(res,xn)
+            dy -= 1
+            if dy == 0 { break }
+        }
+        dy /= 2
+        xn = CxMul(xn,xn)
+    }
+    return res
+}
+
+CxPow :: (a: Cplx, b: Cplx) -> Cplx {
+    r: Cplx = {0,0}
+    if b.im == 0 {
+        if (a.im == 0 && a.re >= 0) {
+            r.re = pow(a.re,b.re)
+            r.im = 0
+            return r
+        }
+        if b.re == 0 {
+            r.re = 1
+            r.im = 0
+            return r
+        }
+        if b.re == 1 { return a }
+        if b.re == 2 { return CxMul(a,a) }
+        if (b.re == floor(b.re) && fabs(b.re) < 1024) {
+            n: int = (int)b.re
+            if n > 0 { return CxPowInt(a,n) }
+            if (a.re == 0 && a.im == 0) { return r }
+            return CxGslInverse(CxPowInt(a,0 - n))
+        }
+    }
+    mod: double = CxMod(a)
+    arg: double = CxAngle(a)
+    lm: double = log(mod)
+    newmod: double = exp(b.re * lm - b.im * arg)
+    newarg: double = b.re * arg + b.im * lm
+    return CxFromPolar(newmod,newarg)
+}
+
+CxSinh :: (a: Cplx) -> Cplx {
+    r: Cplx = {sinh(a.re) * cos(a.im),cosh(a.re) * sin(a.im)}
+    return r
+}
+
+CxCosh :: (a: Cplx) -> Cplx {
+    r: Cplx = {cosh(a.re) * cos(a.im),sinh(a.re) * sin(a.im)}
+    return r
+}
+
+CxTanh :: (a: Cplx) -> Cplx {
+    R: double = a.re
+    I: double = a.im
+    r: Cplx = {0,0}
+    if fabs(R) < 1 {
+        D: double = pow(cos(I),2.0) + pow(sinh(R),2.0)
+        r.re = sinh(R) * cosh(R) / D
+        r.im = 0.5 * sin(2 * I) / D
+    }
+else {
+        D2: double = pow(cos(I),2.0) + pow(sinh(R),2.0)
+        F: double = 1 + pow(cos(I) / sinh(R),2.0)
+        r.re = 1 / (tanh(R) * F)
+        r.im = 0.5 * sin(2 * I) / D2
+    }
+    return r
+}
+
+CxGslInverse :: (a: Cplx) -> Cplx {
+    s: double = 1 / CxMod(a)
+    r: Cplx = {(a.re * s) * s,0 - (a.im * s) * s}
+    return r
+}
+
+CxSech :: (a: Cplx) -> Cplx {
+    return CxGslInverse(CxCosh(a))
+}
+
+CxCsch :: (a: Cplx) -> Cplx {
+    return CxGslInverse(CxSinh(a))
+}
+
+CxCoth :: (a: Cplx) -> Cplx {
+    return CxGslInverse(CxTanh(a))
+}
+
+CxArcsinReal :: (a: double) -> Cplx {
+    r: Cplx = {0,0}
+    if fabs(a) <= 1 {
+        r.re = asin(a)
+        r.im = 0
+    }
+else {
+        if a < 0 {
+            r.re = 0 - 1.5707963267948966
+            r.im = acosh(0 - a)
+        }
+else {
+            r.re = 1.5707963267948966
+            r.im = 0 - acosh(a)
+        }
+    }
+    return r
+}
+
+CxArcsin :: (a: Cplx) -> Cplx {
+    R: double = a.re
+    I: double = a.im
+    r: Cplx = {0,0}
+    if I == 0 { return CxArcsinReal(R) }
+    x: double = fabs(R)
+    y: double = fabs(I)
+    rr: double = hypot(x + 1,y)
+    s: double = hypot(x - 1,y)
+    A: double = 0.5 * (rr + s)
+    B: double = x / A
+    y2: double = y * y
+    real: double = 0
+    imag: double = 0
+    A_crossover: double = 1.5
+    B_crossover: double = 0.6417
+    if B <= B_crossover {
+        real = asin(B)
+    }
+else {
+        if x <= 1 {
+            D: double = 0.5 * (A + x) * (y2 / (rr + x + 1) + (s + (1 - x)))
+            real = atan(x / sqrt(D))
+        }
+else {
+            Apx: double = A + x
+            D2: double = 0.5 * (Apx / (rr + x + 1) + Apx / (s + (x - 1)))
+            real = atan(x / (y * sqrt(D2)))
+        }
+    }
+    if A <= A_crossover {
+        Am1: double = 0
+        if x < 1 {
+            Am1 = 0.5 * (y2 / (rr + (x + 1)) + y2 / (s + (1 - x)))
+        }
+else {
+            Am1 = 0.5 * (y2 / (rr + (x + 1)) + (s + (x - 1)))
+        }
+        imag = log1p(Am1 + sqrt(Am1 * (A + 1)))
+    }
+else {
+        imag = log(A + sqrt(A * A - 1))
+    }
+    r.re = R >= 0 ? real : 0 - real
+    r.im = I >= 0 ? imag : 0 - imag
+    return r
+}
+
+CxArccosReal :: (a: double) -> Cplx {
+    r: Cplx = {0,0}
+    if fabs(a) <= 1 {
+        r.re = acos(a)
+        r.im = 0
+    }
+else {
+        if a < 0 {
+            r.re = 3.141592653589793
+            r.im = 0 - acosh(0 - a)
+        }
+else {
+            r.re = 0
+            r.im = acosh(a)
+        }
+    }
+    return r
+}
+
+CxArccos :: (a: Cplx) -> Cplx {
+    R: double = a.re
+    I: double = a.im
+    r: Cplx = {0,0}
+    if I == 0 { return CxArccosReal(R) }
+    x: double = fabs(R)
+    y: double = fabs(I)
+    rr: double = hypot(x + 1,y)
+    s: double = hypot(x - 1,y)
+    A: double = 0.5 * (rr + s)
+    B: double = x / A
+    y2: double = y * y
+    real: double = 0
+    imag: double = 0
+    A_crossover: double = 1.5
+    B_crossover: double = 0.6417
+    if B <= B_crossover {
+        real = acos(B)
+    }
+else {
+        if x <= 1 {
+            D: double = 0.5 * (A + x) * (y2 / (rr + x + 1) + (s + (1 - x)))
+            real = atan(sqrt(D) / x)
+        }
+else {
+            Apx: double = A + x
+            D2: double = 0.5 * (Apx / (rr + x + 1) + Apx / (s + (x - 1)))
+            real = atan((y * sqrt(D2)) / x)
+        }
+    }
+    if A <= A_crossover {
+        Am1: double = 0
+        if x < 1 {
+            Am1 = 0.5 * (y2 / (rr + (x + 1)) + y2 / (s + (1 - x)))
+        }
+else {
+            Am1 = 0.5 * (y2 / (rr + (x + 1)) + (s + (x - 1)))
+        }
+        imag = log1p(Am1 + sqrt(Am1 * (A + 1)))
+    }
+else {
+        imag = log(A + sqrt(A * A - 1))
+    }
+    if R >= 0 {
+        r.re = real
+    }
+else {
+        r.re = 3.141592653589793 - real
+    }
+    if I >= 0 {
+        r.im = 0 - imag
+    }
+else {
+        r.im = imag
+    }
+    return r
+}
+
+CxArctan :: (a: Cplx) -> Cplx {
+    R: double = a.re
+    I: double = a.im
+    r: Cplx = {0,0}
+    if I == 0 {
+        r.re = atan(R)
+        r.im = 0
+        return r
+    }
+    rr: double = hypot(R,I)
+    imag: double = 0
+    u: double = 2 * I / (1 + rr * rr)
+    if fabs(u) < 0.1 {
+        imag = 0.25 * (log1p(u) - log1p(0 - u))
+    }
+else {
+        A: double = hypot(R,I + 1)
+        B: double = hypot(R,I - 1)
+        imag = 0.5 * log(A / B)
+    }
+    if R == 0 {
+        if I > 1 {
+            r.re = 1.5707963267948966
+            r.im = imag
+        }
+else if I < -1 {
+            r.re = 0 - 1.5707963267948966
+            r.im = imag
+        }
+else {
+            r.re = 0
+            r.im = imag
+        }
+    }
+else {
+        r.re = 0.5 * atan2(2 * R,(1 + rr) * (1 - rr))
+        r.im = imag
+    }
+    return r
+}
+
+CxArcsec :: (a: Cplx) -> Cplx {
+    return CxArccos(CxGslInverse(a))
+}
+
+CxArccsc :: (a: Cplx) -> Cplx {
+    return CxArcsin(CxGslInverse(a))
+}
+
+CxArccot :: (a: Cplx) -> Cplx {
+    if (a.re == 0 && a.im == 0) {
+        r0: Cplx = {1.5707963267948966,0}
+        return r0
+    }
+    return CxArctan(CxGslInverse(a))
+}
+
+CxArcsinh :: (a: Cplx) -> Cplx {
+    return CxMulImag(CxArcsin(CxMulImag(a,1)),0 - 1)
+}
+
+CxArccosh :: (a: Cplx) -> Cplx {
+    zero: Cplx = {0,0}
+    if (a.im == 0 && a.re == 1) { return zero }
+    t: Cplx = CxArccos(a)
+    if t.im > 0 {
+        return CxMulImag(t,0 - 1)
+    }
+    return CxMulImag(t,1)
+}
+
+CxArctanhReal :: (a: double) -> Cplx {
+    r: Cplx = {0,0}
+    if (a > -1 && a < 1) {
+        r.re = atanh(a)
+        r.im = 0
+    }
+else {
+        r.re = acothGo(a)
+        if a < 0 {
+            r.im = 1.5707963267948966
+        }
+else {
+            r.im = 0 - 1.5707963267948966
+        }
+    }
+    return r
+}
+
+acothGo :: (a: double) -> double {
+    return 0.5 * log((a + 1) / (a - 1))
+}
+
+CxArctanh :: (a: Cplx) -> Cplx {
+    if a.im == 0 { return CxArctanhReal(a.re) }
+    return CxMulImag(CxArctan(CxMulImag(a,1)),0 - 1)
+}
+
+CxArcsech :: (a: Cplx) -> Cplx {
+    return CxArccosh(CxGslInverse(a))
+}
+
+CxArccsch :: (a: Cplx) -> Cplx {
+    return CxArcsinh(CxGslInverse(a))
+}
+
+CxArccoth :: (a: Cplx) -> Cplx {
+    return CxArctanh(CxGslInverse(a))
+}
+
+CxFact :: (a: Cplx) -> Cplx {
+    r: Cplx = {0,0}
+    i: int = 0
+    acc: double = 1
+    if a.im == 0 {
+        if (a.re < 0 && a.re == floor(a.re)) {
+            r.re = 0.0 / 0.0
+            r.im = 0.0 / 0.0
+            return r
+        }
+        if (a.re == floor(a.re) && a.re >= 0 && a.re < 170) {
+            i = 1
+            while i <= (int)a.re {
+                acc *= (double)i
+                i += 1
+            }
+            r.re = acc
+            r.im = 0
+            return r
+        }
+        r.re = tgamma(a.re + 1)
+        r.im = 0
+        return r
+    }
+    return CxMul(CxGamma(a),a)
+}
+
+CxGamma :: (a: Cplx) -> Cplx {
+    r: Cplx = {0,0}
+    if a.im == 0 {
+        if (a.re < 0 && a.re == floor(a.re)) {
+            r.re = 0.0 / 0.0
+            r.im = 0.0 / 0.0
+            return r
+        }
+        r.re = tgamma(a.re)
+        r.im = 0
+        return r
+    }
+    if a.re < 0 {
+        b: Cplx = {3.141592653589793 * fmod(a.re,2),3.141592653589793 * a.im}
+        pi_c: Cplx = {3.141592653589793,0}
+        return CxDiv(pi_c,CxMul(CxFact(CxNeg(a)),CxSin(b)))
+    }
+    return CxPow2Lanczos(a)
+}
+
+CxPow2Lanczos :: (a: Cplx) -> Cplx {
+    lanczos_g: double = 808618867.0 / 134217728
+    lanczos_num: [13] double = {56906521.913471563880907910335591226868592353221448,103794043.11634454519062710536160702385539539810110,86363131.288138591455469272889778684223419113014358,43338889.324676138347737237405905333160850993321475,14605578.087685068084141699827913592185707234229516,3481712.1549806459088207101896477455646802362321652,601859.61716810987866702265336993523025071425740828,75999.293040145426498753034435989091370919973262979,6955.9996025153761403563101155151989875259157712039,449.94455690631681194468586076509884096232715968614,19.519927882476174828478609662356521362076846583112,0.50984166556566761881251786448046945099926051133936,0.0060618423462489065257837539645559368832224636654970}
+    lanczos_denom: [13] double = {0,39916800,120543840,150917976,105258076,45995730,13339535,2637558,357423,32670,1925,66,1}
+    p: Cplx = {lanczos_num[12],0}
+    q: Cplx = {lanczos_denom[12],0}
+    zmh: Cplx = {0,0}
+    f: Cplx = {0,0}
+    t1: Cplx = {0,0}
+    t2: Cplx = {0,0}
+    lg: Cplx = {lanczos_g,0}
+    i: int = 11
+    while i >= 0 {
+        p = CxMul(p,a)
+        p.re += lanczos_num[i]
+        q = CxMul(q,a)
+        q.re += lanczos_denom[i]
+        i -= 1
+    }
+    zmh.re = a.re - 0.5
+    zmh.im = a.im
+    t1 = CxAdd(zmh,lg)
+    f = CxPow(t1,CxScale(zmh,0.5))
+    t2 = CxDiv(p,q)
+    return CxMul(CxMul(CxMul(f,CxExp(CxNeg(zmh))),f),t2)
+}
+
+FnCx1 :: (name_op: int, args: Val *, count: int) -> Val {
+    a: Cplx = {0,0}
+    unit: int = 105
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    if name_op == 0 { return CxVal(CxConj(a),unit) }
+    if name_op == 1 { return CxVal(CxInv(a),unit) }
+    if name_op == 2 { return CxVal(CxNeg(a),unit) }
+    if name_op == 3 { return CxVal(CxCos(a),unit) }
+    if name_op == 4 { return CxVal(CxTan(a),unit) }
+    if name_op == 5 { return CxVal(CxInv(CxCos(a)),unit) }
+    if name_op == 6 { return CxVal(CxInv(CxSin(a)),unit) }
+    if name_op == 7 { return CxVal(CxInv(CxTan(a)),unit) }
+    if name_op == 8 { return CxVal(CxExp(a),unit) }
+    if name_op == 9 { return CxVal(CxLn(a),unit) }
+    if name_op == 10 { return CxVal(CxScale(CxLn(a),1 / 0.693147180559945309417232121458),unit) }
+    if name_op == 11 { return CxVal(CxScale(CxLn(a),0.434294481903251827651128918917),unit) }
+    if name_op == 12 { return CxVal(CxSqrt(a),unit) }
+    if name_op == 13 { return CxVal(CxSin(a),unit) }
+    if name_op == 14 { return CxVal(CxSinh(a),unit) }
+    if name_op == 15 { return CxVal(CxCosh(a),unit) }
+    if name_op == 16 { return CxVal(CxTanh(a),unit) }
+    if name_op == 17 { return CxVal(CxSech(a),unit) }
+    if name_op == 18 { return CxVal(CxCsch(a),unit) }
+    if name_op == 19 { return CxVal(CxCoth(a),unit) }
+    if name_op == 20 { return CxVal(CxArcsin(a),unit) }
+    if name_op == 21 { return CxVal(CxArccos(a),unit) }
+    if name_op == 22 { return CxVal(CxArctan(a),unit) }
+    if name_op == 23 { return CxVal(CxArcsec(a),unit) }
+    if name_op == 24 { return CxVal(CxArccsc(a),unit) }
+    if name_op == 25 { return CxVal(CxArccot(a),unit) }
+    if name_op == 26 { return CxVal(CxArcsinh(a),unit) }
+    if name_op == 27 { return CxVal(CxArccosh(a),unit) }
+    if name_op == 28 { return CxVal(CxArctanh(a),unit) }
+    if name_op == 29 { return CxVal(CxArcsech(a),unit) }
+    if name_op == 30 { return CxVal(CxArccsch(a),unit) }
+    return CxVal(CxArccoth(a),unit)
+}
+
+FnCxReal1 :: (name_op: int, args: Val *, count: int) -> Val {
+    a: Cplx = {0,0}
+    unit: int = 105
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    if name_op == 0 { return ValNumber(CxMod(a)) }
+    if name_op == 1 { return ValNumber(a.im) }
+    if name_op == 2 { return ValNumber(a.re) }
+    return ValNumber(CxAngle(a))
+}
+
+
+GoCosPi :: (x_in: double) -> double {
+    x: double = x_in
+    k: int = 0
+    y: double = 0
+    if x < 0 {
+        k2: int = 0
+        x = 0 - ReduceHalfPos(0 - x,&k2)
+        k = 4 - k2
+        if x == -0.25 {
+            x += 0.5
+            k += 3
+        }
+    }
+else {
+        x = ReduceHalfPos(x,&k)
+    }
+    if (x == 0 && (k & 1) == 1) { return 0.0 }
+    k += 1
+    if x == 0 {
+        y = (k & 1) != 0 ? 1 : 0
+    }
+else if x == 0.25 {
+        y = 0.707106781186547524400844362104849039284835937688474036588339
+    }
+else {
+        if (k & 1) != 0 {
+            y = cos(3.141592653589793 * x)
+        }
+else {
+            y = sin(3.141592653589793 * x)
+        }
+    }
+    if (k & 2) != 0 { return 0 - y }
+    return y
+}
+
+GoAtan2Pi :: (y: double, x: double) -> double {
+    return atan2(y,x) / 3.141592653589793
+}
+
+FnComplexFn :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: Cplx = {0,0}
+    suffix: [8] char = ""
+    if count < 2 { return ValError(ERR_VALUE) }
+    c.re = CoerceNumber(&args[0])
+    c.im = CoerceNumber(&args[1])
+    if TextArg(args,count,2,suffix,sizeof(suffix)) < 0 { return ValError(ERR_VALUE) }
+    if count >= 3 {
+        if (strcmp(suffix,"i") != 0 && strcmp(suffix,"j") != 0) { return ValError(ERR_VALUE) }
+        return CxVal(c,suffix[0])
+    }
+    return CxVal(c,105)
+}
+
+FnImdiv :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: Cplx = {0,0}
+    b: Cplx = {0,0}
+    unit: int = 105
+    if count < 2 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,1,&b,&unit) < 0 { return ValError(ERR_VALUE) }
+    if (b.re == 0 && b.im == 0) { return ValError(ERR_DIV0) }
+    return CxVal(CxDiv(a,b),unit)
+}
+
+FnImpower :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: Cplx = {0,0}
+    b: Cplx = {0,0}
+    unit: int = 105
+    if count < 2 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,1,&b,&unit) < 0 { return ValError(ERR_VALUE) }
+    if (a.re == 0 && a.im == 0 && b.re == 0 && b.im == 0) { return ValError(ERR_NUM) }
+    return CxVal(CxPow(a,b),unit)
+}
+
+FnImsub :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: Cplx = {0,0}
+    b: Cplx = {0,0}
+    unit: int = 105
+    if count < 2 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,1,&b,&unit) < 0 { return ValError(ERR_VALUE) }
+    return CxVal(CxSub(a,b),unit)
+}
+
+CxIterate :: (args: Val *, count: int, product: int, unit: int *) -> Val {
+    res: Cplx = {0,0}
+    c: Cplx = {0,0}
+    i: int = 0
+    unit2: int = 106
+    if product != 0 {
+        res.re = 1
+    }
+else {
+        res.re = 0
+    }
+    while i < count {
+        if args[i].kind == VAL_ERROR { return ValError(args[i].err) }
+        if args[i].kind != VAL_EMPTY {
+            if CxArg(args,count,i,&c,&unit2) < 0 { return ValError(ERR_VALUE) }
+            if args[i].kind != VAL_FLOAT && args[i].kind != VAL_BOOL {
+                unit[0] = unit2
+            }
+            if product != 0 {
+                res = CxMul(res,c)
+            }
+else {
+                res = CxAdd(res,c)
+            }
+        }
+        i += 1
+    }
+    return CxVal(res,unit[0])
+}
+
+FnImsum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    unit: int = 106
+    return CxIterate(args,count,0,&unit)
+}
+
+FnImproduct :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    unit: int = 106
+    return CxIterate(args,count,1,&unit)
+}
+
+FnImfact :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: Cplx = {0,0}
+    unit: int = 105
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    return CxVal(CxFact(a),unit)
+}
+
+FnImgamma :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: Cplx = {0,0}
+    unit: int = 105
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    return CxVal(CxGamma(a),unit)
+}
+
+
 CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, marks: int *) -> Val {
     st->hint = 0
 
@@ -7393,6 +8341,50 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"besselj") == 0 { return FnBesselj(st,args,count,marks) }
     if strcmp(name,"bessely") == 0 { return FnBessely(st,args,count,marks) }
     if strcmp(name,"convert") == 0 { return FnConvert(st,args,count,marks) }
+    if strcmp(name,"complex") == 0 { return FnComplexFn(st,args,count,marks) }
+    if strcmp(name,"imabs") == 0 { return FnCxReal1(0,args,count) }
+    if strcmp(name,"imaginary") == 0 { return FnCxReal1(1,args,count) }
+    if strcmp(name,"imreal") == 0 { return FnCxReal1(2,args,count) }
+    if strcmp(name,"imargument") == 0 { return FnCxReal1(3,args,count) }
+    if strcmp(name,"imconjugate") == 0 { return FnCx1(0,args,count) }
+    if strcmp(name,"iminv") == 0 { return FnCx1(1,args,count) }
+    if strcmp(name,"imneg") == 0 { return FnCx1(2,args,count) }
+    if strcmp(name,"imcos") == 0 { return FnCx1(3,args,count) }
+    if strcmp(name,"imtan") == 0 { return FnCx1(4,args,count) }
+    if strcmp(name,"imsec") == 0 { return FnCx1(5,args,count) }
+    if strcmp(name,"imcsc") == 0 { return FnCx1(6,args,count) }
+    if strcmp(name,"imcot") == 0 { return FnCx1(7,args,count) }
+    if strcmp(name,"imexp") == 0 { return FnCx1(8,args,count) }
+    if strcmp(name,"imln") == 0 { return FnCx1(9,args,count) }
+    if strcmp(name,"imlog2") == 0 { return FnCx1(10,args,count) }
+    if strcmp(name,"imlog10") == 0 { return FnCx1(11,args,count) }
+    if strcmp(name,"imsqrt") == 0 { return FnCx1(12,args,count) }
+    if strcmp(name,"imsin") == 0 { return FnCx1(13,args,count) }
+    if strcmp(name,"imsinh") == 0 { return FnCx1(14,args,count) }
+    if strcmp(name,"imcosh") == 0 { return FnCx1(15,args,count) }
+    if strcmp(name,"imtanh") == 0 { return FnCx1(16,args,count) }
+    if strcmp(name,"imsech") == 0 { return FnCx1(17,args,count) }
+    if strcmp(name,"imcsch") == 0 { return FnCx1(18,args,count) }
+    if strcmp(name,"imcoth") == 0 { return FnCx1(19,args,count) }
+    if strcmp(name,"imarcsin") == 0 { return FnCx1(20,args,count) }
+    if strcmp(name,"imarccos") == 0 { return FnCx1(21,args,count) }
+    if strcmp(name,"imarctan") == 0 { return FnCx1(22,args,count) }
+    if strcmp(name,"imarcsec") == 0 { return FnCx1(23,args,count) }
+    if strcmp(name,"imarccsc") == 0 { return FnCx1(24,args,count) }
+    if strcmp(name,"imarccot") == 0 { return FnCx1(25,args,count) }
+    if strcmp(name,"imarcsinh") == 0 { return FnCx1(26,args,count) }
+    if strcmp(name,"imarccosh") == 0 { return FnCx1(27,args,count) }
+    if strcmp(name,"imarctanh") == 0 { return FnCx1(28,args,count) }
+    if strcmp(name,"imarcsech") == 0 { return FnCx1(29,args,count) }
+    if strcmp(name,"imarccsch") == 0 { return FnCx1(30,args,count) }
+    if strcmp(name,"imarccoth") == 0 { return FnCx1(31,args,count) }
+    if strcmp(name,"imdiv") == 0 { return FnImdiv(st,args,count,marks) }
+    if strcmp(name,"impower") == 0 { return FnImpower(st,args,count,marks) }
+    if strcmp(name,"imsub") == 0 { return FnImsub(st,args,count,marks) }
+    if strcmp(name,"imsum") == 0 { return FnImsum(st,args,count,marks) }
+    if strcmp(name,"improduct") == 0 { return FnImproduct(st,args,count,marks) }
+    if strcmp(name,"imfact") == 0 { return FnImfact(st,args,count,marks) }
+    if strcmp(name,"imgamma") == 0 { return FnImgamma(st,args,count,marks) }
     if strcmp(name,"daverage") == 0 { return FnDaverage(st,args,count,marks) }
     if strcmp(name,"dcounta") == 0 { return FnDcounta(st,args,count,marks) }
     if strcmp(name,"dcount") == 0 { return FnDcount(st,args,count,marks) }
