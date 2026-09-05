@@ -13491,6 +13491,10 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"timevalue") == 0 { return FnTimevalue(st,args,count,marks) }
     if strcmp(name,"odf.time") == 0 { return FnOdfTime(st,args,count,marks) }
     if strcmp(name,"logreg") == 0 { return FnLogReg(st,args,count,marks) }
+    if strcmp(name,"logfit") == 0 { return FnLogfit(st,args,count,marks) }
+    if strcmp(name,"date2hdate") == 0 { return FnDate2Hdate(st,args,count,marks) }
+    if strcmp(name,"interpolation") == 0 { return FnInterpolation(st,args,count,marks) }
+    if strcmp(name,"periodogram") == 0 { return FnPeriodogram(st,args,count,marks) }
     if strcmp(name,"acot") == 0 { return FnMath1(0,args,count) }
     if strcmp(name,"acoth") == 0 { return FnMath1(1,args,count) }
     if strcmp(name,"acosh") == 0 { return FnMath1(2,args,count) }
@@ -17034,6 +17038,927 @@ else {
         y = CoerceNumber(&args[1])
     }
     return ValNumber(nextafter(x,y))
+}
+
+RangeIncreasing :: (xs: double *, n: int) -> int {
+    i: int = 1
+    while i < n {
+        if xs[i] <= xs[i - 1] { return 0 }
+        i += 1
+    }
+    return 1
+}
+
+CSpline :: struct {
+    n: int
+    x: [64] double
+    y: [64] double
+    a: [64] double
+    b: [64] double
+    c: [64] double
+}
+
+CSplineInit :: (sp: CSpline *, x: double *, y: double *, n: int) -> int {
+    d1: [64] double = {0}
+    d2: [64] double = {0}
+    d3: [64] double = {0}
+    d4: [64] double = {0}
+    dx1: double = 0
+    dy1: double = 0
+    dx2: double = 0
+    dy2: double = 0
+    h: double = 0
+    nm1: int = 0
+    nm2: int = 0
+    i: int = 0
+    j: int = 0
+    first: int = 0
+    last: int = 0
+    if n < 3 || n > 64 { return 0 }
+    if RangeIncreasing(x,n) == 0 { return 0 }
+    nm1 = n - 1
+    nm2 = n - 2
+    sp->n = n
+    i = 0
+    while i < n {
+        sp->x[i] = x[i]
+        sp->y[i] = y[i]
+        i += 1
+    }
+    dx1 = x[1] - x[0]
+    dy1 = (y[1] - y[0]) / dx1 * 3
+    i = 1
+    while i <= nm2 {
+        dx2 = x[i + 1] - x[i]
+        dy2 = (y[i + 1] - y[i]) / dx2 * 3
+        d1[i] = dx1
+        d2[i] = 2 * (dx1 + dx2)
+        d3[i] = dx2
+        d4[i] = dy2 - dy1
+        dx1 = dx2
+        dy1 = dy2
+        i += 1
+    }
+    first = 2
+    last = nm2
+    i = first
+    while i <= last {
+        d1[i] = d1[i] / d2[i - 1]
+        d2[i] = d2[i] - d1[i] * d3[i - 1]
+        d4[i] = d4[i] - d1[i] * d4[i - 1]
+        i += 1
+    }
+    d4[last] = d4[last] / d2[last]
+    j = last - 1
+    while j >= first - 1 {
+        d4[j] = (d4[j] - d3[j] * d4[j + 1]) / d2[j]
+        j -= 1
+    }
+    d4[0] = 0.0
+    d4[nm1] = 0.0
+    i = 0
+    while i < nm1 {
+        h = x[i + 1] - x[i]
+        sp->a[i] = (d4[i + 1] - d4[i]) / (3 * h)
+        sp->b[i] = d4[i]
+        sp->c[i] = ((y[i + 1] - y[i]) / h) - ((2 * d4[i] + d4[i + 1]) * h / 3)
+        i += 1
+    }
+    return 1
+}
+
+CSplineValue :: (sp: CSpline *, xv: double) -> double {
+    dx: double = 0
+    n: int = 0
+    j: int = 0
+    k: int = 0
+    n = sp->n - 2
+    if xv >= sp->x[n] {
+        dx = xv - sp->x[n]
+        return sp->y[n] + dx * (sp->c[n] + dx * (sp->b[n] + dx * sp->a[n]))
+    }
+    if xv <= sp->x[1] {
+        dx = xv - sp->x[0]
+        return sp->y[0] + dx * (sp->c[0] + dx * (sp->b[0] + dx * sp->a[0]))
+    }
+    j = 1
+    while n > j + 1 {
+        k = (n + j) / 2
+        if xv > sp->x[k] {
+            j = k
+        }
+else {
+            n = k
+        }
+    }
+    dx = xv - sp->x[j]
+    return sp->y[j] + dx * (sp->c[j] + dx * (sp->b[j] + dx * sp->a[j]))
+}
+
+CSplineIntegrals :: (sp: CSpline *, x: double *, n: int, res: double *) -> int {
+    start: double = 0
+    end: double = 0
+    sum: double = 0
+    i: int = 0
+    j: int = 0
+    k: int = 0
+    jmax: int = 0
+    if n <= 1 || RangeIncreasing(x,n) == 0 { return 0 }
+    j = 1
+    jmax = sp->n - 1
+    start = x[0]
+    i = 1
+    while i < n {
+        sum = 0
+        end = x[i]
+        while start >= sp->x[j] {
+            j += 1
+        }
+        k = j > 1 ? j - 1 : 0
+        start -= sp->x[k]
+        sum = 0 - start * (sp->y[k] + start * (sp->c[k] / 2 + start * (sp->b[k] / 3 + start * sp->a[k] / 4)))
+        while j < jmax && end > sp->x[j] {
+            start = sp->x[j] - sp->x[k]
+            sum += start * (sp->y[k] + start * (sp->c[k] / 2 + start * (sp->b[k] / 3 + start * sp->a[k] / 4)))
+            start = sp->x[j]
+            j += 1
+            k = j - 1
+        }
+        start = end - sp->x[k]
+        sum += start * (sp->y[k] + start * (sp->c[k] / 2 + start * (sp->b[k] / 3 + start * sp->a[k] / 4)))
+        res[i - 1] = sum
+        start = end
+        i += 1
+    }
+    return 1
+}
+
+LinearInterp :: (absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    j: int = 0
+    k: int = 0
+    l: int = 0
+    i: int = 0
+    slope: double = 0
+    jmax: int = nb_knots - 1
+    if nb_knots < 2 { return 0 }
+    if RangeIncreasing(targets,nb_targets) != 0 {
+        j = 1
+        k = 0
+        slope = (ord[1] - ord[0]) / (absc[1] - absc[0])
+        i = 0
+        while i < nb_targets {
+            while j < jmax && targets[i] > absc[j] {
+                j += 1
+            }
+            if k < j - 1 {
+                k = j - 1
+                slope = (ord[j] - ord[k]) / (absc[j] - absc[k])
+            }
+            res[i] = (targets[i] - absc[k]) * slope + ord[k]
+            i += 1
+        }
+    }
+else {
+        i = 0
+        while i < nb_targets {
+            k = jmax - 1
+            if targets[i] >= absc[k] {
+                res[i] = (targets[i] - absc[k]) * (ord[jmax] - ord[k]) / (absc[jmax] - absc[k]) + ord[k]
+            }
+else if targets[i] <= absc[1] {
+                res[i] = (targets[i] - absc[0]) * (ord[1] - ord[0]) / (absc[1] - absc[0]) + ord[0]
+            }
+else {
+                j = 1
+                while k > j + 1 {
+                    l = (k + j) / 2
+                    if targets[i] > absc[l] {
+                        j = l
+                    }
+else {
+                        k = l
+                    }
+                }
+                res[i] = (targets[i] - absc[j]) * (ord[k] - ord[j]) / (absc[k] - absc[j]) + ord[j]
+            }
+            i += 1
+        }
+    }
+    return 1
+}
+
+LinearAveraging :: (absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    j: int = 0
+    k: int = 0
+    i: int = 0
+    jmax: int = nb_knots - 1
+    slope: double = 0
+    x0: double = 0
+    x1: double = 0
+    if nb_knots < 2 || RangeIncreasing(targets,nb_targets + 1) == 0 { return 0 }
+    j = 1
+    while j < jmax && targets[0] > absc[j] {
+        j += 1
+    }
+    k = j - 1
+    slope = (ord[j] - ord[k]) / (absc[j] - absc[k]) / 2
+    i = 1
+    while i <= nb_targets {
+        if targets[i] < absc[j] || j == jmax {
+            x0 = targets[i - 1] - absc[k]
+            x1 = targets[i] - absc[k]
+            res[i - 1] = (x1 * (slope * x1 + ord[k]) - x0 * (slope * x0 + ord[k])) / (x1 - x0)
+            i += 1
+            continue
+        }
+        x0 = targets[i - 1] - absc[k]
+        x1 = absc[j] - absc[k]
+        res[i - 1] = (x1 * (slope * x1 + ord[k]) - x0 * (slope * x0 + ord[k]))
+        while j < jmax && targets[i] > absc[j + 1] {
+            j += 1
+            k += 1
+            x0 = absc[j] - absc[k]
+            slope = (ord[j] - ord[k]) / x0 / 2
+            res[i - 1] += x0 * (slope * x0 + ord[k])
+        }
+        if j > k + 1 {
+            k = j - 1
+            slope = (ord[j] - ord[k]) / (absc[j] - absc[k]) / 2
+        }
+else {
+            k = j
+        }
+        x0 = targets[i] - absc[k]
+        res[i - 1] += x0 * (slope * x0 + ord[k])
+        res[i - 1] /= (targets[i] - targets[i - 1])
+        i += 1
+    }
+    return 1
+}
+
+StaircaseInterp :: (absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    j: int = 0
+    k: int = 0
+    l: int = 0
+    i: int = 0
+    jmax: int = nb_knots - 1
+    if nb_knots <= 0 { return 0 }
+    if RangeIncreasing(targets,nb_targets) != 0 {
+        j = 1
+        i = 0
+        while i < nb_targets {
+            while j <= jmax && targets[i] >= absc[j] {
+                j += 1
+            }
+            res[i] = ord[j - 1]
+            i += 1
+        }
+    }
+else {
+        i = 0
+        while i < nb_targets {
+            k = jmax
+            if targets[i] >= absc[jmax] {
+                res[i] = ord[jmax]
+            }
+else {
+                j = 0
+                while k > j + 1 {
+                    l = (k + j) / 2
+                    if targets[i] >= absc[l] {
+                        j = l
+                    }
+else {
+                        k = l
+                    }
+                }
+                if k != j && targets[i] >= absc[k] {
+                    j = k
+                }
+                res[i] = ord[j]
+            }
+            i += 1
+        }
+    }
+    return 1
+}
+
+StaircaseAveraging :: (absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    j: int = 0
+    i: int = 0
+    jmax: int = nb_knots - 1
+    if nb_knots <= 0 { return 0 }
+    if RangeIncreasing(targets,nb_targets + 1) == 0 { return 0 }
+    j = 1
+    while j <= jmax && targets[0] >= absc[j] {
+        j += 1
+    }
+    i = 1
+    while i <= nb_targets {
+        if j > jmax || targets[i] < absc[j] {
+            res[i - 1] = ord[j - 1]
+            i += 1
+            continue
+        }
+        res[i - 1] = (absc[j] - targets[i - 1]) * ord[j - 1]
+        while j < jmax && targets[i] >= absc[j + 1] {
+            j += 1
+            res[i - 1] += (absc[j] - absc[j - 1]) * ord[j - 1]
+        }
+        if targets[i] >= absc[j] {
+            j += 1
+        }
+        res[i - 1] += (targets[i] - absc[j - 1]) * ord[j - 1]
+        res[i - 1] /= (targets[i] - targets[i - 1])
+        i += 1
+    }
+    return 1
+}
+
+SplineInterp :: (absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    sp: CSpline = {0}
+    i: int = 0
+    if CSplineInit(&sp,absc,ord,nb_knots) == 0 { return 0 }
+    if RangeIncreasing(targets,nb_targets) != 0 {
+        i = 0
+        while i < nb_targets {
+            res[i] = CSplineValue(&sp,targets[i])
+            i += 1
+        }
+    }
+else {
+        i = 0
+        while i < nb_targets {
+            res[i] = CSplineValue(&sp,targets[i])
+            i += 1
+        }
+    }
+    return 1
+}
+
+SplineAveraging :: (absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    sp: CSpline = {0}
+    if RangeIncreasing(targets,nb_targets + 1) == 0 { return 0 }
+    if CSplineInit(&sp,absc,ord,nb_knots) == 0 { return 0 }
+    if CSplineIntegrals(&sp,targets,nb_targets + 1,res) == 0 { return 0 }
+    i: int = 0
+    while i < nb_targets {
+        res[i] /= targets[i + 1] - targets[i]
+        i += 1
+    }
+    return 1
+}
+
+RunInterp :: (which: int, absc: double *, ord: double *, nb_knots: int, targets: double *, nb_targets: int, res: double *) -> int {
+    if which == 0 { return LinearInterp(absc,ord,nb_knots,targets,nb_targets,res) }
+    if which == 1 { return LinearAveraging(absc,ord,nb_knots,targets,nb_targets,res) }
+    if which == 2 { return StaircaseInterp(absc,ord,nb_knots,targets,nb_targets,res) }
+    if which == 3 { return StaircaseAveraging(absc,ord,nb_knots,targets,nb_targets,res) }
+    if which == 4 { return SplineInterp(absc,ord,nb_knots,targets,nb_targets,res) }
+    return SplineAveraging(absc,ord,nb_knots,targets,nb_targets,res)
+}
+
+FnInterpolation :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    gx3: int = 0
+    gl3: int = 0
+    vals0: [64] double = {0}
+    vals1: [64] double = {0}
+    vals2: [64] double = {0}
+    res: [64] double = {0}
+    n0: int = 0
+    n1: int = 0
+    n2: int = 0
+    interp: int = 0
+    cols2: int = 0
+    swapped: int = 1
+    i: int = 0
+    if groups < 3 { return ValError(ERR_VALUE) }
+    if groups > 4 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n0 = CashList(args + gx0,gl0,vals0)
+    if n0 < 0 { return ValError(args[gx0].err) }
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    n1 = CashList(args + gx1,gl1,vals1)
+    if n1 < 0 { return ValError(args[gx1].err) }
+    GroupBounds(marks,count,2,&gx2,&gl2)
+    cols2 = st->call_group_cols[gx2]
+    if cols2 != 1 && gl2 / (cols2 < 1 ? gl2 : cols2) != 1 {
+        if gl2 > 1 { return ValError(ERR_VALUE) }
+    }
+    n2 = CashList(args + gx2,gl2,vals2)
+    if n2 < 0 { return ValError(args[gx2].err) }
+    if n2 <= 0 { return ValError(ERR_VALUE) }
+    if groups >= 4 {
+        GroupBounds(marks,count,3,&gx3,&gl3)
+        if gl3 >= 1 {
+            if args[gx3].kind == VAL_ERROR { return ValError(args[gx3].err) }
+            interp = (int)floor(CoerceNumber(&args[gx3]))
+        }
+    }
+    if interp < 0 || interp > 5 { return ValError(ERR_VALUE) }
+    if interp == 1 || interp == 3 || interp == 5 {
+        if RangeIncreasing(vals2,n2) == 0 { return ValError(ERR_VALUE) }
+        n2 -= 1
+        if n2 <= 0 { return ValError(ERR_VALUE) }
+    }
+    if n0 != n1 || n0 < 2 || n0 > 64 { return ValError(ERR_VALUE) }
+    if RangeIncreasing(vals0,n0) == 0 {
+        swapped = 1
+        while swapped != 0 {
+            swapped = 0
+            i = 1
+            while i < n0 {
+                if vals0[i - 1] == vals0[i] { return ValError(ERR_VALUE) }
+                if vals0[i - 1] > vals0[i] {
+                    v: double = vals0[i - 1]
+                    vals0[i - 1] = vals0[i]
+                    vals0[i] = v
+                    v = vals1[i]
+                    vals1[i] = vals1[i - 1]
+                    vals1[i - 1] = v
+                    swapped = 1
+                }
+                i += 1
+            }
+        }
+    }
+    if RunInterp(interp,vals0,vals1,n0,vals2,n2,res) == 0 { return ValError(ERR_VALUE) }
+    return ValNumber(res[0])
+}
+
+FnPeriodogram :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    gx3: int = 0
+    gl3: int = 0
+    gx4: int = 0
+    gl4: int = 0
+    ord2: [64] double = {0}
+    absc: [64] double = {0}
+    interp_targets: [64] double = {0}
+    interp_res: [64] double = {0}
+    inp: [64] Cplx = {0}
+    outp: [64] Cplx = {0}
+    n0: int = 0
+    n1: int = 0
+    filter: int = 0
+    interp: int = 0
+    nb: int = 1
+    cols: int = 0
+    rows: int = 0
+    factor: double = 0
+    start: double = 0
+    incr: double = 0
+    i: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 5 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    cols = st->call_group_cols[gx0]
+    if cols < 1 { cols = gl0 }
+    rows = gl0 / cols
+    if cols != 1 && rows != 1 { return ValError(ERR_VALUE) }
+    n0 = CashList(args + gx0,gl0,ord2)
+    if n0 < 0 { return ValError(args[gx0].err) }
+    if n0 == 0 { return ValError(ERR_VALUE) }
+    if n0 > 64 { return ValError(ERR_VALUE) }
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 {
+            if args[gx1].kind == VAL_ERROR { return ValError(args[gx1].err) }
+            filter = (int)floor(CoerceNumber(&args[gx1]))
+        }
+    }
+    if filter < 0 || filter > 3 { return ValError(ERR_VALUE) }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&gx2,&gl2)
+        if gl2 > 1 {
+            n1 = CashList(args + gx2,gl2,absc)
+            if n1 < 0 { return ValError(args[gx2].err) }
+            if n1 < 2 { return ValError(ERR_VALUE) }
+            if groups >= 4 {
+                GroupBounds(marks,count,3,&gx3,&gl3)
+                if gl3 >= 1 {
+                    if args[gx3].kind == VAL_ERROR { return ValError(args[gx3].err) }
+                    interp = (int)floor(CoerceNumber(&args[gx3]))
+                }
+            }
+            if groups >= 5 {
+                GroupBounds(marks,count,4,&gx4,&gl4)
+                if gl4 >= 1 {
+                    if args[gx4].kind == VAL_ERROR { return ValError(args[gx4].err) }
+                    n1 = (int)floor(CoerceNumber(&args[gx4]))
+                }
+            }
+            if interp < 0 || interp > 5 { return ValError(ERR_NA) }
+            if n1 < n0 { return ValError(ERR_VALUE) }
+            nb = 1
+            while nb < n1 {
+                nb *= 2
+            }
+            incr = (absc[n0 - 1] - absc[0]) / n1
+            n2: int = (interp == 1 || interp == 3 || interp == 5) ? n1 + 1 : n1
+            if n2 == n1 {
+                start = absc[0]
+            }
+else {
+                start = absc[0] - incr / 2
+            }
+            i = 0
+            while i < n2 {
+                interp_targets[i] = start + i * incr
+                i += 1
+            }
+            if RunInterp(interp,absc,ord2,n0,interp_targets,n1,interp_res) == 0 {
+                return ValError(ERR_NA)
+            }
+            n0 = n1
+            i = 0
+            while i < n0 {
+                ord2[i] = interp_res[i]
+                i += 1
+            }
+        }
+    }
+    if nb == 1 {
+        while nb < n0 {
+            nb *= 2
+        }
+    }
+    if filter != 0 {
+        if filter == 1 {
+            factor = n0 / 2
+            i = 0
+            while i < n0 {
+                ord2[i] *= 1 - fabs(i / factor - 1)
+                i += 1
+            }
+        }
+else if filter == 2 {
+            factor = 2 * 3.14159265358979323846 / n0
+            i = 0
+            while i < n0 {
+                ord2[i] *= 0.5 * (1 - cos(factor * i))
+                i += 1
+            }
+        }
+else {
+            factor = n0 / 2
+            i = 0
+            while i < n0 {
+                ord2[i] *= 1 - (i / factor - 1) * (i / factor - 1)
+                i += 1
+            }
+        }
+    }
+    i = 0
+    while i < n0 {
+        inp[i].re = ord2[i]
+        inp[i].im = 0
+        i += 1
+    }
+    FourierFft(inp,nb,1,outp,0)
+    nb /= 2
+    if nb > 0 {
+        return ValNumber(sqrt(outp[0].re * outp[0].re + outp[0].im * outp[0].im))
+    }
+    return ValError(ERR_VALUE)
+}
+
+HdateDaysFromStart :: (y: int) -> int {
+    l: int = y * 7 + 1
+    m: int = y * 12 + l / 19
+    nm: int = 0
+    s: int = 0
+    dw: int = 0
+    l %= 19
+    nm = m * (24 * 1080 + 12 * 1080 + 793) + (1 + 6) * 1080 + 779
+    s = m * 28 + nm / (24 * 1080) - 2
+    nm %= (7 * 24 * 1080)
+    dw = nm / (24 * 1080)
+    nm %= (24 * 1080)
+    if (l < 12 && dw == 3 && nm >= (9 + 6) * 1080 + 204) || (l < 7 && dw == 2 && nm >= (15 + 6) * 1080 + 589) {
+        s += 1
+        dw += 1
+    }
+    if dw == 1 || dw == 4 || dw == 6 {
+        s += 1
+    }
+    return s
+}
+
+HdateGdateToJd :: (d: int, m: int, y: int) -> int {
+    jd: int = (1461 * (y + 4800 + (m - 14) / 12)) / 4 + (367 * (m - 2 - 12 * ((m - 14) / 12))) / 12 - (3 * ((y + 4900 + (m - 14) / 12) / 100)) / 4 + d - 32075
+    return jd
+}
+
+HdateJdToHdate :: (jd: int, d: int *, m: int *, y: int *) {
+    s: int = 0
+    l: int = 0
+    n: int = 0
+    i: int = 0
+    j: int = 0
+    l = jd + 68569
+    n = (4 * l) / 146097
+    l = l - (146097 * n + 3) / 4
+    i = (4000 * (l + 1)) / 1461001
+    l = l - (1461 * i) / 4 + 31
+    j = (80 * l) / 2447
+    l = j / 11
+    y[0] = 100 * (n - 49) + i + l
+    d[0] = jd - 1715119
+    y[0] += 16
+    s = HdateDaysFromStart(y[0])
+    m[0] = HdateDaysFromStart(y[0] + 1)
+    while d[0] >= m[0] {
+        s = m[0]
+        y[0] += 1
+        m[0] = HdateDaysFromStart(y[0] + 1)
+    }
+    d[0] -= s
+    s = m[0] - s
+    y[0] += 3744
+    if d[0] >= s - 236 {
+        d[0] -= s - 236
+        m[0] = d[0] * 2 / 59
+        d[0] -= (m[0] * 59 + 1) / 2
+        m[0] += 4
+        if s > 365 && m[0] <= 5 {
+            m[0] += 8
+        }
+    }
+else {
+        s = 114 + s % 10
+        m[0] = d[0] * 4 / s
+        d[0] -= (m[0] * s + 3) / 4
+    }
+}
+
+HdateMonthName :: (month: int, out: char *) {
+    if month == 0 { snprintf(out,64,"Tishri"); return }
+    if month == 1 { snprintf(out,64,"Heshwan"); return }
+    if month == 2 { snprintf(out,64,"Kislev"); return }
+    if month == 3 { snprintf(out,64,"Tebet"); return }
+    if month == 4 { snprintf(out,64,"Shebat"); return }
+    if month == 5 { snprintf(out,64,"Adar"); return }
+    if month == 6 { snprintf(out,64,"Nisan"); return }
+    if month == 7 { snprintf(out,64,"Iyar"); return }
+    if month == 8 { snprintf(out,64,"Sivan"); return }
+    if month == 9 { snprintf(out,64,"Tammuz"); return }
+    if month == 10 { snprintf(out,64,"Ab"); return }
+    if month == 11 { snprintf(out,64,"Elul"); return }
+    if month == 12 { snprintf(out,64,"Adar I"); return }
+    if month == 13 { snprintf(out,64,"Adar II"); return }
+    out[0] = 0
+}
+
+FnDate2Hdate :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    serial: double = 0
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    jd: int = 0
+    hy: int = 0
+    hm: int = 0
+    hd: int = 0
+    mname: [64] char = ""
+    out: [128] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    serial = CoerceNumber(&args[0])
+    if serial < 1 { return ValError(ERR_NUM) }
+    days2: int = (int)serial
+    if days2 < 61 { days2 += 1 }
+    CivilFromDays(days2 + SerialEpoch(),&y,&m,&d)
+    jd = HdateGdateToJd(d,m,y)
+    HdateJdToHdate(jd,&hd,&hm,&hy)
+    HdateMonthName(hm,mname)
+    snprintf(out,sizeof(out),"%d %s %d",hd + 1,mname,hy)
+    return ValString(wb_strdup(out))
+}
+
+LogFitTransform :: (xs: double *, transf_xs: double *, ys: double *, n: int, res: double *, mean_y: double) {
+    i: int = 0
+    mean_transf_x: double = 0
+    diff_x: double = 0
+    resid_y: double = 0
+    sum1: double = 0
+    sum2: double = 0
+    i = 0
+    while i < n {
+        transf_xs[i] = log(res[0] * (xs[i] - res[3]))
+        i += 1
+    }
+    mean_transf_x = GoRangeAverage(transf_xs,n)
+    i = 0
+    while i < n {
+        diff_x = transf_xs[i] - mean_transf_x
+        sum1 += diff_x * (ys[i] - mean_y)
+        sum2 += diff_x * diff_x
+        i += 1
+    }
+    res[2] = sum1 / sum2
+    res[1] = mean_y - (res[2] * mean_transf_x)
+    res[4] = 0
+    i = 0
+    while i < n {
+        resid_y = res[1] + (res[2] * transf_xs[i]) - ys[i]
+        res[4] += resid_y * resid_y
+        i += 1
+    }
+}
+
+LogFitting :: (xs: double *, ys: double *, n: int, res: double *, min_x: double, max_x: double, mean_y: double) -> int {
+    sign_plus_ok: int = 1
+    sign_minus_ok: int = 1
+    x_range: double = 0
+    c_step: double = 0
+    c_accuracy_int: double = 0
+    c_offset: double = 0
+    c_accuracy: double = 0
+    c_range: double = 0
+    c_start: double = 0
+    c_end: double = 0
+    c_dist: double = 0
+    temp_res: [5] double = {0}
+    transf_xs: [64] double = {0}
+    i: int = 0
+    x_range = max_x - min_x
+    c_accuracy = log10(x_range)
+    if c_accuracy < 0 {
+        if modf(c_accuracy,&c_accuracy_int) != 0 {
+            c_accuracy -= 1
+        }
+    }
+    modf(c_accuracy,&c_accuracy_int)
+    c_accuracy = c_accuracy_int
+    c_accuracy = pow(10,c_accuracy)
+    c_accuracy *= 0.000001
+    c_step = x_range * 0.05
+    c_range = x_range * 100
+    res[0] = 1
+    res[3] = min_x - c_range
+    temp_res[0] = 1
+    temp_res[3] = res[3] - c_step
+    LogFitTransform(xs,transf_xs,ys,n,res,mean_y)
+    LogFitTransform(xs,transf_xs,ys,n,temp_res,mean_y)
+    if temp_res[4] <= res[4] {
+        sign_plus_ok = 0
+    }
+    res[0] = -1
+    res[3] = max_x + c_range
+    temp_res[0] = -1
+    temp_res[3] = res[3] + c_step
+    LogFitTransform(xs,transf_xs,ys,n,res,mean_y)
+    LogFitTransform(xs,transf_xs,ys,n,temp_res,mean_y)
+    if temp_res[4] <= res[4] {
+        sign_minus_ok = 0
+    }
+    if sign_plus_ok != 0 && sign_minus_ok == 0 {
+        res[0] = 1
+    }
+else if sign_minus_ok != 0 && sign_plus_ok == 0 {
+        res[0] = -1
+    }
+else {
+        return 1
+    }
+    c_offset = res[0] == 1 ? min_x : max_x
+    if res[0] == 1 {
+        c_offset = c_accuracy * floor(c_offset / c_accuracy)
+    }
+else {
+        c_offset = c_accuracy * ceil(c_offset / c_accuracy)
+    }
+    res[3] = c_offset - res[0] * c_accuracy
+    temp_res[3] = c_offset - res[0] * 2 * c_accuracy
+    temp_res[0] = res[0]
+    LogFitTransform(xs,transf_xs,ys,n,res,mean_y)
+    LogFitTransform(xs,transf_xs,ys,n,temp_res,mean_y)
+    if temp_res[4] >= res[4] {
+        return 1
+    }
+    c_start = c_offset
+    c_end = c_start - res[0] * c_range
+    c_dist = res[0] * (c_start - c_end) / 2
+    res[3] = c_end + res[0] * c_dist
+    while 1 {
+        c_dist /= 2
+        LogFitTransform(xs,transf_xs,ys,n,res,mean_y)
+        temp_res[3] = res[3] + res[0] * c_dist
+        LogFitTransform(xs,transf_xs,ys,n,temp_res,mean_y)
+        if temp_res[4] <= res[4] {
+            i = 0
+            while i < 5 {
+                res[i] = temp_res[i]
+                i += 1
+            }
+        }
+else {
+            temp_res[3] = res[3] - res[0] * c_dist
+            LogFitTransform(xs,transf_xs,ys,n,temp_res,mean_y)
+            if temp_res[4] <= res[4] {
+                i = 0
+                while i < 5 {
+                    res[i] = temp_res[i]
+                    i += 1
+                }
+            }
+        }
+        if c_dist <= c_accuracy { break }
+    }
+    res[3] = c_accuracy * FakeRound(res[3] / c_accuracy)
+    LogFitTransform(xs,transf_xs,ys,n,res,mean_y)
+    if (res[0] * (res[3] - c_end)) < (1.1 * c_accuracy) {
+        return 1
+    }
+    return 0
+}
+
+GoLogarithmicFit :: (xs: double *, ys: double *, n: int, res: double *) -> int {
+    min_x: double = 0
+    max_x: double = 0
+    min_y: double = 0
+    max_y: double = 0
+    mean_y: double = 0
+    more_2_y: int = 0
+    more_2_x: int = 0
+    i: int = 0
+    if n <= 2 { return 2 }
+    min_x = xs[0]
+    max_x = xs[0]
+    i = 1
+    while i < n {
+        if xs[i] < min_x { min_x = xs[i] }
+        if xs[i] > max_x { max_x = xs[i] }
+        i += 1
+    }
+    min_y = ys[0]
+    max_y = ys[0]
+    i = 1
+    while i < n {
+        if ys[i] < min_y { min_y = ys[i] }
+        if ys[i] > max_y { max_y = ys[i] }
+        i += 1
+    }
+    mean_y = GoRangeAverage(ys,n)
+    if min_y == max_y || min_x == max_x { return 1 }
+    i = 0
+    while i < n {
+        if ys[i] != min_y && ys[i] != max_y {
+            more_2_y = 1
+            break
+        }
+        i += 1
+    }
+    if more_2_y == 0 { return 1 }
+    i = 0
+    while i < n {
+        if xs[i] != min_x && xs[i] != max_x {
+            more_2_x = 1
+            break
+        }
+        i += 1
+    }
+    if more_2_x == 0 { return 1 }
+    return LogFitting(xs,ys,n,res,min_x,max_x,mean_y)
+}
+
+FnLogfit :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    ys: [64] double = {0}
+    xs: [64] double = {0}
+    ny: int = 0
+    nx: int = 0
+    res: [5] double = {0}
+    rc: int = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if groups > 2 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    ny = CashList(args + gx0,gl0,ys)
+    if ny < 0 { return ValError(args[gx0].err) }
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    nx = CashList(args + gx1,gl1,xs)
+    if nx < 0 { return ValError(args[gx1].err) }
+    if nx != ny || nx < 3 || nx > 64 { return ValError(ERR_VALUE) }
+    rc = GoLogarithmicFit(xs,ys,nx,res)
+    if rc != 0 { return ValError(ERR_NUM) }
+    return ValNumber(res[0])
 }
 
 FnLogReg :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
