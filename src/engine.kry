@@ -1,5 +1,6 @@
 #import "kryon.h"
 #import "kry_quad.h"
+#import "kry_eval.h"
 #import "kry_xml.h"
 #import "kry_gzip.h"
 #import "ctype.h"
@@ -5381,25 +5382,6 @@ FnChoose :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     return ValCopy(&args[n])
 }
 
-ColNameText :: (col: int, out: char *) -> int {
-    c: int = col + 1
-    n: int = 0
-    buf: [8] char = ""
-    i: int = 0
-    while c > 0 {
-        rem: int = (c - 1) % 26
-        buf[n] = (char)('A' + rem)
-        n += 1
-        c = (c - 1) / 26
-    }
-    while i < n {
-        out[i] = buf[n - 1 - i]
-        i += 1
-    }
-    out[n] = 0
-    return n
-}
-
 ParseR1C1Index :: (text: const char *, pos: int *, out: int *) -> int {
     neg: int = 0
     val: int = 0
@@ -5425,83 +5407,6 @@ ParseR1C1Index :: (text: const char *, pos: int *, out: int *) -> int {
     pos[0] = p
     out[0] = val - 1
     return 0
-}
-
-SheetNameNeedsQuote :: (name: const char *) -> int {
-    i: int = 1
-    nletters: int = 0
-    ndigits: int = 0
-    c0: int = name[0]
-    if c0 == 0 { return 0 }
-    if (c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z') {
-        nletters = 1
-        ndigits = 0
-    }
-else if c0 == '_' || c0 == '.' {
-        nletters = -1
-        ndigits = -1
-    }
-else {
-        return 1
-    }
-    while name[i] != 0 {
-        c: int = name[i]
-        if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
-            if ndigits == 0 { nletters += 1 }
-        }
-else if c >= '0' && c <= '9' {
-            if ndigits >= 0 { ndigits += 1 }
-        }
-else if c == '.' || c == '_' {
-            nletters = -1
-            ndigits = -1
-        }
-else {
-            return 1
-        }
-        i += 1
-    }
-    if ndigits > 0 {
-        probe: int = 0
-        col: int = ParseColLetters(name,&probe)
-        if col >= 0 {
-            while name[probe] == '0' { probe += 1 }
-            if ParseRowDigits(name,&probe) >= 0 && name[probe] == 0 { return 1 }
-        }
-    }
-    return 0
-}
-
-SheetPrefixText :: (name: const char *, out: char *) -> int {
-    n: int = 0
-    i: int = 0
-    if name[0] == 0 {
-        out[0] = '!'
-        out[1] = 0
-        return 1
-    }
-    if SheetNameNeedsQuote(name) != 0 {
-        out[0] = '\''
-        n = 1
-        while name[i] != 0 {
-            if name[i] == '\'' && n < 250 { out[n] = '\''; n += 1 }
-            if n < 250 { out[n] = name[i]; n += 1 }
-            i += 1
-        }
-        out[n] = '\''
-        n += 1
-    }
-else {
-        while name[i] != 0 && n < 250 {
-            out[n] = name[i]
-            n += 1
-            i += 1
-        }
-    }
-    out[n] = '!'
-    n += 1
-    out[n] = 0
-    return n
 }
 
 FnAddress :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
@@ -5539,10 +5444,10 @@ FnAddress :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     if count >= 5 {
         label: [256] char = ""
         CoerceText(&args[4],label,sizeof(label))
-        SheetPrefixText(label,prefix)
+        eval_sheet_prefix(label,prefix)
     }
     if a1 != 0 {
-        ColNameText(col - 1,letters)
+        eval_col_name(col - 1,letters)
         if col_relative == 0 && row_relative == 0 {
             snprintf(out,sizeof(out),"%s$%s$%d",prefix,letters,row)
         }
@@ -10704,58 +10609,6 @@ else {
     return ValNumber(tails * pt(t,dof,0,0))
 }
 
-SubEpsilon :: (x: double) -> double {
-    e: int = 0
-    mant: double = 0
-    ax: double = 0
-    if isfinite(x) == 0 || x == 0 { return x }
-    ax = fabs(x)
-    mant = frexp(ax,&e)
-    if x < 0 {
-        return 0 - ldexp(mant + 2.220446049250313e-16 / 2,e)
-    }
-    return ldexp(mant - 2.220446049250313e-16 / 2,e)
-}
-
-AddEpsilon :: (x: double) -> double {
-    e: int = 0
-    mant: double = 0
-    ax: double = 0
-    if isfinite(x) == 0 || x == 0 { return x }
-    ax = fabs(x)
-    mant = frexp(ax,&e)
-    if x < 0 {
-        return 0 - ldexp(mant - 2.220446049250313e-16 / 2,e)
-    }
-    return ldexp(mant + 2.220446049250313e-16 / 2,e)
-}
-
-FakeFloor :: (x: double) -> double {
-    if x == floor(x) { return x }
-    return floor(AddEpsilon(x))
-}
-
-FakeRound :: (x: double) -> double {
-    y: double = 0
-    if x == floor(x) { return x }
-    y = FakeFloor(fabs(x) + 0.5)
-    if x < 0 { return 0 - y }
-    return y
-}
-
-FakeTrunc :: (x: double) -> double {
-    if x == floor(x) { return x }
-    if x >= 0 {
-        return floor(AddEpsilon(x))
-    }
-    return 0 - floor(AddEpsilon(0 - x))
-}
-
-FakeCeil :: (x: double) -> double {
-    if x == floor(x) { return x }
-    return ceil(SubEpsilon(x))
-}
-
 FnConfidence :: (st: EvalState *, args: Val *, count: int, marks: int *, t_based: int) -> Val {
     alpha: double = 0
     sd: double = 0
@@ -10763,7 +10616,7 @@ FnConfidence :: (st: EvalState *, args: Val *, count: int, marks: int *, t_based
     if count < 3 { return ValError(ERR_VALUE) }
     alpha = CoerceNumber(&args[0])
     sd = CoerceNumber(&args[1])
-    n = FakeFloor(CoerceNumber(&args[2]))
+    n = eval_fake_floor(CoerceNumber(&args[2]))
     if t_based != 0 {
         if n == 1 { return ValError(ERR_DIV0) }
         if (n <= 1 || sd <= 0) { return ValError(ERR_NUM) }
@@ -15664,8 +15517,8 @@ FnPermut :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     if count < 2 { return ValError(ERR_VALUE) }
     if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
     if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
-    n = FakeFloor(CoerceNumber(&args[0]))
-    k = FakeFloor(CoerceNumber(&args[1]))
+    n = eval_fake_floor(CoerceNumber(&args[0]))
+    k = eval_fake_floor(CoerceNumber(&args[1]))
     if 0 <= k && k <= n {
         return ValNumber(PochhammerHammer(n - k + 1,k))
     }
@@ -15678,8 +15531,8 @@ FnPermutationA :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Va
     if count < 2 { return ValError(ERR_VALUE) }
     if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
     if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
-    x = FakeFloor(CoerceNumber(&args[0]))
-    y = FakeFloor(CoerceNumber(&args[1]))
+    x = eval_fake_floor(CoerceNumber(&args[0]))
+    y = eval_fake_floor(CoerceNumber(&args[1]))
     if x < 0 || y < 0 { return ValError(ERR_NUM) }
     if y == 0 { return ValNumber(1) }
     return ValNumber(pow(x,y))
@@ -18293,7 +18146,7 @@ else {
         }
         if c_dist <= c_accuracy { break }
     }
-    res[3] = c_accuracy * FakeRound(res[3] / c_accuracy)
+    res[3] = c_accuracy * eval_fake_round(res[3] / c_accuracy)
     LogFitTransform(xs,transf_xs,ys,n,res,mean_y)
     if (res[0] * (res[3] - c_end)) < (1.1 * c_accuracy) {
         return 1
