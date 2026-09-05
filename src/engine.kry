@@ -13495,6 +13495,75 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"date2hdate") == 0 { return FnDate2Hdate(st,args,count,marks) }
     if strcmp(name,"interpolation") == 0 { return FnInterpolation(st,args,count,marks) }
     if strcmp(name,"periodogram") == 0 { return FnPeriodogram(st,args,count,marks) }
+    if strcmp(name,"bernoulli") == 0 {
+        k2: double = 0
+        p2: double = 0
+        if count < 2 { return ValError(ERR_VALUE) }
+        if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        k2 = CoerceNumber(&args[0])
+        p2 = CoerceNumber(&args[1])
+        if p2 < 0 || p2 > 1 || (k2 != 0 && k2 != 1) { return ValError(ERR_NUM) }
+        return ValNumber(RandomBernoulliPdf(k2,p2))
+    }
+    if strcmp(name,"landau") == 0 {
+        if count < 1 { return ValError(ERR_VALUE) }
+        if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+        return ValNumber(RandomLandauPdf(CoerceNumber(&args[0])))
+    }
+    if strcmp(name,"cauchy") == 0 {
+        xv: double = 0
+        av: double = 0
+        cuml: int = 0
+        if count < 3 { return ValError(ERR_VALUE) }
+        if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+        xv = CoerceNumber(&args[0])
+        av = CoerceNumber(&args[1])
+        cuml = CoerceNumber(&args[2]) != 0 ? 1 : 0
+        if av < 0 { return ValError(ERR_NUM) }
+        if cuml != 0 {
+            return ValNumber(PcauchyGo(xv,0,av,0,0))
+        }
+        return ValNumber(DcauchyGo(xv,0,av,0))
+    }
+    if strcmp(name,"laplace") == 0 { return FnDensity2(st,args,count,marks,0) }
+    if strcmp(name,"pareto") == 0 { return FnDensity2(st,args,count,marks,1) }
+    if strcmp(name,"rayleightail") == 0 { return FnDensity2(st,args,count,marks,2) }
+    if strcmp(name,"exppowdist") == 0 { return FnDensity2(st,args,count,marks,3) }
+    if strcmp(name,"rayleigh") == 0 {
+        if count < 2 { return ValError(ERR_VALUE) }
+        if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+        return ValNumber(DRayleighGo(CoerceNumber(&args[0]),CoerceNumber(&args[1])))
+    }
+    if strcmp(name,"beta.dist") == 0 {
+        bx: double = 0
+        alpha2: double = 0
+        beta2: double = 0
+        cuml2: int = 0
+        lo: double = 0
+        hi: double = 1
+        if count < 4 { return ValError(ERR_VALUE) }
+        if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+        bx = CoerceNumber(&args[0])
+        alpha2 = CoerceNumber(&args[1])
+        beta2 = CoerceNumber(&args[2])
+        cuml2 = CoerceNumber(&args[3]) != 0 ? 1 : 0
+        if count >= 6 {
+            lo = CoerceNumber(&args[4])
+            hi = CoerceNumber(&args[5])
+        }
+        if bx < lo || bx > hi || lo >= hi || alpha2 <= 0 || beta2 <= 0 { return ValError(ERR_NUM) }
+        if cuml2 != 0 {
+            return ValNumber(pbeta((bx - lo) / (hi - lo),alpha2,beta2,1,0))
+        }
+        return ValNumber(dbeta((bx - lo) / (hi - lo),alpha2,beta2,0) / (hi - lo))
+    }
+    if strcmp(name,"snorm.dist.range") == 0 {
+        if count < 2 { return ValError(ERR_VALUE) }
+        if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        return ValNumber(Pnorm2(CoerceNumber(&args[0]),CoerceNumber(&args[1])))
+    }
     if strcmp(name,"acot") == 0 { return FnMath1(0,args,count) }
     if strcmp(name,"acoth") == 0 { return FnMath1(1,args,count) }
     if strcmp(name,"acosh") == 0 { return FnMath1(2,args,count) }
@@ -17038,6 +17107,196 @@ else {
         y = CoerceNumber(&args[1])
     }
     return ValNumber(nextafter(x,y))
+}
+
+DcauchyGo :: (x: double, location: double, scale: double, give_log: int) -> double {
+    y: double = 0
+    if (x != x || location != location || scale != scale) { return x + location + scale }
+    if scale <= 0 { return 0.0 / 0.0 }
+    y = (x - location) / scale
+    if give_log != 0 {
+        return 0 - log(3.14159265358979323846 * scale * (1 + y * y))
+    }
+    return 1 / (3.14159265358979323846 * scale * (1 + y * y))
+}
+
+PcauchyGo :: (x_in: double, location: double, scale: double, lower_tail: int, log_p: int) -> double {
+    x: double = x_in
+    y: double = 0
+    if (x != x || location != location || scale != scale) { return x + location + scale }
+    if scale <= 0 { return 0.0 / 0.0 }
+    x = (x - location) / scale
+    if x != x { return 0.0 / 0.0 }
+    if isfinite(x) == 0 {
+        if x < 0 { return lower_tail != 0 ? 0.0 : 1.0 }
+        return lower_tail != 0 ? 1.0 : 0.0
+    }
+    if lower_tail == 0 { x = 0 - x }
+    if fabs(x) > 1 {
+        y = GoAtanPi(1 / x)
+        if x > 0 {
+            return log_p != 0 ? log1p(0 - y) : 1 - y
+        }
+        return log_p != 0 ? log(0 - y) : 0 - y
+    }
+    v2: double = 0.5 + GoAtanPi(x)
+    return log_p != 0 ? log(v2) : v2
+}
+
+RandomBernoulliPdf :: (k: double, p: double) -> double {
+    if k == 0 { return 1 - p }
+    if k == 1 { return p }
+    return 0
+}
+
+RandomLaplacePdf :: (x: double, a: double) -> double {
+    return (1 / (2 * a)) * exp(0 - fabs(x) / a)
+}
+
+RandomParetoPdf :: (x: double, a: double, b: double) -> double {
+    if x >= b {
+        return (a / b) / pow(x / b,a + 1)
+    }
+    return 0
+}
+
+RandomRayleighTailPdf :: (x: double, a: double, sigma: double) -> double {
+    u: double = 0
+    v: double = 0
+    if x < a { return 0 }
+    u = x / sigma
+    v = a / sigma
+    return (u / sigma) * exp((v + u) * (v - u) / 2)
+}
+
+RandomExppowPdf :: (x: double, a: double, b: double) -> double {
+    lngamma: double = lgamma1p_raw(1 / b)
+    return (1 / (2 * a)) * exp(0 - pow(fabs(x / a),b) - lngamma)
+}
+
+DRayleighGo :: (x: double, scale: double) -> double {
+    p: double = 0
+    if scale <= 0 { return 0.0 / 0.0 }
+    if x <= 0 { return 0 }
+    p = dnorm_go(x,0,scale,0)
+    return p * x / scale * 2.50662827463100050241576528481104525
+}
+
+RandomLandauPdf :: (x: double) -> double {
+    P1: [5] double = {0.4259894875,-0.1249762550,0.03984243700,-0.006298287635,0.001511162253}
+    P2: [5] double = {0.1788541609,0.1173957403,0.01488850518,-0.001394989411,0.0001283617211}
+    P3: [5] double = {0.1788544503,0.09359161662,0.006325387654,0.00006611667319,-0.000002031049101}
+    P4: [5] double = {0.9874054407,118.6723273,849.2794360,-743.7792444,427.0262186}
+    P5: [5] double = {1.003675074,167.5702434,4789.711289,21217.86767,-22324.94910}
+    P6: [5] double = {1.000827619,664.9143136,62972.92665,475554.6998,-5743609.109}
+    Q1: [5] double = {1.0,-0.3388260629,0.09594393323,-0.01608042283,0.003778942063}
+    Q2: [5] double = {1.0,0.7428795082,0.3153932961,0.06694219548,0.008790609714}
+    Q3: [5] double = {1.0,0.6097809921,0.2560616665,0.04746722384,0.006957301675}
+    Q4: [5] double = {1.0,106.8615961,337.6496214,2016.712389,1597.063511}
+    Q5: [5] double = {1.0,156.9424537,3745.310488,9834.698876,66924.28357}
+    Q6: [5] double = {1.0,651.4101098,56974.73333,165917.4725,-2815759.939}
+    A1: [3] double = {0.04166666667,-0.01996527778,0.02709538966}
+    A2: [2] double = {-1.845568670,-4.284640743}
+    u: double = 0
+    v: double = x
+    denlan: double = 0
+    if v < -5.5 {
+        u = exp(v + 1)
+        denlan = 0.3989422803 * (exp(-1 / u) / sqrt(u)) * (1 + (A1[0] + (A1[1] + A1[2] * u) * u) * u)
+    }
+else if v < -1 {
+        u = exp(0 - v - 1)
+        denlan = exp(0 - u) * sqrt(u) * (P1[0] + (P1[1] + (P1[2] + (P1[3] + P1[4] * v) * v) * v) * v) / (Q1[0] + (Q1[1] + (Q1[2] + (Q1[3] + Q1[4] * v) * v) * v) * v)
+    }
+else if v < 1 {
+        denlan = (P2[0] + (P2[1] + (P2[2] + (P2[3] + P2[4] * v) * v) * v) * v) / (Q2[0] + (Q2[1] + (Q2[2] + (Q2[3] + Q2[4] * v) * v) * v) * v)
+    }
+else if v < 5 {
+        denlan = (P3[0] + (P3[1] + (P3[2] + (P3[3] + P3[4] * v) * v) * v) * v) / (Q3[0] + (Q3[1] + (Q3[2] + (Q3[3] + Q3[4] * v) * v) * v) * v)
+    }
+else if v < 12 {
+        u = 1 / v
+        denlan = u * u * (P4[0] + (P4[1] + (P4[2] + (P4[3] + P4[4] * u) * u) * u) * u) / (Q4[0] + (Q4[1] + (Q4[2] + (Q4[3] + Q4[4] * u) * u) * u) * u)
+    }
+else if v < 50 {
+        u = 1 / v
+        denlan = u * u * (P5[0] + (P5[1] + (P5[2] + (P5[3] + P5[4] * u) * u) * u) * u) / (Q5[0] + (Q5[1] + (Q5[2] + (Q5[3] + Q5[4] * u) * u) * u) * u)
+    }
+else if v < 300 {
+        u = 1 / v
+        denlan = u * u * (P6[0] + (P6[1] + (P6[2] + (P6[3] + P6[4] * u) * u) * u) * u) / (Q6[0] + (Q6[1] + (Q6[2] + (Q6[3] + Q6[4] * u) * u) * u) * u)
+    }
+else {
+        u = 1 / (v - v * log(v) / (v + 1))
+        denlan = u * u * (1 + (A2[0] + A2[1] * u) * u)
+    }
+    return denlan
+}
+
+Pnorm2 :: (x1: double, x2: double) -> double {
+    if x1 != x1 || x2 != x2 { return 0.0 / 0.0 }
+    if x1 > x2 { return 0 - Pnorm2(x2,x1) }
+    if x1 == x2 { return 0.0 }
+    if x1 == -1e308 * 10 { return pnorm(x2,0,1,1,0) }
+    if x2 == 1e308 * 10 { return pnorm(x1,0,1,0,0) }
+    if x1 == 0 { return erf(x2 / 1.414213562373095048801688724209) / 2 }
+    if x2 == 0 { return erf(x1 / -1.414213562373095048801688724209) / 2 }
+    if x1 <= 0 && x2 >= 0 {
+        p1: double = Pnorm2(0,x1 < -x2 ? -x1 : x2)
+        p2: double = Pnorm2(x1 < -x2 ? -x1 : x2,x1 < -x2 ? -x1 : x2)
+        return 2 * p1 + p2
+    }
+else if x1 < 0 {
+        return Pnorm2(0 - x2,0 - x1)
+    }
+    p1c: double = pnorm(x1,0,1,0,0)
+    p2c: double = pnorm(x2,0,1,0,0)
+    raw: double = p1c - p2c
+    if fabs(p1c - p2c) * 32 > fabs(p1c + p2c) { return raw }
+    dx: double = x2 - x1
+    d1: double = dnorm_go(x1,0,1,0)
+    d2: double = dnorm_go(x2,0,1,0)
+    ub: double = dx * d1
+    lb: double = dx * d2
+    if raw < lb { raw = lb }
+    if raw > ub { raw = ub }
+    return raw
+}
+
+FnDensity2 :: (st: EvalState *, args: Val *, count: int, marks: int *, which: int) -> Val {
+    x: double = 0
+    a: double = 0
+    b: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    x = CoerceNumber(&args[0])
+    a = CoerceNumber(&args[1])
+    if which == 0 {
+        if a <= 0 { return ValError(ERR_NUM) }
+        return ValNumber(RandomLaplacePdf(x,a))
+    }
+    if which == 1 {
+        if count < 3 { return ValError(ERR_VALUE) }
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        b = CoerceNumber(&args[2])
+        if a <= 0 || b <= 0 { return ValError(ERR_NUM) }
+        return ValNumber(RandomParetoPdf(x,a,b))
+    }
+    if which == 2 {
+        if count < 3 { return ValError(ERR_VALUE) }
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        b = CoerceNumber(&args[2])
+        if b <= 0 { return ValError(ERR_NUM) }
+        return ValNumber(RandomRayleighTailPdf(x,a,b))
+    }
+    if which == 3 {
+        if count < 3 { return ValError(ERR_VALUE) }
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        b = CoerceNumber(&args[2])
+        return ValNumber(RandomExppowPdf(x,a,b))
+    }
+    return ValNumber(0)
 }
 
 RangeIncreasing :: (xs: double *, n: int) -> int {

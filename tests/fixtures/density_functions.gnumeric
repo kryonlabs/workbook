@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+<gnm:SheetNameIndex><gnm:SheetName gnm:Cols="6" gnm:Rows="24">Sheet1</gnm:SheetName></gnm:SheetNameIndex>
+<gnm:Sheets><gnm:Sheet><gnm:Name>Sheet1</gnm:Name><gnm:MaxCol>5</gnm:MaxCol><gnm:MaxRow>23</gnm:MaxRow><gnm:Cells>
+<gnm:Cell Row="0" Col="4">=BERNOULLI(0,0.3)</gnm:Cell>
+<gnm:Cell Row="1" Col="4">=BERNOULLI(1,0.3)</gnm:Cell>
+<gnm:Cell Row="2" Col="4">=LANDAU(-2.5)</gnm:Cell>
+<gnm:Cell Row="3" Col="4">=LANDAU(0.5)</gnm:Cell>
+<gnm:Cell Row="4" Col="4">=LANDAU(20)</gnm:Cell>
+<gnm:Cell Row="5" Col="4">=LANDAU(500)</gnm:Cell>
+<gnm:Cell Row="6" Col="4">=CAUCHY(0.5,1,TRUE)</gnm:Cell>
+<gnm:Cell Row="7" Col="4">=CAUCHY(0.5,1,FALSE)</gnm:Cell>
+<gnm:Cell Row="8" Col="4">=CAUCHY(3,1,TRUE)</gnm:Cell>
+<gnm:Cell Row="9" Col="4">=LAPLACE(0.4,1)</gnm:Cell>
+<gnm:Cell Row="10" Col="4">=PARETO(0.6,1,2)</gnm:Cell>
+<gnm:Cell Row="11" Col="4">=RAYLEIGH(0.4,1)</gnm:Cell>
+<gnm:Cell Row="12" Col="4">=RAYLEIGHTAIL(0.6,0.3,1)</gnm:Cell>
+<gnm:Cell Row="13" Col="4">=EXPPOWDIST(0.4,1,2)</gnm:Cell>
+<gnm:Cell Row="14" Col="4">=BETA.DIST(0.4,2,3,TRUE)</gnm:Cell>
+<gnm:Cell Row="15" Col="4">=BETA.DIST(0.4,2,3,FALSE)</gnm:Cell>
+<gnm:Cell Row="16" Col="4">=SNORM.DIST.RANGE(-1,1)</gnm:Cell>
+<gnm:Cell Row="17" Col="4">=SNORM.DIST.RANGE(1,2)</gnm:Cell>
+<gnm:Cell Row="18" Col="4">=SNORM.DIST.RANGE(-2,-1)</gnm:Cell>
+<gnm:Cell Row="19" Col="4">=SNORM.DIST.RANGE(0,0.5)</gnm:Cell>
+<gnm:Cell Row="20" Col="4">=BERNOULLI(2,0.3)</gnm:Cell>
+</gnm:Cells></gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>
