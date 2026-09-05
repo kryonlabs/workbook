@@ -1,4 +1,5 @@
 #import "kryon.h"
+#import "engine.h"
 #import "kry_json.h"
 #import "ctype.h"
 #import "stdio.h"
@@ -7,30 +8,16 @@
 #import "sys/stat.h"
 
 #enum {
-    MAX_ROWS = 128
-    MAX_COLS = 8
-    CELL_SIZE = 160
+    MAX_ROWS = 200
+    MAX_COLS = 40
+    CELL_TEXT = 256
+    COL_W = 110
+    ROW_H = 28
+    HEADER_H = 30
+    ROW_HDR_W = 52
 }
 
 CString :: const char * #type
-
-WorkbookRow :: struct {
-    a: [CELL_SIZE] char
-    b: [CELL_SIZE] char
-    c: [CELL_SIZE] char
-    d: [CELL_SIZE] char
-    e: [CELL_SIZE] char
-    f: [CELL_SIZE] char
-    g: [CELL_SIZE] char
-    h: [CELL_SIZE] char
-}
-
-FormulaParser :: struct {
-    text: CString
-    pos: int
-    ok: int
-    depth: int
-}
 
 app "Workbook" {
     size 1180 720
@@ -38,17 +25,13 @@ app "Workbook" {
 }
 
 state {
-    rows: [MAX_ROWS] WorkbookRow = {0}
-    display_rows: [MAX_ROWS] WorkbookRow = {0}
-    columns: [MAX_COLS] const char * = {"Section","Label","ID","Units","Rate","Percent","USD","Delta USD"}
-    widths: [MAX_COLS] int = {110,210,110,105,105,90,120,120}
-    row_count: int = 0
-    selected_row: int = -1
-    selected_col: int = -1
-    table_scroll: int = 0
-    edit_text: [CELL_SIZE] char = ""
-    last_row: int = -2
-    last_col: int = -2
+    wb: void * = NULL
+    sheet_index: int = 0
+    selected_row: int = 0
+    selected_col: int = 0
+    scroll_row: int = 0
+    scroll_col: int = 0
+    edit_text: [CELL_TEXT] char = ""
     data_path: [1024] char = ""
     data_dir: [1024] char = ""
     status: [256] char = "Ready"
@@ -56,211 +39,69 @@ state {
     dirty: int = 0
 }
 
-cell_ptr :: (row: int, col: int) -> char * {
-    if col == 0 { return rows[row].a }
-    if col == 1 { return rows[row].b }
-    if col == 2 { return rows[row].c }
-    if col == 3 { return rows[row].d }
-    if col == 4 { return rows[row].e }
-    if col == 5 { return rows[row].f }
-    if col == 6 { return rows[row].g }
-    return rows[row].h
+GridRows :: () -> int {
+    n: int = WorkbookSheetRows((Workbook *)wb,sheet_index)
+    if n < 8 { n = 8 }
+    if n > MAX_ROWS { n = MAX_ROWS }
+    return n
 }
 
-display_ptr :: (row: int, col: int) -> char * {
-    if col == 0 { return display_rows[row].a }
-    if col == 1 { return display_rows[row].b }
-    if col == 2 { return display_rows[row].c }
-    if col == 3 { return display_rows[row].d }
-    if col == 4 { return display_rows[row].e }
-    if col == 5 { return display_rows[row].f }
-    if col == 6 { return display_rows[row].g }
-    return display_rows[row].h
+GridCols :: () -> int {
+    n: int = WorkbookSheetColumns((Workbook *)wb,sheet_index)
+    if n < 8 { n = 8 }
+    if n > MAX_COLS { n = MAX_COLS }
+    return n
 }
 
-copy_text :: (dst: char *, cap: int, src: const char *) {
-    if src == NULL { src = "" }
-    snprintf(dst,cap,"%s",src)
-}
-
-skip_space :: (p: FormulaParser *) {
-    while p->text[p->pos] != 0 && isspace((unsigned char)p->text[p->pos]) {
-        p->pos += 1
-    }
-}
-
-parse_reference :: (p: FormulaParser *, out_row: int *, out_col: int *) -> int {
-    skip_space(p)
-    ch: int = toupper((unsigned char)p->text[p->pos])
-    if ch < 'A' || ch > 'H' { return 0 }
-    p->pos += 1
-    if !isdigit((unsigned char)p->text[p->pos]) { return 0 }
-    number: int = 0
-    while isdigit((unsigned char)p->text[p->pos]) {
-        number = number * 10 + p->text[p->pos] - '0'
-        p->pos += 1
-    }
-    if number < 1 || number > row_count { return 0 }
-    *out_col = ch - 'A'
-    *out_row = number - 1
-    return 1
-}
-
-evaluate_cell :: (row: int, col: int, depth: int, ok: int *) -> double {
-    if row < 0 || row >= row_count || col < 0 || col >= MAX_COLS || depth > 32 {
-        *ok = 0
-        return 0
-    }
-    raw: const char * = cell_ptr(row,col)
-    if raw[0] == '=' {
-        nested: FormulaParser = {raw + 1,0,1,depth + 1}
-        value: double = parse_expression(&nested)
-        skip_space(&nested)
-        if nested.ok == 0 || nested.text[nested.pos] != 0 { *ok = 0 }
-        return value
-    }
-    end: char * = NULL
-    value: double = strtod(raw,&end)
-    while end != NULL && *end != 0 && isspace((unsigned char)*end) { end += 1 }
-    if raw[0] == 0 || end == raw || end == NULL || *end != 0 { *ok = 0 }
-    return value
-}
-
-parse_factor :: (p: FormulaParser *) -> double {
-    skip_space(p)
-    if p->text[p->pos] == '+' {
-        p->pos += 1
-        return parse_factor(p)
-    }
-    if p->text[p->pos] == '-' {
-        p->pos += 1
-        return -parse_factor(p)
-    }
-    if p->text[p->pos] == '(' {
-        p->pos += 1
-        value: double = parse_expression(p)
-        skip_space(p)
-        if p->text[p->pos] != ')' { p->ok = 0; return 0 }
-        p->pos += 1
-        return value
-    }
-    if (p->text[p->pos] == 'S' || p->text[p->pos] == 's') && (p->text[p->pos+1] == 'U' || p->text[p->pos+1] == 'u') && (p->text[p->pos+2] == 'M' || p->text[p->pos+2] == 'm') && p->text[p->pos+3] == '(' {
-        p->pos += 4
-        r1: int = 0
-        c1: int = 0
-        r2: int = 0
-        c2: int = 0
-        if parse_reference(p,&r1,&c1) == 0 { p->ok = 0; return 0 }
-        skip_space(p)
-        if p->text[p->pos] != ':' { p->ok = 0; return 0 }
-        p->pos += 1
-        if parse_reference(p,&r2,&c2) == 0 { p->ok = 0; return 0 }
-        skip_space(p)
-        if p->text[p->pos] != ')' { p->ok = 0; return 0 }
-        p->pos += 1
-        if r2 < r1 { swap: int = r1; r1 = r2; r2 = swap }
-        if c2 < c1 { swap: int = c1; c1 = c2; c2 = swap }
-        sum: double = 0
-        r: int = r1
-        while r <= r2 {
-            c: int = c1
-            while c <= c2 {
-                valid: int = 1
-                sum += evaluate_cell(r,c,p->depth + 1,&valid)
-                if valid == 0 { p->ok = 0; return 0 }
-                c += 1
-            }
-            r += 1
-        }
-        return sum
-    }
-    if isalpha((unsigned char)p->text[p->pos]) {
-        row: int = 0
-        col: int = 0
-        if parse_reference(p,&row,&col) == 0 { p->ok = 0; return 0 }
-        valid: int = 1
-        value: double = evaluate_cell(row,col,p->depth + 1,&valid)
-        if valid == 0 { p->ok = 0 }
-        return value
-    }
-    end: char * = NULL
-    value: double = strtod(p->text + p->pos,&end)
-    if end == p->text + p->pos { p->ok = 0; return 0 }
-    p->pos = (int)(end - p->text)
-    return value
-}
-
-parse_term :: (p: FormulaParser *) -> double {
-    value: double = parse_factor(p)
-    while p->ok {
-        skip_space(p)
-        op: int = p->text[p->pos]
-        if op != '*' && op != '/' { break }
-        p->pos += 1
-        rhs: double = parse_factor(p)
-        if op == '*' { value *= rhs }
-        else {
-            if rhs == 0 { p->ok = 0; return 0 }
-            value /= rhs
-        }
-    }
-    return value
-}
-
-parse_expression :: (p: FormulaParser *) -> double {
-    value: double = parse_term(p)
-    while p->ok {
-        skip_space(p)
-        op: int = p->text[p->pos]
-        if op != '+' && op != '-' { break }
-        p->pos += 1
-        rhs: double = parse_term(p)
-        if op == '+' { value += rhs }
-        else { value -= rhs }
-    }
-    return value
-}
-
-refresh_display :: () {
-    row: int = 0
-    while row < row_count {
-        col: int = 0
-        while col < MAX_COLS {
-            raw: const char * = cell_ptr(row,col)
-            shown: char * = display_ptr(row,col)
-            if raw[0] == '=' {
-                ok: int = 1
-                value: double = evaluate_cell(row,col,0,&ok)
-                if ok { snprintf(shown,CELL_SIZE,"%.10g",value) }
-                else { copy_text(shown,CELL_SIZE,"#REF!") }
-            } else {
-                copy_text(shown,CELL_SIZE,raw)
-            }
-            col += 1
-        }
-        row += 1
-    }
-}
-
-load_json_cell :: (object: KryJson *, key: const char *, dst: char *) {
-    value: KryJson * = kry_json_get(object,key)
-    if value == NULL { dst[0] = 0; return }
-    if kry_json_type(value) == KRY_JSON_STRING {
-        copy_text(dst,CELL_SIZE,kry_json_string(value))
-    } else if kry_json_type(value) == KRY_JSON_NUMBER {
-        snprintf(dst,CELL_SIZE,"%.15g",kry_json_number(value))
-    } else {
-        dst[0] = 0
-    }
-}
-
-load_json_formula_cell :: (object: KryJson *, value_key: const char *, formula_key: const char *, dst: char *) {
-    formula: KryJson * = kry_json_get(object,formula_key)
-    if formula != NULL && kry_json_type(formula) == KRY_JSON_STRING && kry_json_string(formula)[0] != 0 {
-        snprintf(dst,CELL_SIZE,"=%s",kry_json_string(formula))
+ColName :: (col: int, out: char *, cap: int) {
+    if col < 26 {
+        snprintf(out,cap,"%c",'A' + col)
         return
     }
-    load_json_cell(object,value_key,dst)
+    snprintf(out,cap,"%c%c",'A' + col / 26 - 1,'A' + col % 26)
+}
+
+LoadLegacyJson :: (path: const char *) -> int {
+    text: char * = LoadFileText(path)
+    root: KryJson * = NULL
+    rows: KryJson * = NULL
+    count: int = 0
+    i: int = 0
+    if text == NULL { return 0 }
+    root = kry_json_parse(text)
+    if root == NULL { UnloadFileText(text); return 0 }
+    rows = kry_json_get(root,"rows")
+    count = kry_json_count(rows)
+    while i < count {
+        item: KryJson * = kry_json_at(rows,i)
+        if item != NULL && kry_json_type(item) == KRY_JSON_OBJECT {
+            j: int = 0
+            while j < 8 {
+                value: KryJson * = NULL
+                textbuf: [CELL_TEXT] char = ""
+                if j == 0 { value = kry_json_get(item,"section") }
+                if j == 1 { value = kry_json_get(item,"label") }
+                if j == 2 { value = kry_json_get(item,"id") }
+                if j == 3 { value = kry_json_get(item,"units") }
+                if j == 4 { value = kry_json_get(item,"rate") }
+                if j == 5 { value = kry_json_get(item,"pct") }
+                if j == 6 { value = kry_json_get(item,"usd") }
+                if j == 7 { value = kry_json_get(item,"dusd") }
+                if value != NULL && kry_json_type(value) == KRY_JSON_STRING {
+                    snprintf(textbuf,sizeof(textbuf),"%s",kry_json_string(value))
+                }
+else if value != NULL && kry_json_type(value) == KRY_JSON_NUMBER {
+                    snprintf(textbuf,sizeof(textbuf),"%.15g",kry_json_number(value))
+                }
+                if textbuf[0] != 0 { WorkbookSetCell((Workbook *)wb,0,i,j,textbuf) }
+                j += 1
+            }
+        }
+        i += 1
+    }
+    kry_json_free(root)
+    UnloadFileText(text)
+    return 1
 }
 
 load_workbook :: () {
@@ -271,203 +112,182 @@ load_workbook :: () {
         app_id = "geld"
         override = getenv("GELD_DIR")
     }
-    if override != NULL && override[0] != 0 { snprintf(data_dir,sizeof(data_dir),"%s",override) }
-    else if FileExists("workbook.json") { copy_text(data_path,sizeof(data_path),"workbook.json") }
-    else {
+    wb = WorkbookNew()
+    WorkbookAddSheet((Workbook *)wb,"Sheet1")
+    if override != NULL && override[0] != 0 {
+        snprintf(data_dir,sizeof(data_dir),"%s",override)
+        snprintf(data_path,sizeof(data_path),"%s/workbook.gnumeric",override)
+    }
+else if FileExists("workbook.gnumeric") {
+        copy_text(data_path,sizeof(data_path),"workbook.gnumeric")
+    }
+else if FileExists("workbook.json") {
+        copy_text(data_path,sizeof(data_path),"workbook.json")
+    }
+else {
         base: const char * = getenv("XDG_DATA_HOME")
-        if base != NULL && base[0] != 0 { snprintf(data_dir,sizeof(data_dir),"%s/%s",base,app_id) }
-        else {
+        if base != NULL && base[0] != 0 {
+            snprintf(data_dir,sizeof(data_dir),"%s/%s",base,app_id)
+        }
+else {
             home: const char * = getenv("HOME")
             if home == NULL || home[0] == 0 { home = "." }
             snprintf(data_dir,sizeof(data_dir),"%s/.local/share/%s",home,app_id)
         }
+        snprintf(data_path,sizeof(data_path),"%s/workbook.gnumeric",data_dir)
     }
-    if data_path[0] == 0 {
-        mkdir(data_dir,0700)
-        snprintf(data_path,sizeof(data_path),"%s/workbook.json",data_dir)
-    }
-    row_count = 0
+    loaded: int = 0
     if FileExists(data_path) {
-        text: char * = LoadFileText(data_path)
-        if text != NULL {
-            root: KryJson * = kry_json_parse(text)
-            if root != NULL {
-                source_rows: KryJson * = kry_json_get(root,"rows")
-                count: int = kry_json_count(source_rows)
-                if count > MAX_ROWS { count = MAX_ROWS }
-                i: int = 0
-                while i < count {
-                    item: KryJson * = kry_json_at(source_rows,i)
-                    if item != NULL && kry_json_type(item) == KRY_JSON_OBJECT {
-                        load_json_cell(item,"section",rows[row_count].a)
-                        load_json_cell(item,"label",rows[row_count].b)
-                        load_json_cell(item,"id",rows[row_count].c)
-                        load_json_formula_cell(item,"units","units_expr",rows[row_count].d)
-                        load_json_formula_cell(item,"rate","rate_expr",rows[row_count].e)
-                        load_json_formula_cell(item,"pct","pct_expr",rows[row_count].f)
-                        load_json_formula_cell(item,"usd","usd_expr",rows[row_count].g)
-                        load_json_formula_cell(item,"dusd","dusd_expr",rows[row_count].h)
-                        row_count += 1
-                    }
-                    i += 1
-                }
-                kry_json_free(root)
-            }
-            UnloadFileText(text)
+        len: int = (int)strlen(data_path)
+        if len >= 9 && strcmp(data_path + len - 9,".gnumeric") == 0 {
+            loaded = WorkbookLoadFile((Workbook *)wb,data_path)
+        }
+else if len >= 4 && strcmp(data_path + len - 4,".csv") == 0 {
+            loaded = WorkbookLoadFile((Workbook *)wb,data_path)
+        }
+else if len >= 5 && strcmp(data_path + len - 5,".json") == 0 {
+            loaded = LoadLegacyJson(data_path)
         }
     }
-    if row_count == 0 {
-        memset(&rows[0],0,sizeof(WorkbookRow))
-        row_count = 1
-    }
-    snprintf(status,sizeof(status),"Loaded %d row%s from %s",row_count,row_count == 1 ? "" : "s",data_path)
+    if WorkbookSheetCount((Workbook *)wb) == 0 { WorkbookAddSheet((Workbook *)wb,"Sheet1") }
+    snprintf(status,sizeof(status),"Loaded %s",data_path)
     dirty = 0
 }
 
-json_pair :: (buf: KryJsonBuf *, key: const char *, value: const char *, comma: int) {
-    if comma { kry_json_buf_raw(buf,",") }
-    kry_json_buf_str(buf,key)
-    kry_json_buf_raw(buf,":")
-    kry_json_buf_str(buf,value)
+copy_text :: (dst: char *, cap: int, src: const char *) {
+    if src == NULL { src = "" }
+    snprintf(dst,cap,"%s",src)
 }
 
 save_workbook :: () {
+    len: int = (int)strlen(data_path)
+    is_json: int = len > 5 && strcmp(data_path + len - 5,".json") == 0
+    ok: int = 0
+    if is_json {
+        ok = SaveLegacyJson()
+    }
+else {
+        ok = WorkbookWriteGnumeric((Workbook *)wb,data_path)
+    }
+    if ok {
+        snprintf(status,sizeof(status),"Saved %s",data_path)
+        dirty = 0
+    }
+else {
+        snprintf(status,sizeof(status),"Could not save %s",data_path)
+    }
+}
+
+SaveLegacyJson :: () -> int {
     buf: KryJsonBuf = {0}
-    kry_json_buf_raw(&buf,"{\"rows\":[")
+    keys: [8] CString = {"section","label","id","units","rate","pct","usd","dusd"}
     row: int = 0
-    while row < row_count {
+    rows: int = WorkbookSheetRows((Workbook *)wb,0)
+    kry_json_buf_raw(&buf,"{\"rows\":[")
+    while row < rows {
         if row > 0 { kry_json_buf_raw(&buf,",") }
         kry_json_buf_raw(&buf,"{")
-        json_pair(&buf,"section",rows[row].a,0)
-        json_pair(&buf,"label",rows[row].b,1)
-        json_pair(&buf,"id",rows[row].c,1)
-        json_pair(&buf,"units",rows[row].d,1)
-        json_pair(&buf,"rate",rows[row].e,1)
-        json_pair(&buf,"pct",rows[row].f,1)
-        json_pair(&buf,"usd",rows[row].g,1)
-        json_pair(&buf,"dusd",rows[row].h,1)
+        col: int = 0
+        while col < 8 {
+            if col > 0 { kry_json_buf_raw(&buf,",") }
+            kry_json_buf_str(&buf,keys[col])
+            kry_json_buf_raw(&buf,":")
+            textbuf: [CELL_TEXT] char = ""
+            src: CString = WorkbookCellText((Workbook *)wb,0,row,col)
+            if src != NULL && src[0] == '=' {
+                snprintf(textbuf,sizeof(textbuf),"%s",src + 1)
+                kry_json_buf_raw(&buf,"{\"expr\":")
+                kry_json_buf_str(&buf,textbuf)
+                kry_json_buf_raw(&buf,"}")
+            }
+else {
+                snprintf(textbuf,sizeof(textbuf),"%s",src)
+                kry_json_buf_str(&buf,textbuf)
+            }
+            col += 1
+        }
         kry_json_buf_raw(&buf,"}")
         row += 1
     }
     kry_json_buf_raw(&buf,"],\"format\":\"workbook-kry-1\"}\n")
-    json: const char * = kry_json_buf_finish(&buf)
-    temp_path: [1100] char = ""
-    backup_path: [1100] char = ""
-    snprintf(temp_path,sizeof(temp_path),"%s.tmp",data_path)
-    snprintf(backup_path,sizeof(backup_path),"%s.prev",data_path)
-    if SaveFileText(temp_path,(char *)json) {
-        if FileExists(data_path) { FileRemove(backup_path); FileMove(data_path,backup_path) }
-        if FileMove(temp_path,data_path) == 0 {
-        snprintf(status,sizeof(status),"Saved %d row%s to %s",row_count,row_count == 1 ? "" : "s",data_path)
-        dirty = 0
-        } else {
-            if FileExists(backup_path) { FileMove(backup_path,data_path) }
-            copy_text(status,sizeof(status),"Could not replace workbook data")
-        }
-    } else {
-        snprintf(status,sizeof(status),"Could not save %s",data_path)
-    }
+    ok: int = SaveFileText(data_path,kry_json_buf_finish(&buf)) ? 1 : 0
     kry_json_buf_free(&buf)
+    return ok
 }
 
 select_cell :: () {
-    if selected_row < 0 || selected_row >= row_count || selected_col < 0 || selected_col >= MAX_COLS {
-        edit_text[0] = 0
-        return
-    }
-    copy_text(edit_text,sizeof(edit_text),cell_ptr(selected_row,selected_col))
+    src: CString = WorkbookCellText((Workbook *)wb,sheet_index,selected_row,selected_col)
+    copy_text(edit_text,sizeof(edit_text),src)
 }
 
 commit_cell :: () {
-    if selected_row < 0 || selected_row >= row_count || selected_col < 0 || selected_col >= MAX_COLS { return }
-    copy_text(cell_ptr(selected_row,selected_col),CELL_SIZE,edit_text)
+    WorkbookSetCell((Workbook *)wb,sheet_index,selected_row,selected_col,edit_text)
+    WorkbookEvaluate((Workbook *)wb)
     dirty = 1
     snprintf(status,sizeof(status),"Edited %c%d",'A' + selected_col,selected_row + 1)
 }
 
 insert_row :: () {
-    if row_count >= MAX_ROWS { copy_text(status,sizeof(status),"Maximum row count reached"); return }
-    pos: int = selected_row
-    if pos < 0 || pos > row_count { pos = row_count }
-    i: int = row_count
-    while i > pos {
-        rows[i] = rows[i-1]
-        i -= 1
-    }
-    memset(&rows[pos],0,sizeof(WorkbookRow))
-    row_count += 1
-    selected_row = pos
+    WorkbookInsertRow((Workbook *)wb,sheet_index,selected_row)
+    WorkbookEvaluate((Workbook *)wb)
     dirty = 1
-    select_cell()
     copy_text(status,sizeof(status),"Row inserted")
 }
 
 delete_row :: () {
-    if selected_row < 0 || selected_row >= row_count { return }
-    i: int = selected_row
-    while i + 1 < row_count {
-        rows[i] = rows[i+1]
-        i += 1
-    }
-    row_count -= 1
-    if row_count == 0 { row_count = 1; memset(&rows[0],0,sizeof(WorkbookRow)) }
-    if selected_row >= row_count { selected_row = row_count - 1 }
+    WorkbookDeleteRow((Workbook *)wb,sheet_index,selected_row)
+    WorkbookEvaluate((Workbook *)wb)
     dirty = 1
-    select_cell()
     copy_text(status,sizeof(status),"Row deleted")
 }
 
 insert_column :: () {
-    if selected_col < 0 || selected_col >= MAX_COLS { return }
-    row: int = 0
-    while row < row_count {
-        col: int = MAX_COLS - 1
-        while col > selected_col {
-            copy_text(cell_ptr(row,col),CELL_SIZE,cell_ptr(row,col-1))
-            col -= 1
-        }
-        cell_ptr(row,selected_col)[0] = 0
-        row += 1
-    }
+    WorkbookInsertColumn((Workbook *)wb,sheet_index,selected_col)
+    WorkbookEvaluate((Workbook *)wb)
     dirty = 1
-    select_cell()
-    copy_text(status,sizeof(status),"Column inserted; last column discarded")
+    copy_text(status,sizeof(status),"Column inserted")
 }
 
 delete_column :: () {
-    if selected_col < 0 || selected_col >= MAX_COLS { return }
-    row: int = 0
-    while row < row_count {
-        col: int = selected_col
-        while col + 1 < MAX_COLS {
-            copy_text(cell_ptr(row,col),CELL_SIZE,cell_ptr(row,col+1))
-            col += 1
-        }
-        cell_ptr(row,MAX_COLS-1)[0] = 0
-        row += 1
-    }
+    WorkbookDeleteColumn((Workbook *)wb,sheet_index,selected_col)
+    WorkbookEvaluate((Workbook *)wb)
     dirty = 1
-    select_cell()
     copy_text(status,sizeof(status),"Column deleted")
 }
 
+col_x :: (col: int) -> int {
+    return ROW_HDR_W + (col - scroll_col) * COL_W
+}
+
+row_y :: (row: int) -> int {
+    return 98 + HEADER_H + (row - scroll_row) * ROW_H
+}
+
 draw_table :: () #ui {
+    if wb == NULL {
+        load_workbook()
+        initialized = 1
+        select_cell()
+    }
     table_x: int = 24
     table_y: int = 98
     table_w: int = 1132
     table_h: int = 548
-    header_h: int = 30
-    row_h: int = 28
-    visible: int = (table_h - header_h) / row_h
-    max_scroll: int = row_count - visible
-    if max_scroll < 0 { max_scroll = 0 }
+    visible_rows: int = (table_h - HEADER_H) / ROW_H
+    visible_cols: int = (table_w - ROW_HDR_W) / COL_W
+    grid_rows: int = GridRows()
+    grid_cols: int = GridCols()
+    max_row_scroll: int = grid_rows - visible_rows
+    max_col_scroll: int = grid_cols - visible_cols
+    if max_row_scroll < 0 { max_row_scroll = 0 }
+    if max_col_scroll < 0 { max_col_scroll = 0 }
     mouse: Vector2 = GetMousePosition()
     if CheckCollisionPointRec(mouse,(Rectangle){table_x,table_y,table_w,table_h}) {
         wheel: float = GetMouseWheelMove()
-        if wheel > 0 { table_scroll -= 1 }
-        if wheel < 0 { table_scroll += 1 }
-        if table_scroll < 0 { table_scroll = 0 }
-        if table_scroll > max_scroll { table_scroll = max_scroll }
+        if wheel > 0 { scroll_row -= 1 }
+        if wheel < 0 { scroll_row += 1 }
+        if scroll_row < 0 { scroll_row = 0 }
+        if scroll_row > max_row_scroll { scroll_row = max_row_scroll }
     }
 
     Text("Workbook",24,17,Text24,GetThemeText())
@@ -477,94 +297,106 @@ draw_table :: () #ui {
     if Button((ButtonProps){.bounds={442,14,94,32},.label="Delete row",.style=ButtonStyleSecondary,.font=Text14,.id=1003}) { delete_row() }
     if Button((ButtonProps){.bounds={544,14,106,32},.label="Insert column",.style=ButtonStyleSecondary,.font=Text14,.id=1004}) { insert_column() }
     if Button((ButtonProps){.bounds={658,14,106,32},.label="Delete column",.style=ButtonStyleSecondary,.font=Text14,.id=1005}) { delete_column() }
+
+    sheet: int = 0
+    while sheet < WorkbookSheetCount((Workbook *)wb) {
+        label: [160] char = ""
+        snprintf(label,sizeof(label),"%s",WorkbookSheetName((Workbook *)wb,sheet))
+        x: int = 780 + sheet * 110
+        if Button((ButtonProps){.bounds={x,14,104,32},.label=label,.style=sheet == sheet_index ? ButtonStyleTabSelected : ButtonStyleTab,.font=Text14,.id=1100 + sheet}) {
+            sheet_index = sheet
+            select_cell()
+        }
+        sheet += 1
+    }
+
     Text("fx",24,61,Text16,GetThemeIcon())
     Rect(52,52,1104,34,GetThemeSurface(),GetThemeButton())
     Text(edit_text,60,61,Text16,GetThemeText())
 
     Rect(table_x,table_y,table_w,table_h,GetThemeSurface(),GetThemeButton())
-    x: int = table_x
-    col: int = 0
-    while col < MAX_COLS {
-        Rect(x,table_y,widths[col],header_h,GetThemeButton(),GetThemeIcon())
-        Text(columns[col],x + 6,table_y + 7,Text14,GetThemeText())
-        x += widths[col]
+    x: int = 0
+    col: int = scroll_col
+    Rect(table_x,table_y,ROW_HDR_W,HEADER_H,GetThemeButton(),GetThemeIcon())
+    while col < scroll_col + visible_cols && col < grid_cols {
+        name: [8] char = ""
+        ColName(col,name,sizeof(name))
+        Rect(col_x(col),table_y,COL_W,HEADER_H,GetThemeButton(),GetThemeIcon())
+        Text(name,col_x(col) + 6,table_y + 7,Text14,GetThemeText())
         col += 1
     }
 
-    shown_row: int = 0
-    while shown_row < visible && table_scroll + shown_row < row_count {
-        row: int = table_scroll + shown_row
-        y: int = table_y + header_h + shown_row * row_h
-        x = table_x
-        col = 0
-        while col < MAX_COLS {
+    shown: int = 0
+    while shown < visible_rows && scroll_row + shown < grid_rows {
+        row: int = scroll_row + shown
+        y: int = row_y(row)
+        label: [16] char = ""
+        Rect(table_x,y,ROW_HDR_W,ROW_H,GetThemeButton(),GetThemeIcon())
+        snprintf(label,sizeof(label),"%d",row + 1)
+        Text(label,table_x + 6,y + 6,Text14,GetThemeText())
+        c: int = scroll_col
+        while c < scroll_col + visible_cols && c < grid_cols {
             fill: Color = GetThemeSurface()
-            if row == selected_row && col == selected_col { fill = GetThemeButtonHover() }
-            Rect(x,y,widths[col],row_h,fill,GetThemeButton())
-            Text(display_ptr(row,col),x + 6,y + 6,Text14,GetThemeText())
-            x += widths[col]
-            col += 1
+            display: [CELL_TEXT] char = ""
+            if row == selected_row && c == selected_col { fill = GetThemeButtonHover() }
+            Rect(col_x(c),y,COL_W,ROW_H,fill,GetThemeButton())
+            WorkbookCellDisplay((Workbook *)wb,sheet_index,row,c,display,sizeof(display))
+            if display[0] != 0 {
+                Text(display,col_x(c) + 6,y + 6,Text14,GetThemeText())
+            }
+            c += 1
         }
-        shown_row += 1
+        shown += 1
     }
 
-    if IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse,(Rectangle){table_x,table_y + header_h,table_w,table_h - header_h}) {
-        clicked: int = (int)(mouse.y - table_y - header_h) / row_h + table_scroll
-        if clicked >= 0 && clicked < row_count {
-            x = table_x
-            col = 0
-            while col < MAX_COLS {
-                if mouse.x >= x && mouse.x < x + widths[col] {
-                    selected_row = clicked
-                    selected_col = col
-                    last_row = selected_row
-                    last_col = selected_col
-                    select_cell()
-                    break
-                }
-                x += widths[col]
-                col += 1
+    if IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse,(Rectangle){table_x,table_y + HEADER_H,table_w,table_h - HEADER_H}) {
+        clicked_row: int = (int)(mouse.y - table_y - HEADER_H) / ROW_H + scroll_row
+        clicked_col: int = -1
+        cx: int = scroll_col
+        while cx < scroll_col + visible_cols && cx < grid_cols {
+            if mouse.x >= col_x(cx) && mouse.x < col_x(cx) + COL_W {
+                clicked_col = cx
+                break
             }
+            cx += 1
+        }
+        if clicked_row >= 0 && clicked_row < grid_rows && clicked_col >= 0 {
+            selected_row = clicked_row
+            selected_col = clicked_col
+            select_cell()
         }
     }
     Text(status,24,674,Text14,GetThemeIcon())
     Text("Enter commits a cell · Ctrl+S saves · formulas start with =",660,674,Text14,GetThemeIcon())
 }
 
-Workbook :: (viewport: Rectangle) #ui {
+WorkbookApp :: (viewport: Rectangle) #ui {
     Screen root: {
         bounds = viewport
         Background(GetThemeBackground())
         if initialized == 0 {
             load_workbook()
             initialized = 1
-        }
-        if selected_row >= 0 {
-            if IsKeyPressed(KEY_BACKSPACE) {
-                length: int = (int)strlen(edit_text)
-                if length > 0 { edit_text[length-1] = 0 }
-            }
-            if !IsKeyDown(KEY_LEFT_CONTROL) && !IsKeyDown(KEY_RIGHT_CONTROL) {
-                typed: int = GetCharPressed()
-                while typed > 0 {
-                    length: int = (int)strlen(edit_text)
-                    if typed >= 32 && typed < 127 && length + 1 < CELL_SIZE {
-                        edit_text[length] = (char)typed
-                        edit_text[length+1] = 0
-                    }
-                    typed = GetCharPressed()
-                }
-            }
-            if IsKeyPressed(KEY_ENTER) { commit_cell() }
-        }
-        refresh_display()
-        draw_table()
-        if selected_row != last_row || selected_col != last_col {
-            last_row = selected_row
-            last_col = selected_col
             select_cell()
         }
+        if IsKeyPressed(KEY_BACKSPACE) {
+            length: int = (int)strlen(edit_text)
+            if length > 0 { edit_text[length-1] = 0 }
+        }
+        if !IsKeyDown(KEY_LEFT_CONTROL) && !IsKeyDown(KEY_RIGHT_CONTROL) {
+            typed: int = GetCharPressed()
+            while typed > 0 {
+                length: int = (int)strlen(edit_text)
+                if typed >= 32 && typed < 127 && length + 1 < CELL_TEXT {
+                    edit_text[length] = (char)typed
+                    edit_text[length+1] = 0
+                }
+                typed = GetCharPressed()
+            }
+        }
+        if IsKeyPressed(KEY_ENTER) { commit_cell() }
         if IsKeyPressed(KEY_DELETE) { edit_text[0] = 0; commit_cell() }
         if IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_S) { save_workbook() }
+        draw_table()
     }
 }

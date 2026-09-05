@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName>Math</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Math</gnm:Name><gnm:MaxCol>3</gnm:MaxCol><gnm:MaxRow>52</gnm:MaxRow>
+  <gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="40">10</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="40">20</gnm:Cell>
+<gnm:Cell Row="2" Col="0" ValueType="40">30</gnm:Cell>
+<gnm:Cell Row="3" Col="0" ValueType="40">-5</gnm:Cell>
+<gnm:Cell Row="4" Col="0" ValueType="40">2.5</gnm:Cell>
+<gnm:Cell Row="0" Col="1" ValueType="60">alpha</gnm:Cell>
+<gnm:Cell Row="1" Col="1" ValueType="60">Beta gamma</gnm:Cell>
+<gnm:Cell Row="2" Col="1" ValueType="60">delta</gnm:Cell>
+<gnm:Cell Row="3" Col="1" ValueType="40">3</gnm:Cell>
+<gnm:Cell Row="0" Col="2" ValueType="20">TRUE</gnm:Cell>
+<gnm:Cell Row="1" Col="2" ValueType="20">FALSE</gnm:Cell>
+<gnm:Cell Row="0" Col="3">=SUM(A1:A5)</gnm:Cell>
+<gnm:Cell Row="1" Col="3">=SUM(A1:A5,A1)</gnm:Cell>
+<gnm:Cell Row="2" Col="3">=AVERAGE(A1:A5)</gnm:Cell>
+<gnm:Cell Row="3" Col="3">=AVERAGE(A1:A5,10)</gnm:Cell>
+<gnm:Cell Row="4" Col="3">=MIN(A1:A5)</gnm:Cell>
+<gnm:Cell Row="5" Col="3">=MAX(A1:A5)</gnm:Cell>
+<gnm:Cell Row="6" Col="3">=PRODUCT(A1:A3)</gnm:Cell>
+<gnm:Cell Row="7" Col="3">=ABS(A4)</gnm:Cell>
+<gnm:Cell Row="8" Col="3">=ABS(A5)</gnm:Cell>
+<gnm:Cell Row="9" Col="3">=SQRT(A1)</gnm:Cell>
+<gnm:Cell Row="10" Col="3">=SQRT(2)</gnm:Cell>
+<gnm:Cell Row="11" Col="3">=EXP(1)</gnm:Cell>
+<gnm:Cell Row="12" Col="3">=LN(EXP(2))</gnm:Cell>
+<gnm:Cell Row="13" Col="3">=LOG10(1000)</gnm:Cell>
+<gnm:Cell Row="14" Col="3">=SIN(0)</gnm:Cell>
+<gnm:Cell Row="15" Col="3">=COS(0)</gnm:Cell>
+<gnm:Cell Row="16" Col="3">=TAN(0)</gnm:Cell>
+<gnm:Cell Row="17" Col="3">=ATAN2(1,1)</gnm:Cell>
+<gnm:Cell Row="18" Col="3">=FLOOR(2.7)</gnm:Cell>
+<gnm:Cell Row="19" Col="3">=CEIL(2.1)</gnm:Cell>
+<gnm:Cell Row="20" Col="3">=ROUND(2.5)</gnm:Cell>
+<gnm:Cell Row="21" Col="3">=ROUND(2.44,1)</gnm:Cell>
+<gnm:Cell Row="22" Col="3">=ROUND(-2.5)</gnm:Cell>
+<gnm:Cell Row="23" Col="3">=ROUNDUP(2.1)</gnm:Cell>
+<gnm:Cell Row="24" Col="3">=ROUNDDOWN(2.9)</gnm:Cell>
+<gnm:Cell Row="25" Col="3">=INT(-2.5)</gnm:Cell>
+<gnm:Cell Row="26" Col="3">=MOD(7,3)</gnm:Cell>
+<gnm:Cell Row="27" Col="3">=MOD(-7,3)</gnm:Cell>
+<gnm:Cell Row="28" Col="3">=SIGN(-3)</gnm:Cell>
+<gnm:Cell Row="29" Col="3">=FACT(5)</gnm:Cell>
+<gnm:Cell Row="30" Col="3">=FACT(0)</gnm:Cell>
+<gnm:Cell Row="31" Col="3">=GCD(12,18)</gnm:Cell>
+<gnm:Cell Row="32" Col="3">=LCM(4,6)</gnm:Cell>
+<gnm:Cell Row="33" Col="3">=COMBIN(5,2)</gnm:Cell>
+<gnm:Cell Row="34" Col="3">=POWER(2,10)</gnm:Cell>
+<gnm:Cell Row="35" Col="3">=DEGREES(PI())</gnm:Cell>
+<gnm:Cell Row="36" Col="3">=RADIANS(180)</gnm:Cell>
+<gnm:Cell Row="37" Col="3">=SUM(B1:B4)</gnm:Cell>
+<gnm:Cell Row="38" Col="3">=COUNT(A1:A5)</gnm:Cell>
+<gnm:Cell Row="39" Col="3">=COUNTA(B1:B4)</gnm:Cell>
+<gnm:Cell Row="40" Col="3">=COUNTBLANK(B1:B5)</gnm:Cell>
+<gnm:Cell Row="41" Col="3">=MEDIAN(A1:A5)</gnm:Cell>
+<gnm:Cell Row="42" Col="3">=VAR(A1:A5)</gnm:Cell>
+<gnm:Cell Row="43" Col="3">=VARP(A1:A5)</gnm:Cell>
+<gnm:Cell Row="44" Col="3">=STDEV(A1:A3)</gnm:Cell>
+<gnm:Cell Row="45" Col="3">=STDEVP(A1:A3)</gnm:Cell>
+<gnm:Cell Row="46" Col="3">=LARGE(A1:A5,1)</gnm:Cell>
+<gnm:Cell Row="47" Col="3">=SMALL(A1:A5,2)</gnm:Cell>
+<gnm:Cell Row="48" Col="3">=PI()</gnm:Cell>
+<gnm:Cell Row="49" Col="3">=SUMIF(A1:A5,"&gt;15")</gnm:Cell>
+<gnm:Cell Row="50" Col="3">=COUNTIF(A1:A5,"&gt;15")</gnm:Cell>
+<gnm:Cell Row="51" Col="3">=AVERAGEIF(A1:A5,"&gt;15")</gnm:Cell>
+<gnm:Cell Row="52" Col="3">=SUMIF(B1:B4,"delta",A1:A4)</gnm:Cell>
+  </gnm:Cells><gnm:SheetLayout TopLeft="A1"/></gnm:Sheet></gnm:Sheets>
+  <gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName>Text</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Text</gnm:Name><gnm:MaxCol>3</gnm:MaxCol><gnm:MaxRow>22</gnm:MaxRow>
+  <gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="40">10</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="40">20</gnm:Cell>
+<gnm:Cell Row="2" Col="0" ValueType="40">30</gnm:Cell>
+<gnm:Cell Row="3" Col="0" ValueType="40">-5</gnm:Cell>
+<gnm:Cell Row="4" Col="0" ValueType="40">2.5</gnm:Cell>
+<gnm:Cell Row="0" Col="1" ValueType="60">alpha</gnm:Cell>
+<gnm:Cell Row="1" Col="1" ValueType="60">Beta gamma</gnm:Cell>
+<gnm:Cell Row="2" Col="1" ValueType="60">delta</gnm:Cell>
+<gnm:Cell Row="3" Col="1" ValueType="40">3</gnm:Cell>
+<gnm:Cell Row="0" Col="2" ValueType="20">TRUE</gnm:Cell>
+<gnm:Cell Row="1" Col="2" ValueType="20">FALSE</gnm:Cell>
+<gnm:Cell Row="0" Col="3">=LEN(B2)</gnm:Cell>
+<gnm:Cell Row="1" Col="3">=UPPER(B1)</gnm:Cell>
+<gnm:Cell Row="2" Col="3">=LOWER(B2)</gnm:Cell>
+<gnm:Cell Row="3" Col="3">=TRIM("  a  b  ")</gnm:Cell>
+<gnm:Cell Row="4" Col="3">=LEFT(B2,4)</gnm:Cell>
+<gnm:Cell Row="5" Col="3">=RIGHT(B2,5)</gnm:Cell>
+<gnm:Cell Row="6" Col="3">=MID(B2,2,3)</gnm:Cell>
+<gnm:Cell Row="7" Col="3">=CONCATENATE(B1,"-",B3)</gnm:Cell>
+<gnm:Cell Row="8" Col="3">=FIND("a",B2)</gnm:Cell>
+<gnm:Cell Row="9" Col="3">=SEARCH("A",B1)</gnm:Cell>
+<gnm:Cell Row="10" Col="3">=SUBSTITUTE(B2,"a","X")</gnm:Cell>
+<gnm:Cell Row="11" Col="3">=EXACT(B1,B1)</gnm:Cell>
+<gnm:Cell Row="12" Col="3">=EXACT("A","a")</gnm:Cell>
+<gnm:Cell Row="13" Col="3">=CHAR(65)</gnm:Cell>
+<gnm:Cell Row="14" Col="3">=CODE("A")</gnm:Cell>
+<gnm:Cell Row="15" Col="3">=VALUE("3.5")</gnm:Cell>
+<gnm:Cell Row="16" Col="3">=T(B1)</gnm:Cell>
+<gnm:Cell Row="17" Col="3">=T(A1)</gnm:Cell>
+<gnm:Cell Row="18" Col="3">=REPT("ab",3)</gnm:Cell>
+<gnm:Cell Row="19" Col="3">=B1&amp;B2</gnm:Cell>
+<gnm:Cell Row="20" Col="3">=TEXT(3.14159,"0.00")</gnm:Cell>
+<gnm:Cell Row="21" Col="3">=TEXT(42,"0.0")</gnm:Cell>
+<gnm:Cell Row="22" Col="3">=LEFT(B1)</gnm:Cell>
+  </gnm:Cells><gnm:SheetLayout TopLeft="A1"/></gnm:Sheet></gnm:Sheets>
+  <gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>

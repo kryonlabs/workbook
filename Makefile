@@ -5,6 +5,7 @@ VERSION ?= 0.1.0
 DIST_DIR ?= dist
 BUILD_DIR ?= build
 CODEGEN_DIR := $(BUILD_DIR)/generated
+ENGINE_DIR := $(BUILD_DIR)/engine
 KRYON_DIR := vendor/kryon
 
 UNAME_S := $(shell uname -s)
@@ -22,7 +23,7 @@ CFLAGS ?= -O2 -Wall -Wextra -std=gnu99
 CFLAGS += -I$(KRYON_DIR)/include -I$(CODEGEN_DIR) $(PKG_CFLAGS)
 LDLIBS := $(KRYON_LIB) $(RAYLIB_A) $(PKG_LIBS) -lm -lpthread -ldl -lrt
 
-.PHONY: all build run test install deb clean kryon-tools kryon-libs generate smoke
+.PHONY: all build run test install deb clean kryon-tools kryon-libs generate smoke cell parity
 
 all: build
 
@@ -41,21 +42,35 @@ $(CODEGEN_DIR)/.generated: workbook.kry $(K2C)
 	$(K2C) --root . -o $(CODEGEN_DIR) workbook.kry
 	touch $@
 
+$(ENGINE_DIR)/.generated: src/engine.kry $(K2C)
+	mkdir -p $(ENGINE_DIR)
+	$(K2C) --no-main --root . -o $(ENGINE_DIR) src/engine.kry
+	touch $@
+
+engine: $(ENGINE_DIR)/.generated
+
+cell: $(ENGINE_DIR)/.generated $(KRYON_LIB) $(RAYLIB_A)
+	$(CC) $(CFLAGS) -I$(ENGINE_DIR) -I$(ENGINE_DIR)/src -o $@ src/main_cli.c $(ENGINE_DIR)/src/engine.c $(LDLIBS)
+
 generate: $(CODEGEN_DIR)/.generated
 
 build: $(BIN)
 
-$(BIN): $(CODEGEN_DIR)/.generated $(KRYON_LIB) $(RAYLIB_A)
-	$(CC) $(CFLAGS) -o $@ \
+$(BIN): $(CODEGEN_DIR)/.generated $(ENGINE_DIR)/.generated $(KRYON_LIB) $(RAYLIB_A)
+	$(CC) $(CFLAGS) -I$(ENGINE_DIR) -I$(ENGINE_DIR)/src -I$(CODEGEN_DIR) -o $@ \
 		$(CODEGEN_DIR)/workbook.c $(CODEGEN_DIR)/kryon_project.c \
-		$(LDLIBS)
+		$(ENGINE_DIR)/src/engine.c $(LDLIBS)
 
 run: build
 	./$(BIN)
 
-test: build
+test: build cell
 	scripts/kry-source-audit.sh
 	scripts/native-ui-smoke.sh ./$(BIN)
+	scripts/parity-test.sh
+
+parity: cell
+	scripts/parity-test.sh
 
 install: build
 	mkdir -p $(BIN_DIR)
@@ -67,4 +82,4 @@ deb: build
 	packaging/deb/build-deb.sh "$(VERSION)" "$(DIST_DIR)"
 
 clean:
-	rm -rf $(BUILD_DIR) $(BIN)
+	rm -rf $(BUILD_DIR) $(BIN) cell

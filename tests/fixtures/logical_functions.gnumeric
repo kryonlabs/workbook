@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName>Logic</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Logic</gnm:Name><gnm:MaxCol>3</gnm:MaxCol><gnm:MaxRow>22</gnm:MaxRow>
+  <gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="40">10</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="40">20</gnm:Cell>
+<gnm:Cell Row="2" Col="0" ValueType="40">30</gnm:Cell>
+<gnm:Cell Row="3" Col="0" ValueType="40">-5</gnm:Cell>
+<gnm:Cell Row="4" Col="0" ValueType="40">2.5</gnm:Cell>
+<gnm:Cell Row="0" Col="1" ValueType="60">alpha</gnm:Cell>
+<gnm:Cell Row="1" Col="1" ValueType="60">Beta gamma</gnm:Cell>
+<gnm:Cell Row="2" Col="1" ValueType="60">delta</gnm:Cell>
+<gnm:Cell Row="3" Col="1" ValueType="40">3</gnm:Cell>
+<gnm:Cell Row="0" Col="2" ValueType="20">TRUE</gnm:Cell>
+<gnm:Cell Row="1" Col="2" ValueType="20">FALSE</gnm:Cell>
+<gnm:Cell Row="0" Col="3">=IF(A1&gt;5,"big","small")</gnm:Cell>
+<gnm:Cell Row="1" Col="3">=IF(A4&gt;0,1,-1)</gnm:Cell>
+<gnm:Cell Row="2" Col="3">=AND(TRUE,1)</gnm:Cell>
+<gnm:Cell Row="3" Col="3">=OR(FALSE,0,TRUE)</gnm:Cell>
+<gnm:Cell Row="4" Col="3">=NOT(0)</gnm:Cell>
+<gnm:Cell Row="5" Col="3">=XOR(1,1,1)</gnm:Cell>
+<gnm:Cell Row="6" Col="3">=TRUE()</gnm:Cell>
+<gnm:Cell Row="7" Col="3">=FALSE()</gnm:Cell>
+<gnm:Cell Row="8" Col="3">=IFERROR(1/0,99)</gnm:Cell>
+<gnm:Cell Row="9" Col="3">=IFERROR(42,-1)</gnm:Cell>
+<gnm:Cell Row="10" Col="3">=ISNUMBER(A1)</gnm:Cell>
+<gnm:Cell Row="11" Col="3">=ISTEXT(B1)</gnm:Cell>
+<gnm:Cell Row="12" Col="3">=ISLOGICAL(C1)</gnm:Cell>
+<gnm:Cell Row="13" Col="3">=ISBLANK(Z99)</gnm:Cell>
+<gnm:Cell Row="14" Col="3">=ISERROR(1/0)</gnm:Cell>
+<gnm:Cell Row="15" Col="3">=ISERR(1/0)</gnm:Cell>
+<gnm:Cell Row="16" Col="3">=NA()</gnm:Cell>
+<gnm:Cell Row="17" Col="3">=N(A1)</gnm:Cell>
+<gnm:Cell Row="18" Col="3">=N(B1)</gnm:Cell>
+<gnm:Cell Row="19" Col="3">=IF(C1,"t","f")</gnm:Cell>
+<gnm:Cell Row="20" Col="3">=AND(A1:A3)</gnm:Cell>
+<gnm:Cell Row="21" Col="3">=OR(A4:A5)</gnm:Cell>
+<gnm:Cell Row="22" Col="3">=SUM(C1:C2)</gnm:Cell>
+  </gnm:Cells><gnm:SheetLayout TopLeft="A1"/></gnm:Sheet></gnm:Sheets>
+  <gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>

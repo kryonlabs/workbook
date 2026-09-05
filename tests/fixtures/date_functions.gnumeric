@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName>Dates</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Dates</gnm:Name><gnm:MaxCol>1</gnm:MaxCol><gnm:MaxRow>18</gnm:MaxRow>
+  <gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="40">45000</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="40">44000</gnm:Cell>
+<gnm:Cell Row="0" Col="1">=DATE(2023,5,15)</gnm:Cell>
+<gnm:Cell Row="1" Col="1">=YEAR(A1)</gnm:Cell>
+<gnm:Cell Row="2" Col="1">=MONTH(A1)</gnm:Cell>
+<gnm:Cell Row="3" Col="1">=DAY(A1)</gnm:Cell>
+<gnm:Cell Row="4" Col="1">=WEEKDAY(DATE(2023,5,15))</gnm:Cell>
+<gnm:Cell Row="5" Col="1">=WEEKDAY(DATE(2024,1,1))</gnm:Cell>
+<gnm:Cell Row="6" Col="1">=DATE(2024,2,29)</gnm:Cell>
+<gnm:Cell Row="7" Col="1">=EDATE(DATE(2023,1,31),1)</gnm:Cell>
+<gnm:Cell Row="8" Col="1">=EOMONTH(DATE(2023,1,15),0)</gnm:Cell>
+<gnm:Cell Row="9" Col="1">=DATEDIF(A2,A1,"d")</gnm:Cell>
+<gnm:Cell Row="10" Col="1">=DATEDIF(A2,A1,"y")</gnm:Cell>
+<gnm:Cell Row="11" Col="1">=DATEDIF(DATE(2020,3,15),DATE(2023,5,1),"m")</gnm:Cell>
+<gnm:Cell Row="12" Col="1">=DAYS360(DATE(2023,1,1),DATE(2023,12,31))</gnm:Cell>
+<gnm:Cell Row="13" Col="1">=TIME(12,0,0)</gnm:Cell>
+<gnm:Cell Row="14" Col="1">=HOUR(TIME(13,45,30))</gnm:Cell>
+<gnm:Cell Row="15" Col="1">=MINUTE(TIME(13,45,30))</gnm:Cell>
+<gnm:Cell Row="16" Col="1">=SECOND(TIME(13,45,30))</gnm:Cell>
+<gnm:Cell Row="17" Col="1">=DATEVALUE("2023-05-15")</gnm:Cell>
+<gnm:Cell Row="18" Col="1">=YEAR(DATEVALUE("2023/05/15"))</gnm:Cell>
+  </gnm:Cells><gnm:SheetLayout TopLeft="A1"/></gnm:Sheet></gnm:Sheets>
+  <gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>

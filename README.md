@@ -1,15 +1,28 @@
 # workbook
 
-Native spreadsheet-style workbook editor authored in Kry. `workbook.kry` is
-the application source; `k2c` lowers it through KIR to generated C for the
-native Kryon runtime.
+Native spreadsheet editor authored in Kry, compatible with Gnumeric file
+formats and expressions. `workbook.kry` is the desktop application;
+`src/engine.kry` is the spreadsheet engine (grid model, formula evaluator,
+function library, .gnumeric/CSV I/O); `k2c` lowers both through KIR to
+generated C for the native Kryon runtime.
+
+The engine reads and writes `.gnumeric` (Gnumeric XML, gzipped or plain),
+evaluates the Gnumeric expression language (references, ranges, sheets,
+operators, 120+ functions with Gnumeric semantics including errors and
+date serials), and is verified 1:1 against the installed Gnumeric by
+`scripts/parity-test.sh` — every fixture is evaluated by both engines and
+compared cell by cell, including round-trips through our own
+`.gnumeric` writer. Format notes: `docs/GNUMERIC_PARITY.md`.
 
 ## build & run
 
     make              # compile workbook.kry and build ./workbook
-    make test         # source audit plus native UI smoke test
+    make cell         # build the headless engine driver ./cell
+    make test         # source audit, native UI smoke, 1:1 gnumeric parity
+    make parity       # 1:1 evaluation tests against the installed gnumeric
     make run          # open ./workbook
     ./workbook        # generic workbook
+    cell eval FILE    # evaluate a .gnumeric/.csv file and print CSV
     geld              # installed finance profile wrapper
     make install      # install workbook, cell, and geld
 
