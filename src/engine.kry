@@ -13865,6 +13865,8 @@ else {
     if strcmp(name,"flt.max") == 0 { return FnFltConst(st,args,count,marks,2) }
     if strcmp(name,"flt.nextafter") == 0 { return FnFltNextAfter(st,args,count,marks) }
     if strcmp(name,"odf.sumproduct") == 0 { return FnSumProduct(st,args,count,marks) }
+    if strcmp(name,"fourier") == 0 { return FnFourier(st,args,count,marks) }
+    if strcmp(name,"hpfilter") == 0 { return FnHpfilter(st,args,count,marks) }
     if strcmp(name,"pearson") == 0 { return FnCorrel(st,args,count,marks) }
     if strcmp(name,"findb") == 0 { return FnFind(st,args,count,marks) }
     if strcmp(name,"searchb") == 0 { return FnSearch(st,args,count,marks) }
@@ -15947,6 +15949,182 @@ else {
         res = 0 - res
     }
     return res
+}
+
+FourierFft :: (inp: Cplx *, n: int, skip: int, out: Cplx *, inverse: int) {
+    f1: [1024] Cplx = {0}
+    f2: [1024] Cplx = {0}
+    nhalf: int = n / 2
+    argstep: double = 0
+    i: int = 0
+    if n == 1 {
+        out[0] = inp[0]
+        return
+    }
+    FourierFft(inp,nhalf,skip * 2,f1,inverse)
+    FourierFft(inp + skip,nhalf,skip * 2,f2,inverse)
+    argstep = (inverse != 0 ? 3.14159265358979323846 : 0 - 3.14159265358979323846) / nhalf
+    i = 0
+    while i < nhalf {
+        dir2: Cplx = {cos(argstep * i),sin(argstep * i)}
+        tmp: Cplx = CxMul(f2[i],dir2)
+        sumc: Cplx = CxAdd(f1[i],tmp)
+        difc: Cplx = CxSub(f1[i],tmp)
+        out[i].re = sumc.re * 0.5
+        out[i].im = sumc.im * 0.5
+        out[i + nhalf].re = difc.re * 0.5
+        out[i + nhalf].im = difc.im * 0.5
+        i += 1
+    }
+}
+
+FnFourier :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    data: [4096] double = {0}
+    inp: [1024] Cplx = {0}
+    outp: [1024] Cplx = {0}
+    n0: int = 0
+    nb: int = 1
+    cols: int = 0
+    rows: int = 0
+    inverse: int = 0
+    sep: int = 0
+    i: int = 0
+    buf: [128] char = ""
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 3 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    cols = st->call_group_cols[gx0]
+    if cols < 1 { cols = gl0 }
+    rows = gl0 / cols
+    if cols != 1 && rows != 1 { return ValError(ERR_VALUE) }
+    n0 = CashList(args + gx0,gl0,data)
+    if n0 < 0 { return ValError(args[gx0].err) }
+    if n0 == 0 { return ValError(ERR_VALUE) }
+    if n0 > 1024 { return ValError(ERR_VALUE) }
+    if groups >= 2 {
+        gx1: int = 0
+        gl1: int = 0
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 {
+            if args[gx1].kind == VAL_ERROR { return ValError(args[gx1].err) }
+            inverse = floor(CoerceNumber(&args[gx1])) != 0 ? 1 : 0
+        }
+        if groups >= 3 {
+            gx2: int = 0
+            gl2: int = 0
+            GroupBounds(marks,count,2,&gx2,&gl2)
+            if gl2 >= 1 {
+                if args[gx2].kind == VAL_ERROR { return ValError(args[gx2].err) }
+                sep = floor(CoerceNumber(&args[gx2])) != 0 ? 1 : 0
+            }
+        }
+    }
+    while nb < n0 {
+        nb *= 2
+    }
+    i = 0
+    while i < n0 {
+        inp[i].re = data[i]
+        inp[i].im = 0
+        i += 1
+    }
+    FourierFft(inp,nb,1,outp,inverse)
+    if sep != 0 {
+        return ValNumber(outp[0].re)
+    }
+    CxToString(outp[0],'i',buf,sizeof(buf))
+    return ValString(wb_strdup(buf))
+}
+
+FnHpfilter :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    data: [512] double = {0}
+    av: [512] double = {0}
+    bv: [512] double = {0}
+    cv: [512] double = {0}
+    n: int = 0
+    lambda: double = 1600
+    lambda6: double = 0
+    lambda4: double = 0
+    h: [5] double = {0}
+    g: [5] double = {0}
+    j2: [2] double = {0}
+    h_b: double = 0
+    h_c: double = 0
+    denom: double = 0
+    cols: int = 0
+    rows: int = 0
+    i: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 2 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    cols = st->call_group_cols[gx0]
+    if cols < 1 { cols = gl0 }
+    rows = gl0 / cols
+    if cols != 1 && rows != 1 { return ValError(ERR_VALUE) }
+    n = CashList(args + gx0,gl0,data)
+    if n < 0 { return ValError(args[gx0].err) }
+    if n < 6 { return ValError(ERR_VALUE) }
+    if n > 512 { return ValError(ERR_VALUE) }
+    if groups >= 2 {
+        gx1: int = 0
+        gl1: int = 0
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 {
+            if args[gx1].kind == VAL_ERROR { return ValError(args[gx1].err) }
+            lambda = CoerceNumber(&args[gx1])
+        }
+    }
+    lambda6 = 6 * lambda + 1
+    lambda4 = -4 * lambda
+    av[0] = lambda + 1
+    bv[0] = -2 * lambda
+    cv[0] = lambda
+    i = 1
+    while i < n - 2 {
+        av[i] = lambda6
+        bv[i] = lambda4
+        cv[i] = lambda
+        i += 1
+    }
+    av[n - 2] = av[1] = lambda6 - lambda
+    av[n - 1] = av[0]
+    bv[n - 2] = bv[0]
+    bv[n - 1] = 0
+    cv[n - 2] = 0
+    cv[n - 1] = 0
+    i = 0
+    while i < n {
+        denom = av[i] - h[3] * h[0] - g[4] * g[1]
+        if denom == 0 { return ValError(ERR_DIV0) }
+        h_b = bv[i]
+        g[0] = h[0]
+        bv[i] = h[0] = (h_b - h[3] * h[1]) / denom
+        h_c = cv[i]
+        g[1] = h[1]
+        cv[i] = h[1] = h_c / denom
+        av[i] = (data[i] - g[2] * g[4] - h[2] * h[3]) / denom
+        g[2] = h[2]
+        h[2] = av[i]
+        h[3] = h_b - h[4] * g[0]
+        g[4] = h[4]
+        h[4] = h_c
+        i += 1
+    }
+    data[n - 1] = j2[0] = av[n - 1]
+    i = n - 1
+    while i > 0 {
+        data[i - 1] = av[i - 1] - bv[i - 1] * j2[0] - cv[i - 1] * j2[1]
+        j2[1] = j2[0]
+        j2[0] = data[i - 1]
+        i -= 1
+    }
+    return ValNumber(data[0])
 }
 
 GoRangeAverage :: (xs: double *, n: int) -> double {
