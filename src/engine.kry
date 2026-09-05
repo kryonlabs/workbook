@@ -107,6 +107,14 @@ Val :: struct {
     from_range: int
 }
 
+SlotRef :: struct {
+    kind: int
+    row: int
+    col: int
+    row2: int
+    col2: int
+}
+
 EvalState :: struct {
     wb: Workbook*
     sheet: Sheet*
@@ -121,6 +129,13 @@ EvalState :: struct {
     this_col: int
     last_cols: int
     call_group_cols: int*
+    refs: SlotRef*
+    call_refs: SlotRef*
+    pend_kind: int
+    pend_row: int
+    pend_col: int
+    pend_row2: int
+    pend_col2: int
 }
 
 ErrText :: (code: int) -> CString {
@@ -608,6 +623,11 @@ EvalPush :: (st: EvalState *, v: Val) {
     st->args[st->arg_count] = v
     st->marks[st->arg_count] = 0
     st->group_cols[st->arg_count] = 0
+    st->refs[st->arg_count].kind = 0
+    st->refs[st->arg_count].row = 0
+    st->refs[st->arg_count].col = 0
+    st->refs[st->arg_count].row2 = 0
+    st->refs[st->arg_count].col2 = 0
     st->arg_count += 1
 }
 
@@ -781,7 +801,7 @@ EvaluateCell :: (st: EvalState *, sheet: Sheet *, row: int, col: int) -> Val {
     if st->depth >= WB_DEPTH_MAX { return ValError(ERR_CYCLE) }
     cell->evaluating = 1
     pos: int = 0
-    inner: EvalState = {st->wb,sheet,st->depth + 1,st->args,st->marks,st->group_cols,st->arg_count,st->args_overflow,0,st->this_row,st->this_col,st->last_cols}
+    inner: EvalState = {st->wb,sheet,st->depth + 1,st->args,st->marks,st->group_cols,st->arg_count,st->args_overflow,0,st->this_row,st->this_col,st->last_cols,st->call_group_cols,st->refs,st->call_refs,0,0,0,0,0}
     result: Val = EvalExpression(&inner,cell->text + 1,&pos)
     SkipFormulaSpace(cell->text + 1,&pos)
     if cell->text[1 + pos] != 0 { result = ValError(ERR_VALUE) }
@@ -814,6 +834,11 @@ RangeToValues :: (st: EvalState *, sheet: Sheet *, row: int, col: int, row2: int
     if row2 < row { swap: int = row; row = row2; row2 = swap }
     if col2 < col { swap: int = col; col = col2; col2 = swap }
     st->last_cols = col2 - col + 1
+    st->pend_kind = 2
+    st->pend_row = row
+    st->pend_col = col
+    st->pend_row2 = row2
+    st->pend_col2 = col2
     if row2 < -1 + 0 { return v }
     r: int = row
     while r <= row2 {
@@ -853,6 +878,7 @@ EvalFunction :: (st: EvalState *, text: const char *, pos: int *, name: const ch
         while 1 {
             arg_pos: int = pos[0]
             arg_slot: int = st->arg_count
+            st->pend_kind = 0
             one: Val = EvalExpression(st,text,&arg_pos)
             if one.kind == VAL_RANGE {
                 ValFree(&one)
@@ -863,6 +889,13 @@ EvalFunction :: (st: EvalState *, text: const char *, pos: int *, name: const ch
 else {
                 st->arg_count = arg_slot
                 EvalPush(st,one)
+            }
+            if st->pend_kind != 0 && arg_slot < WB_ARGS_MAX {
+                st->refs[arg_slot].kind = st->pend_kind
+                st->refs[arg_slot].row = st->pend_row
+                st->refs[arg_slot].col = st->pend_col
+                st->refs[arg_slot].row2 = st->pend_row2
+                st->refs[arg_slot].col2 = st->pend_col2
             }
             if st->arg_count > arg_slot && arg_slot < WB_ARGS_MAX {
                 st->marks[arg_slot] = 1
@@ -876,6 +909,8 @@ else {
     if text[pos[0]] != ')' { return ValError(ERR_VALUE) }
     pos[0] += 1
     st->call_group_cols = st->group_cols + base
+    st->call_refs = st->refs + base
+    st->pend_kind = 0
     result: Val = CallFunction(st,lower,st->args + base,st->arg_count - base,st->marks + base)
     i2: int = base
     while i2 < st->arg_count {
@@ -924,6 +959,11 @@ EvalFactor :: (st: EvalState *, text: const char *, pos: int *) -> Val {
             if (is_range) {
                 return RangeToValues(st,sheet,row,col,row2,col2)
             }
+            st->pend_kind = 1
+            st->pend_row = row
+            st->pend_col = col
+            st->pend_row2 = row
+            st->pend_col2 = col
             return EvaluateCell(st,sheet,row,col)
         }
         pos[0] = save
@@ -960,6 +1000,7 @@ EvalPostfix :: (st: EvalState *, text: const char *, pos: int *) -> Val {
         n: double = CoerceNumber(&v)
         if n >= 1e307 { ValFree(&v); return ValError(ERR_VALUE) }
         ValFree(&v)
+        st->pend_kind = 0
         v = ValNumber(n / 100.0)
     }
     return v
@@ -974,6 +1015,7 @@ EvalUnary :: (st: EvalState *, text: const char *, pos: int *) -> Val {
         n: double = CoerceNumber(&operand)
         if n >= 1e307 { ValFree(&operand); return ValError(ERR_VALUE) }
         ValFree(&operand)
+        st->pend_kind = 0
         return ValNumber(-n)
     }
     if text[pos[0]] == '+' {
@@ -998,6 +1040,7 @@ EvalPower :: (st: EvalState *, text: const char *, pos: int *) -> Val {
         if a >= 1e307 || b >= 1e307 { return ValError(ERR_VALUE) }
         r: double = pow(a,b)
         if r != r { return ValError(ERR_NUM) }
+        st->pend_kind = 0
         left = ValNumber(r)
     }
     return left
@@ -1017,6 +1060,7 @@ EvalMul :: (st: EvalState *, text: const char *, pos: int *) -> Val {
         ValFree(&left)
         ValFree(&right)
         if a >= 1e307 || b >= 1e307 { return ValError(ERR_VALUE) }
+        st->pend_kind = 0
         if op == '*' {
             left = ValNumber(a * b)
         }
@@ -1042,6 +1086,7 @@ EvalAdd :: (st: EvalState *, text: const char *, pos: int *) -> Val {
         ValFree(&left)
         ValFree(&right)
         if a >= 1e307 || b >= 1e307 { return ValError(ERR_VALUE) }
+        st->pend_kind = 0
         if op == '+' { left = ValNumber(a + b) }
         else { left = ValNumber(a - b) }
     }
@@ -1064,6 +1109,7 @@ EvalConcat :: (st: EvalState *, text: const char *, pos: int *) -> Val {
         snprintf(joined,sizeof(joined),"%s%s",a,b)
         ValFree(&left)
         ValFree(&right)
+        st->pend_kind = 0
         left = ValString(wb_strdup(joined))
     }
     return left
@@ -1101,6 +1147,7 @@ else {
         else if op == 4 { truth = cmp >= 0 }
         else if op == 5 { truth = cmp < 0 }
         else { truth = cmp > 0 }
+        st->pend_kind = 0
         left = ValBool(truth)
     }
     return left
@@ -1148,8 +1195,8 @@ CellDisplayText :: (cell: Cell *, out: char *, cap: int) {
     WbCellValueText(&v,out,cap)
 }
 
-EvaluateOne :: (wb: Workbook *, sheet: Sheet *, cell: Cell *, args: Val *, marks: int *, group_cols: int *) {
-    st: EvalState = {wb,sheet,0,args,marks,group_cols,0,0,0,CellKeyRow(cell->key),CellKeyCol(cell->key),0}
+EvaluateOne :: (wb: Workbook *, sheet: Sheet *, cell: Cell *, args: Val *, marks: int *, group_cols: int *, refs: SlotRef *) {
+    st: EvalState = {wb,sheet,0,args,marks,group_cols,0,0,0,CellKeyRow(cell->key),CellKeyCol(cell->key),0,NULL,refs,refs,0,0,0,0,0}
     pos: int = 0
     if cell->computed { return }
     result: Val = EvalExpression(&st,cell->text + 1,&pos)
@@ -1178,7 +1225,8 @@ EvaluateSheet :: (wb: Workbook *, sheet: Sheet *) {
     args: Val * = malloc(sizeof(Val) * WB_ARGS_MAX)
     marks: int * = malloc(sizeof(int) * WB_ARGS_MAX)
     group_cols: int * = malloc(sizeof(int) * WB_ARGS_MAX)
-    if args == NULL || marks == NULL || group_cols == NULL { free(args); free(marks); free(group_cols); return }
+    refs: SlotRef * = malloc(sizeof(SlotRef) * WB_ARGS_MAX)
+    if args == NULL || marks == NULL || group_cols == NULL || refs == NULL { free(args); free(marks); free(group_cols); free(refs); return }
     while changed && pass < 100 {
         i: int = 0
         changed = 0
@@ -1190,7 +1238,7 @@ EvaluateSheet :: (wb: Workbook *, sheet: Sheet *) {
                 v_before: Val = {cell->cached_kind,cell->cached_number,cell->cached_text,cell->cached_err,0}
                 WbCellValueText(&v_before,before,sizeof(before))
                 cell->computed = 0
-                EvaluateOne(wb,sheet,cell,args,marks,group_cols)
+                EvaluateOne(wb,sheet,cell,args,marks,group_cols,refs)
                 v_after: Val = {cell->cached_kind,cell->cached_number,cell->cached_text,cell->cached_err,0}
                 WbCellValueText(&v_after,after,sizeof(after))
                 if strcmp(before,after) != 0 { changed = 1 }
@@ -1201,6 +1249,8 @@ EvaluateSheet :: (wb: Workbook *, sheet: Sheet *) {
     }
     free(args)
     free(marks)
+    free(group_cols)
+    free(refs)
 }
 
 SheetInsertRow :: (sheet: Sheet *, at_row: int) -> int {
@@ -5309,6 +5359,391 @@ FnChoose :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     n: int = (int)CoerceNumber(&args[0])
     if n < 1 || n >= count { return ValError(ERR_VALUE) }
     return ValCopy(&args[n])
+}
+
+ColNameText :: (col: int, out: char *) -> int {
+    c: int = col + 1
+    n: int = 0
+    buf: [8] char = ""
+    i: int = 0
+    while c > 0 {
+        rem: int = (c - 1) % 26
+        buf[n] = (char)('A' + rem)
+        n += 1
+        c = (c - 1) / 26
+    }
+    while i < n {
+        out[i] = buf[n - 1 - i]
+        i += 1
+    }
+    out[n] = 0
+    return n
+}
+
+ParseR1C1Index :: (text: const char *, pos: int *, out: int *) -> int {
+    neg: int = 0
+    val: int = 0
+    p: int = pos[0]
+    if text[p] == '[' {
+        p += 1
+        if text[p] == '-' { neg = 1; p += 1 }
+        if text[p] < '0' || text[p] > '9' { return -1 }
+        while text[p] >= '0' && text[p] <= '9' {
+            val = val * 10 + (text[p] - '0')
+            p += 1
+        }
+        if text[p] != ']' { return -1 }
+        pos[0] = p + 1
+        out[0] = neg != 0 ? -val : val
+        return 1
+    }
+    if text[p] < '0' || text[p] > '9' { return -1 }
+    while text[p] >= '0' && text[p] <= '9' {
+        val = val * 10 + (text[p] - '0')
+        p += 1
+    }
+    pos[0] = p
+    out[0] = val - 1
+    return 0
+}
+
+SheetNameNeedsQuote :: (name: const char *) -> int {
+    i: int = 1
+    nletters: int = 0
+    ndigits: int = 0
+    c0: int = name[0]
+    if c0 == 0 { return 0 }
+    if (c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z') {
+        nletters = 1
+        ndigits = 0
+    }
+else if c0 == '_' || c0 == '.' {
+        nletters = -1
+        ndigits = -1
+    }
+else {
+        return 1
+    }
+    while name[i] != 0 {
+        c: int = name[i]
+        if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+            if ndigits == 0 { nletters += 1 }
+        }
+else if c >= '0' && c <= '9' {
+            if ndigits >= 0 { ndigits += 1 }
+        }
+else if c == '.' || c == '_' {
+            nletters = -1
+            ndigits = -1
+        }
+else {
+            return 1
+        }
+        i += 1
+    }
+    if ndigits > 0 {
+        probe: int = 0
+        col: int = ParseColLetters(name,&probe)
+        if col >= 0 {
+            while name[probe] == '0' { probe += 1 }
+            if ParseRowDigits(name,&probe) >= 0 && name[probe] == 0 { return 1 }
+        }
+    }
+    return 0
+}
+
+SheetPrefixText :: (name: const char *, out: char *) -> int {
+    n: int = 0
+    i: int = 0
+    if name[0] == 0 {
+        out[0] = '!'
+        out[1] = 0
+        return 1
+    }
+    if SheetNameNeedsQuote(name) != 0 {
+        out[0] = '\''
+        n = 1
+        while name[i] != 0 {
+            if name[i] == '\'' && n < 250 { out[n] = '\''; n += 1 }
+            if n < 250 { out[n] = name[i]; n += 1 }
+            i += 1
+        }
+        out[n] = '\''
+        n += 1
+    }
+else {
+        while name[i] != 0 && n < 250 {
+            out[n] = name[i]
+            n += 1
+            i += 1
+        }
+    }
+    out[n] = '!'
+    n += 1
+    out[n] = 0
+    return n
+}
+
+FnAddress :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    row: int = 0
+    col: int = 0
+    absnum: int = 1
+    a1: int = 1
+    col_relative: int = 0
+    row_relative: int = 0
+    out: [512] char = ""
+    letters: [8] char = ""
+    prefix: [256] char = ""
+    rbuf: [16] char = ""
+    cbuf: [16] char = ""
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    row = (int)CoerceNumber(&args[0])
+    col = (int)CoerceNumber(&args[1])
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        absnum = (int)CoerceNumber(&args[2])
+    }
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        a1 = CoerceNumber(&args[3]) != 0 ? 1 : 0
+    }
+    if absnum == 1 || absnum == 5 { col_relative = 0; row_relative = 0 }
+    else if absnum == 2 || absnum == 6 { col_relative = 1; row_relative = 0 }
+    else if absnum == 3 || absnum == 7 { col_relative = 0; row_relative = 1 }
+    else if absnum == 4 || absnum == 8 { col_relative = 1; row_relative = 1 }
+    else { return ValError(ERR_VALUE) }
+    if col < 1 || col > WB_MAX_COLS { return ValError(ERR_VALUE) }
+    if row < 1 || row > WB_MAX_ROWS { return ValError(ERR_VALUE) }
+    if count >= 5 {
+        label: [256] char = ""
+        CoerceText(&args[4],label,sizeof(label))
+        SheetPrefixText(label,prefix)
+    }
+    if a1 != 0 {
+        ColNameText(col - 1,letters)
+        if col_relative == 0 && row_relative == 0 {
+            snprintf(out,sizeof(out),"%s$%s$%d",prefix,letters,row)
+        }
+        else if col_relative != 0 && row_relative == 0 {
+            snprintf(out,sizeof(out),"%s%s$%d",prefix,letters,row)
+        }
+        else if col_relative == 0 && row_relative != 0 {
+            snprintf(out,sizeof(out),"%s$%s%d",prefix,letters,row)
+        }
+        else {
+            snprintf(out,sizeof(out),"%s%s%d",prefix,letters,row)
+        }
+    }
+else {
+        if row_relative != 0 {
+            snprintf(rbuf,sizeof(rbuf),"R[%d]",row)
+        }
+else {
+            snprintf(rbuf,sizeof(rbuf),"R%d",row)
+        }
+        if col_relative != 0 {
+            snprintf(cbuf,sizeof(cbuf),"C[%d]",col)
+        }
+else {
+            snprintf(cbuf,sizeof(cbuf),"C%d",col)
+        }
+        snprintf(out,sizeof(out),"%s%s%s",prefix,rbuf,cbuf)
+    }
+    return ValString(wb_strdup(out))
+}
+
+FnAreas :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    gx: int = 0
+    gl: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if GroupBounds(marks,count,0,&gx,&gl) != 0 && gx == 0 && gl == count && st->call_refs[0].kind != 0 {
+        return ValNumber(1)
+    }
+    return ValError(ERR_VALUE)
+}
+
+FnIndirect :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    a1: int = 1
+    pos: int = 0
+    row: int = 0
+    col: int = 0
+    row2: int = 0
+    col2: int = 0
+    sheet: Sheet * = NULL
+    is_range: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    if count >= 2 {
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        a1 = CoerceNumber(&args[1]) != 0 ? 1 : 0
+    }
+    if a1 != 0 {
+        if TryParseReference(st,text,&pos,&row,&col,&row2,&col2,&sheet,&is_range) == 0 {
+            return ValError(ERR_REF)
+        }
+    }
+else {
+        seg: int = 0
+        rel: int = 0
+        sheet = st->sheet
+        if text[pos] != 'R' && text[pos] != 'r' { return ValError(ERR_REF) }
+        pos += 1
+        rel = ParseR1C1Index(text,&pos,&seg)
+        if rel < 0 { return ValError(ERR_REF) }
+        row = rel != 0 ? st->this_row + seg : seg
+        if text[pos] != 'C' && text[pos] != 'c' { return ValError(ERR_REF) }
+        pos += 1
+        rel = ParseR1C1Index(text,&pos,&seg)
+        if rel < 0 { return ValError(ERR_REF) }
+        col = rel != 0 ? st->this_col + seg : seg
+    }
+    SkipFormulaSpace(text,&pos)
+    if text[pos] != 0 { return ValError(ERR_REF) }
+    if is_range != 0 {
+        t_row: int = 0
+        t_col: int = 0
+        if row2 < row { swap: int = row; row = row2; row2 = swap }
+        if col2 < col { swap2: int = col; col = col2; col2 = swap2 }
+        if col == col2 {
+            if st->this_row < row || st->this_row > row2 { return ValError(ERR_VALUE) }
+            t_row = st->this_row
+            t_col = col
+        }
+else if row == row2 {
+            if st->this_col < col || st->this_col > col2 { return ValError(ERR_VALUE) }
+            t_row = row
+            t_col = st->this_col
+        }
+else {
+            return ValError(ERR_VALUE)
+        }
+        row = t_row
+        col = t_col
+    }
+    if row < 0 || row >= WB_MAX_ROWS || col < 0 || col >= WB_MAX_COLS { return ValError(ERR_REF) }
+    st->pend_kind = 1
+    st->pend_row = row
+    st->pend_col = col
+    st->pend_row2 = row
+    st->pend_col2 = col
+    res: Val = EvaluateCell(st,sheet,row,col)
+    if res.kind == VAL_EMPTY { return ValNumber(0) }
+    return res
+}
+
+FnOffset :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a_row: int = 0
+    a_col: int = 0
+    b_row: int = 0
+    b_col: int = 0
+    gx: int = 0
+    gl: int = 0
+    i0: int = 0
+    row_offset: int = 0
+    col_offset: int = 0
+    tmp: int = 0
+    if st->call_refs[0].kind == 0 { return ValError(ERR_VALUE) }
+    a_row = st->call_refs[0].row
+    a_col = st->call_refs[0].col
+    b_row = st->call_refs[0].row2
+    b_col = st->call_refs[0].col2
+    if GroupBounds(marks,count,0,&gx,&gl) == 0 {
+        gx = 0
+        gl = count
+    }
+    i0 = gx + gl
+    if count < i0 + 2 { return ValError(ERR_VALUE) }
+    if args[i0].kind == VAL_ERROR { return ValError(args[i0].err) }
+    if args[i0 + 1].kind == VAL_ERROR { return ValError(args[i0 + 1].err) }
+    row_offset = (int)CoerceNumber(&args[i0])
+    col_offset = (int)CoerceNumber(&args[i0 + 1])
+    a_row += row_offset
+    a_col += col_offset
+    if a_row < 0 || a_col < 0 || a_row >= WB_MAX_ROWS || a_col >= WB_MAX_COLS {
+        return ValError(ERR_REF)
+    }
+    if count >= i0 + 3 {
+        if args[i0 + 2].kind == VAL_ERROR { return ValError(args[i0 + 2].err) }
+        tmp = (int)CoerceNumber(&args[i0 + 2])
+        if tmp < 1 { return ValError(ERR_VALUE) }
+        b_row = a_row + tmp - 1
+    }
+else {
+        b_row += row_offset
+    }
+    if b_col < 0 || b_row >= WB_MAX_ROWS { return ValError(ERR_REF) }
+    if count >= i0 + 4 {
+        if args[i0 + 3].kind == VAL_ERROR { return ValError(args[i0 + 3].err) }
+        tmp = (int)CoerceNumber(&args[i0 + 3])
+        if tmp < 1 { return ValError(ERR_VALUE) }
+        b_col = a_col + tmp - 1
+    }
+else {
+        b_col += col_offset
+    }
+    if b_col < 0 || b_col >= WB_MAX_COLS { return ValError(ERR_REF) }
+    if b_row != a_row || b_col != a_col {
+        t_row: int = a_row
+        t_col: int = a_col
+        if a_col == b_col {
+            if st->this_row < a_row || st->this_row > b_row { return ValError(ERR_VALUE) }
+            t_row = st->this_row
+        }
+else if a_row == b_row {
+            if st->this_col < a_col || st->this_col > b_col { return ValError(ERR_VALUE) }
+            t_col = st->this_col
+        }
+else {
+            return ValError(ERR_VALUE)
+        }
+        a_row = t_row
+        a_col = t_col
+        b_row = t_row
+        b_col = t_col
+    }
+    st->pend_kind = 1
+    st->pend_row = a_row
+    st->pend_col = a_col
+    st->pend_row2 = a_row
+    st->pend_col2 = a_col
+    res: Val = EvaluateCell(st,st->sheet,a_row,a_col)
+    if res.kind == VAL_EMPTY { return ValNumber(0) }
+    return res
+}
+
+FnHyperlink :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if count >= 2 {
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        return ValCopy(&args[1])
+    }
+    return ValCopy(&args[0])
+}
+
+FnIsref :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    if count < 1 { return ValError(ERR_VALUE) }
+    if st->call_refs[0].kind != 0 { return ValBool(1) }
+    return ValBool(0)
+}
+
+FnColumnnumber :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    pos: int = 0
+    col: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    if text[0] == 0 { return ValError(ERR_VALUE) }
+    col = ParseColLetters(text,&pos)
+    if col < 0 || text[pos] != 0 { return ValError(ERR_VALUE) }
+    if col + 1 > WB_MAX_COLS { return ValError(ERR_VALUE) }
+    return ValNumber(col + 1)
 }
 
 CriterionMatch :: (criterion: Val *, v: Val *) -> int {
@@ -13617,6 +14052,13 @@ else {
     if strcmp(name,"radians") == 0 { return FnDegreesRadians(st,args,count,marks,0) }
     if strcmp(name,"pi") == 0 { return ValNumber(3.14159265358979323846) }
     if strcmp(name,"choose") == 0 { return FnChoose(st,args,count,marks) }
+    if strcmp(name,"address") == 0 { return FnAddress(st,args,count,marks) }
+    if strcmp(name,"areas") == 0 { return FnAreas(st,args,count,marks) }
+    if strcmp(name,"indirect") == 0 { return FnIndirect(st,args,count,marks) }
+    if strcmp(name,"offset") == 0 { return FnOffset(st,args,count,marks) }
+    if strcmp(name,"hyperlink") == 0 { return FnHyperlink(st,args,count,marks) }
+    if strcmp(name,"isref") == 0 { return FnIsref(st,args,count,marks) }
+    if strcmp(name,"columnnumber") == 0 { return FnColumnnumber(st,args,count,marks) }
     if strcmp(name,"sumif") == 0 { return FnSumIf(st,args,count,marks,0) }
     if strcmp(name,"averageif") == 0 { return FnSumIf(st,args,count,marks,1) }
     if strcmp(name,"countif") == 0 { return FnCountIf(st,args,count,marks) }
