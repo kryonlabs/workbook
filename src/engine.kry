@@ -10,6 +10,8 @@
 #import "time.h"
 
 state {
+    NT_PRIMES: [10000] int
+    NT_COUNT: int = 0
     QFACT_MANT_H: [10000] double
     QFACT_MANT_L: [10000] double
     QFACT_EXP: [10000] int
@@ -61,6 +63,7 @@ state {
     ERR_NA = 5
     ERR_NULL = 6
     ERR_CYCLE = 7
+    ERR_LIMIT = 8
 }
 
 #enum {
@@ -146,6 +149,7 @@ ErrText :: (code: int) -> CString {
     if code == ERR_NUM { return "#NUM!" }
     if code == ERR_NA { return "#N/A" }
     if code == ERR_NULL { return "#NULL!" }
+    if code == ERR_LIMIT { return "#LIMIT!" }
     return "#CYCLE!"
 }
 
@@ -158,9 +162,9 @@ ErrFromText :: (text: CString) -> int {
     if strcmp(text,"#N/A") == 0 { return ERR_NA }
     if strcmp(text,"#NULL!") == 0 { return ERR_NULL }
     if strcmp(text,"#CYCLE!") == 0 { return ERR_CYCLE }
+    if strcmp(text,"#LIMIT!") == 0 { return ERR_LIMIT }
     return -1
 }
-
 wb_strndup :: (src: const char *, n: int) -> CString {
     out: char * = malloc(n + 1)
     if out == NULL { return NULL }
@@ -14086,6 +14090,20 @@ else {
     if strcmp(name,"logest") == 0 { return FnLinEstLogEst(st,args,count,marks,1) }
     if strcmp(name,"trend") == 0 { return FnTrend(st,args,count,marks) }
     if strcmp(name,"growth") == 0 { return FnGrowth(st,args,count,marks) }
+    if strcmp(name,"permut") == 0 { return FnPermut(st,args,count,marks) }
+    if strcmp(name,"permutationa") == 0 { return FnPermutationA(st,args,count,marks) }
+    if strcmp(name,"seriessum") == 0 { return FnSeriesSum(st,args,count,marks) }
+    if strcmp(name,"ln1p") == 0 { return FnLn1p(st,args,count,marks) }
+    if strcmp(name,"sech") == 0 { return FnSechCsch(st,args,count,marks,0) }
+    if strcmp(name,"csch") == 0 { return FnSechCsch(st,args,count,marks,1) }
+    if strcmp(name,"isprime") == 0 { return FnIsPrime(st,args,count,marks) }
+    if strcmp(name,"ithprime") == 0 { return FnIthPrime(st,args,count,marks) }
+    if strcmp(name,"pfactor") == 0 { return FnPfactor(st,args,count,marks) }
+    if strcmp(name,"pochhammer") == 0 { return FnPochhammer(st,args,count,marks) }
+    if strcmp(name,"pearson") == 0 { return FnCorrel(st,args,count,marks) }
+    if strcmp(name,"findb") == 0 { return FnFind(st,args,count,marks) }
+    if strcmp(name,"searchb") == 0 { return FnSearch(st,args,count,marks) }
+    if strcmp(name,"replaceb") == 0 { return FnReplace(st,args,count,marks) }
     if strcmp(name,"averageif") == 0 { return FnSumIf(st,args,count,marks,1) }
     if strcmp(name,"countif") == 0 { return FnCountIf(st,args,count,marks) }
     return ValError(ERR_NAME)
@@ -15813,6 +15831,320 @@ else {
         i += 1
     }
     return ValNumber(pow(expres[1],nxs[0]) * expres[0])
+}
+
+/* ==== number theory: exact ports of fn-numtheory.c ==== */
+NtAddMod :: (a: unsigned long, b: unsigned long, m: unsigned long) -> unsigned long {
+    if a < m - b {
+        return a + b
+    }
+    return a - (m - b)
+}
+
+NtMulMod :: (a: unsigned long, b: unsigned long, m: unsigned long) -> unsigned long {
+    res: unsigned long = 0
+    a = a % m
+    while b > 0 {
+        if (b & 1) != 0 { res = NtAddMod(res,a,m) }
+        a = NtAddMod(a,a,m)
+        b = b >> 1
+    }
+    return res
+}
+
+NtPowMod :: (a: unsigned long, b: unsigned long, m: unsigned long) -> unsigned long {
+    res: unsigned long = 1
+    a = a % m
+    while b > 0 {
+        if (b & 1) != 0 { res = NtMulMod(res,a,m) }
+        a = NtMulMod(a,a,m)
+        b = b >> 1
+    }
+    return res
+}
+
+NtMillerRabin :: (n: unsigned long, a: unsigned long) -> int {
+    d: unsigned long = n - 1
+    s: int = 0
+    x: unsigned long = 0
+    while d % 2 == 0 {
+        d /= 2
+        s += 1
+    }
+    x = NtPowMod(a,d,n)
+    if x == 1 || x == n - 1 {
+        return 1
+    }
+    while s > 1 {
+        x = NtMulMod(x,x,n)
+        if x == n - 1 {
+            return 1
+        }
+        s -= 1
+    }
+    return 0
+}
+
+NtIsPrime :: (n: unsigned long) -> int {
+    bases: [9] int = {2,3,5,7,11,13,17,19,23}
+    i: int = 0
+    if n < 2 { return 0 }
+    if n == 2 || n == 3 { return 1 }
+    if n % 2 == 0 || n % 3 == 0 { return 0 }
+    i = 0
+    while i < 9 {
+        bn: unsigned long = (unsigned long)bases[i]
+        if n == bn { return 1 }
+        if NtMillerRabin(n,bn) == 0 { return 0 }
+        i += 1
+    }
+    return 1
+}
+
+NtBuildPrimes :: (want: int) {
+    c: int = 3
+    i: int = 0
+    if NT_COUNT == 0 {
+        NT_PRIMES[0] = 2
+        NT_COUNT = 1
+    }
+    if NT_COUNT > 1 {
+        c = NT_PRIMES[NT_COUNT - 1] + 2
+    }
+    while NT_COUNT < want {
+        isp: int = 1
+        i = 0
+        while i < NT_COUNT {
+            p: int = NT_PRIMES[i]
+            if p * p > c { break }
+            if c % p == 0 { isp = 0; break }
+            i += 1
+        }
+        if isp != 0 {
+            NT_PRIMES[NT_COUNT] = c
+            NT_COUNT += 1
+        }
+        c += 2
+    }
+}
+
+NtIthPrime :: (i: int, res: unsigned long *) -> int {
+    if i < 1 || i > 10000 { return 1 }
+    if NT_COUNT < i {
+        NtBuildPrimes(i)
+    }
+    res[0] = (unsigned long)NT_PRIMES[i - 1]
+    return 0
+}
+
+NtPrimeFactor :: (n: unsigned long) -> unsigned long {
+    i: int = 1
+    p: unsigned long = 2
+    if n <= 1 { return 0 }
+    while p * p <= n {
+        if NtIthPrime(i,&p) != 0 { return 0 }
+        if n % p == 0 { return p }
+        i += 1
+    }
+    return n
+}
+
+FnIsPrime :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    i: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    i = floor(CoerceNumber(&args[0]))
+    if i < 0 { return ValBool(0) }
+    if i > 9007199254740992.0 { return ValError(ERR_LIMIT) }
+    return ValBool(NtIsPrime((unsigned long)i))
+}
+
+FnIthPrime :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    i: double = 0
+    p: unsigned long = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    i = floor(CoerceNumber(&args[0]))
+    if i < 1 || i > 2147483647.0 { return ValError(ERR_NUM) }
+    if NtIthPrime((int)i,&p) != 0 { return ValError(ERR_LIMIT) }
+    return ValNumber((double)p)
+}
+
+FnPfactor :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: double = 0
+    p: unsigned long = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    n = floor(CoerceNumber(&args[0]))
+    if n < 2 { return ValError(ERR_VALUE) }
+    if n > 9007199254740992.0 { return ValError(ERR_LIMIT) }
+    p = NtPrimeFactor((unsigned long)n)
+    if p == 0 { return ValError(ERR_LIMIT) }
+    return ValNumber((double)p)
+}
+
+/* ==== pochhammer: exact port of sf-gamma.c paths reachable from PERMUT ==== */
+PochhammerNaive :: (x: double, n: int) -> double {
+    qp: Qd = {1,0}
+    qx: Qd = {0,0}
+    one: Qd = {1,0}
+    r: double = 0
+    Q_Init(&qx,x)
+    while n > 0 {
+        Q_Mul(&qp,&qp,&qx)
+        Q_Add(&qx,&qx,&one)
+        n -= 1
+    }
+    r = Q_Val(&qp)
+    return r
+}
+
+PochhammerHammer :: (x: double, n: double) -> double {
+    rn: double = 0
+    rx: double = 0
+    m1: Qd = {0,0}
+    m2: Qd = {0,0}
+    e1: int = 0
+    e2: int = 0
+    qr: Qd = {0,0}
+    r: double = 0
+    de: int = 0
+    if n != n || x != x { return 0.0 / 0.0 }
+    if n == 0 { return 1 }
+    rx = floor(x)
+    rn = floor(n)
+    if n == rn && x != rx && n >= 0 && n < 40 {
+        return PochhammerNaive(x,(int)n)
+    }
+    if qfactf(x + n - 1,&m1,&e1) == 0 && qfactf(x - 1,&m2,&e2) == 0 {
+        de = e1 - e2
+        Q_Div(&qr,&m1,&m2)
+        r = Q_Val(&qr)
+        return ldexp(r,de)
+    }
+    if x == rx && x <= 0 {
+        if n != rn { return 0 }
+        if x == 0 {
+            if n > 0 { return 0 }
+            return (fmod(0 - n,2) == 0 ? 1.0 : -1.0) / gnm_fact_port((int)(0 - n))
+        }
+        if n > 0 - x { return 0.0 / 0.0 }
+    }
+    if fabs(x) < 1 { return 1e308 * 10 }
+    if n < 0 {
+        return 1 / PochhammerHammer(x + n,0 - n)
+    }
+    if n == rn && n >= 0 && n < 100 {
+        return PochhammerNaive(x,(int)n)
+    }
+    return 0.0 / 0.0
+}
+
+FnPermut :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: double = 0
+    k: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    n = FakeFloor(CoerceNumber(&args[0]))
+    k = FakeFloor(CoerceNumber(&args[1]))
+    if 0 <= k && k <= n {
+        return ValNumber(PochhammerHammer(n - k + 1,k))
+    }
+    return ValError(ERR_NUM)
+}
+
+FnPermutationA :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    y: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    x = FakeFloor(CoerceNumber(&args[0]))
+    y = FakeFloor(CoerceNumber(&args[1]))
+    if x < 0 || y < 0 { return ValError(ERR_NUM) }
+    if y == 0 { return ValNumber(1) }
+    return ValNumber(pow(x,y))
+}
+
+FnSeriesSum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx3: int = 0
+    gl3: int = 0
+    data: [4096] double = {0}
+    n: int = 0
+    x: double = 0
+    nn: double = 0
+    m: double = 0
+    x_m: double = 0
+    sum: double = 0
+    i: int = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+    x = CoerceNumber(&args[0])
+    nn = CoerceNumber(&args[1])
+    m = CoerceNumber(&args[2])
+    if groups < 1 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,groups - 1,&gx3,&gl3)
+    i = 0
+    while i < gl3 {
+        v: Val * = &args[gx3 + i]
+        if v->kind == VAL_ERROR { return ValError(v->err) }
+        if v->kind == VAL_EMPTY { i += 1; continue }
+        if v->kind != VAL_FLOAT { return ValError(ERR_VALUE) }
+        if n < 4096 {
+            data[n] = v->number
+            n += 1
+        }
+        i += 1
+    }
+    if x == 0 {
+        if nn <= 0 || nn + (n - 1) * m <= 0 { return ValError(ERR_NUM) }
+        return ValNumber(0)
+    }
+    x_m = pow(x,m)
+    x = pow(x,nn)
+    i = 0
+    while i < n {
+        sum += data[i] * x
+        x *= x_m
+        i += 1
+    }
+    if isfinite(sum) == 0 { return ValError(ERR_NUM) }
+    return ValNumber(sum)
+}
+
+FnLn1p :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    t: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    t = CoerceNumber(&args[0])
+    if t <= -1 { return ValError(ERR_NUM) }
+    return ValNumber(log1p(t))
+}
+
+FnSechCsch :: (st: EvalState *, args: Val *, count: int, marks: int *, which: int) -> Val {
+    x: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    x = CoerceNumber(&args[0])
+    if which == 0 {
+        return ValNumber(1 / cosh(x))
+    }
+    return ValNumber(1 / sinh(x))
+}
+
+FnPochhammer :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    n: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    x = CoerceNumber(&args[0])
+    n = CoerceNumber(&args[1])
+    return ValNumber(PochhammerHammer(x,n))
 }
 
 

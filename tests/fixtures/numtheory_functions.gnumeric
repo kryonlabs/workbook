@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+<gnm:SheetNameIndex><gnm:SheetName gnm:Cols="6" gnm:Rows="32">Sheet1</gnm:SheetName></gnm:SheetNameIndex>
+<gnm:Sheets><gnm:Sheet><gnm:Name>Sheet1</gnm:Name><gnm:MaxCol>5</gnm:MaxCol><gnm:MaxRow>31</gnm:MaxRow><gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="30">1</gnm:Cell><gnm:Cell Row="1" Col="0" ValueType="30">2</gnm:Cell><gnm:Cell Row="2" Col="0" ValueType="30">3</gnm:Cell><gnm:Cell Row="3" Col="0" ValueType="30">4</gnm:Cell>
+<gnm:Cell Row="0" Col="4">=PERMUT(5,3)</gnm:Cell>
+<gnm:Cell Row="1" Col="4">=PERMUT(10,0)</gnm:Cell>
+<gnm:Cell Row="2" Col="4">=PERMUT(3,5)</gnm:Cell>
+<gnm:Cell Row="3" Col="4">=PERMUT(20,10)</gnm:Cell>
+<gnm:Cell Row="4" Col="4">=PERMUTATIONA(4,3)</gnm:Cell>
+<gnm:Cell Row="5" Col="4">=PERMUTATIONA(0,0)</gnm:Cell>
+<gnm:Cell Row="6" Col="4">=PERMUTATIONA(2,1)</gnm:Cell>
+<gnm:Cell Row="7" Col="4">=SERIESSUM(2,1,2,A1:A4)</gnm:Cell>
+<gnm:Cell Row="8" Col="4">=SERIESSUM(1,0,1,A1:A4)</gnm:Cell>
+<gnm:Cell Row="9" Col="4">=SERIESSUM(0,1,1,A1:A4)</gnm:Cell>
+<gnm:Cell Row="10" Col="4">=LN1P(0.5)</gnm:Cell>
+<gnm:Cell Row="11" Col="4">=LN1P(-1)</gnm:Cell>
+<gnm:Cell Row="12" Col="4">=SECH(0)</gnm:Cell>
+<gnm:Cell Row="13" Col="4">=SECH(1)</gnm:Cell>
+<gnm:Cell Row="14" Col="4">=CSCH(1)</gnm:Cell>
+<gnm:Cell Row="15" Col="4">=ISPRIME(57)</gnm:Cell>
+<gnm:Cell Row="16" Col="4">=ISPRIME(59)</gnm:Cell>
+<gnm:Cell Row="17" Col="4">=ISPRIME(2)</gnm:Cell>
+<gnm:Cell Row="18" Col="4">=ISPRIME(0)</gnm:Cell>
+<gnm:Cell Row="19" Col="4">=ISPRIME(1000003)</gnm:Cell>
+<gnm:Cell Row="20" Col="4">=ITHPRIME(1)</gnm:Cell>
+<gnm:Cell Row="21" Col="4">=ITHPRIME(10)</gnm:Cell>
+<gnm:Cell Row="22" Col="4">=ITHPRIME(100)</gnm:Cell>
+<gnm:Cell Row="23" Col="4">=ITHPRIME(0)</gnm:Cell>
+<gnm:Cell Row="24" Col="4">=PFACTOR(57)</gnm:Cell>
+<gnm:Cell Row="25" Col="4">=PFACTOR(97)</gnm:Cell>
+<gnm:Cell Row="26" Col="4">=PFACTOR(1)</gnm:Cell>
+<gnm:Cell Row="27" Col="4">=POCHHAMMER(3,3)</gnm:Cell>
+<gnm:Cell Row="28" Col="4">=POCHHAMMER(2.5,2)</gnm:Cell>
+<gnm:Cell Row="29" Col="4">=PEARSON(A1:A4,A1:A4)</gnm:Cell>
+<gnm:Cell Row="30" Col="4">=FINDB("c","abcdef")</gnm:Cell>
+<gnm:Cell Row="31" Col="4">=SEARCHB("C","abcdef")</gnm:Cell>
+</gnm:Cells></gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>
