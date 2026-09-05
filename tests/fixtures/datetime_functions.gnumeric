@@ -15,5 +15,5 @@
 <gnm:Cell Row="10" Col="4">=ODF.TIME(0,0,0)</gnm:Cell>
 <gnm:Cell Row="11" Col="4">=ODF.TIME(23,0,30)</gnm:Cell>
 <gnm:Cell Row="12" Col="4">=UNIX2DATE(1e11)</gnm:Cell>
-</gnm:Cells></gnm:Sheet></gnm:Sheets>
+<gnm:Cell Row="12" Col="4">=UNIX2DATE(86400.5)</gnm:Cell><gnm:Cell Row="13" Col="4">=UNIX2DATE(1e9+0.7)</gnm:Cell><gnm:Cell Row="14" Col="4">=UNIX2DATE(86400.123456)</gnm:Cell><gnm:Cell Row="15" Col="4">=UNIX2DATE(86400.9999)</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets>
 </gnm:Workbook>

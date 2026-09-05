@@ -1210,7 +1210,18 @@ CellDisplayText :: (cell: Cell *, out: char *, cap: int) {
             return
         }
         snprintf(out,cap,"%s ",dbuf)
-        SerialToTimeText(cell->cached_number - (int)cell->cached_number,out + strlen(out),cap - strlen(out))
+        tfrac: double = cell->cached_number - (int)cell->cached_number
+        total_ms: double = tfrac * 86400000.0
+        ms: int = (int)(total_ms + 0.5)
+        while ms < 0 { ms += 86400000 }
+        ms = ms % 86400000
+        if (ms % 1000) == 0 {
+            SerialToTimeText(tfrac,out + strlen(out),cap - strlen(out))
+        }
+else {
+            seconds2: int = ms / 1000
+            snprintf(out + strlen(out),cap - strlen(out),"%02d:%02d:%02d.%03d",seconds2 / 3600,(seconds2 / 60) % 60,seconds2 % 60,ms % 1000)
+        }
         return
     }
     WbCellValueText(&v,out,cap)
@@ -12614,6 +12625,52 @@ CxPowInt :: (x: Cplx, n: int) -> Cplx {
     return res
 }
 
+CxPowQuadPath :: (a: Cplx, b: Cplx) -> Cplx {
+    qa: Quad = {0,0}
+    qb: Quad = {0,0}
+    qarg: Quad = {0,0}
+    qr: Quad = {0,0}
+    qrr: Quad = {0,0}
+    qra: Quad = {0,0}
+    qres: Quad = {0,0}
+    qtmp1: Quad = {0,0}
+    qtmp2: Quad = {0,0}
+    e1: double = 0
+    e2: double = 0
+    er: double = 0
+    r: Cplx = {0,0}
+    quad_init(&qa,a.re)
+    quad_init(&qb,a.im)
+    quad_atan2pi(&qarg,&qb,&qa)
+    quad_hypot(&qr,&qa,&qb)
+    quad_init(&qa,b.re)
+    quad_pow(&qa,&e1,&qr,&qa)
+    quad_init(&qb,0 - b.im)
+    quad_mul(&qtmp1,&qb,&qarg)
+    quad_mul(&qtmp2,&qtmp1,&QUAD_PI_EXPORT)
+    quad_exp(&qb,&e2,&qtmp2)
+    quad_mul(&qrr,&qa,&qb)
+    er = e1 + e2
+    if er > 2147483647 || er < -2147483648 {
+        er = er > 0 ? 2147483647 : -2147483648
+    }
+    quad_scalbn(&qrr,&qrr,(int)er)
+    quad_log(&qa,&qr)
+    quad_div(&qa,&qa,&QUAD_2PI_EXPORT)
+    quad_mulmod1(&qa,&qa,b.im)
+    quad_mulmod1(&qb,&qarg,b.re / 2)
+    quad_add(&qa,&qa,&qb)
+    quad_add(&qra,&qa,&qa)
+    qres = qra
+    quad_sinpi(&qa,&qra)
+    quad_mul(&qa,&qa,&qrr)
+    quad_cospi(&qb,&qra)
+    quad_mul(&qb,&qb,&qrr)
+    r.re = quad_val(&qb)
+    r.im = quad_val(&qa)
+    return r
+}
+
 CxPow :: (a: Cplx, b: Cplx) -> Cplx {
     r: Cplx = {0,0}
     if b.im == 0 {
@@ -12636,12 +12693,7 @@ CxPow :: (a: Cplx, b: Cplx) -> Cplx {
             return CxGslInverse(CxPowInt(a,0 - n))
         }
     }
-    mod: double = CxMod(a)
-    arg: double = CxAngle(a)
-    lm: double = log(mod)
-    newmod: double = exp(b.re * lm - b.im * arg)
-    newarg: double = b.re * arg + b.im * lm
-    return CxFromPolar(newmod,newarg)
+    return CxPowQuadPath(a,b)
 }
 
 CxSinh :: (a: Cplx) -> Cplx {
