@@ -5291,6 +5291,614 @@ else {
     return c > 0
 }
 
+DbCond :: struct {
+    op: int
+    is_num: int
+    num: double
+    text: [48] char
+}
+
+DbParseNumber :: (text: const char *, out: double *) -> int {
+    p: const char * = text
+    end: char * = NULL
+    v: double = 0
+    while p[0] == 32 || (p[0] >= 9 && p[0] <= 13) { p += 1 }
+    v = strtod(p,&end)
+    if end == p { return 0 }
+    while end[0] == 32 || (end[0] >= 9 && end[0] <= 13) { end += 1 }
+    if end[0] != 0 { return 0 }
+    out[0] = v
+    return 1
+}
+
+DbWildMatch :: (pat: const char *, s: const char *) -> int {
+    si: int = 0
+    star: int = -1
+    ss: int = 0
+    pi: int = 0
+    lc: [64] char = ""
+    ls: [256] char = ""
+    i: int = 0
+    while i < 63 && s[i] != 0 {
+        lc[i] = (char)tolower((unsigned char)s[i])
+        i += 1
+    }
+    lc[i] = 0
+    i = 0
+    while i < 63 && pat[i] != 0 {
+        ls[i] = (char)tolower((unsigned char)pat[i])
+        i += 1
+    }
+    ls[i] = 0
+    while lc[si] != 0 {
+        if (ls[pi] == 63 || ls[pi] == lc[si]) && ls[pi] != 0 {
+            si += 1
+            pi += 1
+        }
+else if ls[pi] == 42 && ls[pi] != 0 {
+            star = pi
+            pi += 1
+            ss = si
+        }
+else if star >= 0 {
+            pi = star + 1
+            ss += 1
+            si = ss
+        }
+else {
+            return 0
+        }
+    }
+    while ls[pi] == 42 { pi += 1 }
+    if ls[pi] == 0 { return 1 }
+    return 0
+}
+
+DbParseCond :: (v: Val *, out: DbCond *) -> int {
+    txt: const char * = ""
+    rest: const char * = ""
+    num: double = 0
+    out->op = 0
+    out->is_num = 0
+    out->num = 0
+    out->text[0] = 0
+    if v->kind == VAL_FLOAT {
+        out->op = 0
+        out->is_num = 1
+        out->num = v->number
+        return 1
+    }
+    if v->kind == VAL_BOOL {
+        out->op = 0
+        out->is_num = 1
+        out->num = v->number
+        return 1
+    }
+    if v->kind != VAL_STRING { out->op = 9; return 1 }
+    txt = v->text
+    if txt[0] == 0 { out->op = 10; return 1 }
+    if txt[0] == 60 && txt[1] == 61 {
+        rest = txt + 2
+        out->op = 5
+    }
+else if txt[0] == 62 && txt[1] == 61 {
+        rest = txt + 2
+        out->op = 3
+    }
+else if txt[0] == 60 && txt[1] == 62 {
+        rest = txt + 2
+        if rest[0] == 0 {
+            out->op = 7
+            return 1
+        }
+        out->op = 1
+    }
+else if txt[0] == 60 {
+        rest = txt + 1
+        out->op = 4
+    }
+else if txt[0] == 61 {
+        rest = txt + 1
+        if rest[0] == 0 {
+            out->op = 8
+            return 1
+        }
+        out->op = 0
+    }
+else if txt[0] == 62 {
+        rest = txt + 1
+        out->op = 2
+    }
+else {
+        rest = txt
+        out->op = 6
+    }
+    if DbParseNumber(rest,&num) != 0 {
+        out->is_num = 1
+        out->num = num
+        if out->op == 6 { out->op = 0 }
+    }
+else {
+        i: int = 0
+        while i < 47 && rest[i] != 0 {
+            out->text[i] = rest[i]
+            i += 1
+        }
+        out->text[i] = 0
+    }
+    return 1
+}
+
+DbTestCond :: (x: Val *, cond: DbCond *) -> int {
+    wrong: int = 0
+    xf: double = 0
+    c: int = 0
+    if cond->op == 9 { return 0 }
+    if cond->op == 7 {
+        if x->kind == VAL_EMPTY { return 0 }
+        return 1
+    }
+    if cond->op == 8 {
+        if x->kind == VAL_EMPTY { return 1 }
+        return 0
+    }
+    if cond->op == 10 {
+        if x->kind == VAL_EMPTY { return 1 }
+        if x->kind == VAL_STRING && x->text[0] == 0 { return 1 }
+        return 0
+    }
+    if cond->op == 6 {
+        if x->kind != VAL_STRING { return 0 }
+        return DbWildMatch(cond->text,x->text)
+    }
+    if cond->is_num != 0 {
+        if x->kind == VAL_BOOL || x->kind == VAL_ERROR { wrong = 1 }
+    else if x->kind == VAL_FLOAT { xf = x->number }
+    else if x->kind == VAL_STRING && cond->op == 0 {
+            if DbParseNumber(x->text,&xf) == 0 { wrong = 1 }
+        }
+    else { wrong = 1 }
+        if wrong != 0 {
+            if cond->op == 1 { return 1 }
+            return 0
+        }
+        if cond->op == 0 { return xf == cond->num ? 1 : 0 }
+        if cond->op == 1 { return xf != cond->num ? 1 : 0 }
+        if cond->op == 2 { return xf > cond->num ? 1 : 0 }
+        if cond->op == 3 { return xf >= cond->num ? 1 : 0 }
+        if cond->op == 4 { return xf < cond->num ? 1 : 0 }
+        return xf <= cond->num ? 1 : 0
+    }
+    if x->kind != VAL_STRING { wrong = 1 }
+    if wrong != 0 {
+        if cond->op == 1 { return 1 }
+        return 0
+    }
+    c = strcasecmp(x->text,cond->text)
+    if cond->op == 0 { return c == 0 ? 1 : 0 }
+    if cond->op == 1 { return c != 0 ? 1 : 0 }
+    if cond->op == 2 { return c > 0 ? 1 : 0 }
+    if cond->op == 3 { return c >= 0 ? 1 : 0 }
+    if cond->op == 4 { return c < 0 ? 1 : 0 }
+    return c <= 0 ? 1 : 0
+}
+
+DbFindColumn :: (args: Val *, db_start: int, db_cols: int, db_rows: int, field: Val *) -> int {
+    n: int = 0
+    hdr: const char * = ""
+    if field->kind == VAL_FLOAT || field->kind == VAL_BOOL {
+        return (int)field->number - 1
+    }
+    if field->kind != VAL_STRING { return -2 }
+    n = 0
+    while n < db_cols {
+        cell: Val * = &args[db_start + n]
+        if cell->kind == VAL_STRING {
+            hdr = cell->text
+        }
+else if cell->kind == VAL_FLOAT {
+            hdr = ""
+        }
+else {
+            hdr = ""
+        }
+        if cell->kind == VAL_STRING && strcasecmp(field->text,hdr) == 0 { return n }
+        n += 1
+    }
+    return -2
+}
+
+DbSetup :: (st: EvalState *, args: Val *, count: int, marks: int *, allow_missing: int, db_start: int *, db_cols: int *, db_rows: int *, fieldno: int *, crit_start: int *, crit_cols: int *, crit_rows: int *, conds: DbCond *, cond_cols: int *, cond_counts: int *, crit_row_count: int *) -> int {
+    groups: int = 0
+    field: Val * = NULL
+    crit_header: [16] int = {0}
+    r: int = 0
+    c: int = 0
+    ci: int = 0
+    db_start[0] = 0
+    db_cols[0] = 0
+    db_rows[0] = 0
+    fieldno[0] = -1
+    crit_start[0] = 0
+    crit_cols[0] = 0
+    crit_rows[0] = 0
+    crit_row_count[0] = 0
+    groups = ArgGroupCount(args,marks,count)
+    if groups < 2 { return 0 }
+    GroupBounds(marks,count,0,db_start,&db_rows[0])
+    db_cols[0] = st->call_group_cols[db_start[0]]
+    if db_cols[0] < 1 { return 0 }
+    db_rows[0] = db_rows[0] / db_cols[0]
+    if db_rows[0] < 2 { return 0 }
+    field_missing: int = 0
+    if allow_missing != 0 {
+        if groups < 3 {
+            field_missing = 1
+        }
+else {
+            field = &args[db_start[0] + db_cols[0] * db_rows[0]]
+            if (field->kind != VAL_STRING && field->kind != VAL_FLOAT && field->kind != VAL_BOOL) { field_missing = 1 }
+        }
+    }
+    if field_missing != 0 {
+        fieldno[0] = -1
+        GroupBounds(marks,count,groups - 1,crit_start,&crit_rows[0])
+    }
+else {
+        field = &args[db_start[0] + db_cols[0] * db_rows[0]]
+        fieldno[0] = DbFindColumn(args,db_start[0],db_cols[0],db_rows[0],field)
+        if fieldno[0] == -2 { return 0 }
+        if (fieldno[0] < 0 || fieldno[0] >= db_cols[0]) { fieldno[0] = -3 }
+        GroupBounds(marks,count,groups - 1,crit_start,&crit_rows[0])
+    }
+    if crit_rows[0] < 1 { return 0 }
+    crit_cols[0] = st->call_group_cols[crit_start[0]]
+    if crit_cols[0] < 1 { return 0 }
+    crit_rows[0] = crit_rows[0] / crit_cols[0]
+    if crit_rows[0] < 2 { return 0 }
+    c = 0
+    while c < crit_cols[0] && c < 16 {
+        hcell: Val * = &args[crit_start[0] + c]
+        crit_header[c] = -2
+        if hcell->kind == VAL_STRING && hcell->text[0] != 0 {
+            crit_header[c] = DbFindColumn(args,db_start[0],db_cols[0],db_rows[0],hcell)
+            if crit_header[c] == -2 { return 0 }
+        }
+else if hcell->kind == VAL_FLOAT {
+            crit_header[c] = DbFindColumn(args,db_start[0],db_cols[0],db_rows[0],hcell)
+            if crit_header[c] == -2 { crit_header[c] = -2 }
+        }
+        c += 1
+    }
+    r = 1
+    while r < crit_rows[0] {
+        cnt: int = 0
+        c = 0
+        while c < crit_cols[0] && c < 16 {
+            cc: Val * = &args[crit_start[0] + r * crit_cols[0] + c]
+            if cc->kind != VAL_EMPTY {
+                if ci < 128 {
+                    cond_cols[ci] = crit_header[c]
+                    DbParseCond(cc,&conds[ci])
+                    ci += 1
+                    cnt += 1
+                }
+            }
+            c += 1
+        }
+        cond_counts[r] = cnt
+        r += 1
+    }
+    crit_row_count[0] = crit_rows[0]
+    return 1
+}
+
+DbRowMatches :: (args: Val *, db_start: int, db_cols: int, row: int, conds: DbCond *, cond_cols: int *, cond_counts: int *, crit_rows: int) -> int {
+    cr: int = 1
+    k: int = 0
+    ci: int = 0
+    while cr < crit_rows {
+        all: int = 1
+        k = 0
+        while k < cond_counts[cr] {
+            cond: DbCond * = &conds[ci]
+            xv: Val * = NULL
+            empty_v: Val = {VAL_EMPTY,0.0,NULL,0,0}
+            if cond_cols[ci] >= 0 {
+                xv = &args[db_start + row * db_cols + cond_cols[ci]]
+            }
+else {
+                xv = &empty_v
+            }
+            if DbTestCond(xv,cond) == 0 {
+                all = 0
+                break
+            }
+            k += 1
+            ci += 1
+        }
+        if all != 0 { return 1 }
+        ci = ci + (cond_counts[cr] - k)
+        cr += 1
+    }
+    return 0
+}
+
+DbCollectFloats :: (st: EvalState *, args: Val *, count: int, marks: int *, allow_missing: int, out: double *, out_n: int *, err: int *) -> int {
+    db_start: int = 0
+    db_cols: int = 0
+    db_rows: int = 0
+    fieldno: int = -1
+    crit_start: int = 0
+    crit_cols: int = 0
+    crit_rows: int = 0
+    conds: [128] DbCond = {0}
+    cond_cols: [128] int = {0}
+    cond_counts: [64] int = {0}
+    crit_row_count: int = 0
+    row: int = 1
+    n: int = 0
+    if DbSetup(st,args,count,marks,allow_missing,&db_start,&db_cols,&db_rows,&fieldno,&crit_start,&crit_cols,&crit_rows,conds,cond_cols,cond_counts,&crit_row_count) == 0 {
+        err[0] = ERR_NUM
+        return 0
+    }
+    while row < db_rows {
+        cellv: Val * = NULL
+        if fieldno == -3 { break }
+        if fieldno >= 0 {
+            cellv = &args[db_start + row * db_cols + fieldno]
+            if cellv->kind == VAL_EMPTY { row += 1; continue }
+        }
+        if DbRowMatches(args,db_start,db_cols,row,conds,cond_cols,cond_counts,crit_rows) != 0 {
+            if fieldno < 0 {
+                cellv = &args[db_start + row * db_cols]
+                if cellv->kind == VAL_EMPTY { row += 1; continue }
+            }
+            if cellv->kind == VAL_ERROR { err[0] = cellv->err; return 0 }
+            if cellv->kind == VAL_STRING || cellv->kind == VAL_BOOL || cellv->kind == VAL_EMPTY { row += 1; continue }
+            if n < 512 {
+                out[n] = cellv->number
+                n += 1
+            }
+        }
+        row += 1
+    }
+    out_n[0] = n
+    return 1
+}
+
+DbCollectValues :: (st: EvalState *, args: Val *, count: int, marks: int *, allow_missing: int, ignore_strings: int, out: Val *, out_n: int *, err: int *) -> int {
+    db_start: int = 0
+    db_cols: int = 0
+    db_rows: int = 0
+    fieldno: int = -1
+    crit_start: int = 0
+    crit_cols: int = 0
+    crit_rows: int = 0
+    conds: [128] DbCond = {0}
+    cond_cols: [128] int = {0}
+    cond_counts: [64] int = {0}
+    crit_row_count: int = 0
+    row: int = 1
+    n: int = 0
+    if DbSetup(st,args,count,marks,allow_missing,&db_start,&db_cols,&db_rows,&fieldno,&crit_start,&crit_cols,&crit_rows,conds,cond_cols,cond_counts,&crit_row_count) == 0 {
+        err[0] = ERR_NUM
+        return 0
+    }
+    while row < db_rows {
+        cellv: Val * = NULL
+        if fieldno == -3 { break }
+        if fieldno >= 0 {
+            cellv = &args[db_start + row * db_cols + fieldno]
+            if cellv->kind == VAL_EMPTY { row += 1; continue }
+        }
+        if DbRowMatches(args,db_start,db_cols,row,conds,cond_cols,cond_counts,crit_rows) != 0 {
+            if fieldno < 0 {
+                cellv = &args[db_start + row * db_cols]
+                if n < 512 {
+                    out[n] = cellv[0]
+                    if cellv->kind == VAL_STRING && cellv->text != NULL {
+                        out[n].text = wb_strdup(cellv->text)
+                    }
+                    n += 1
+                }
+                row += 1
+                continue
+            }
+            if (ignore_strings != 0 && cellv->kind == VAL_STRING) || cellv->kind == VAL_BOOL || cellv->kind == VAL_EMPTY { row += 1; continue }
+            if n < 512 {
+                out[n] = cellv[0]
+                if cellv->kind == VAL_STRING && cellv->text != NULL {
+                    out[n].text = wb_strdup(cellv->text)
+                }
+                n += 1
+            }
+        }
+        row += 1
+    }
+    out_n[0] = n
+    return 1
+}
+
+DbFloatAgg :: (st: EvalState *, args: Val *, count: int, marks: int *, agg: int, zero_num_error: int) -> Val {
+    vals: [512] double = {0}
+    n: int = 0
+    err: int = 0
+    i: int = 0
+    total: double = 0
+    prod: double = 1
+    mean: double = 0
+    m2: double = 0
+    if DbCollectFloats(st,args,count,marks,0,vals,&n,&err) == 0 {
+        return ValError(err)
+    }
+    if n == 0 && zero_num_error != 0 { return ValError(ERR_NUM) }
+    if agg == 0 {
+        if n == 0 { return ValError(ERR_NUM) }
+        i = 0
+        while i < n { total += vals[i]; i += 1 }
+        return ValNumber(total / (double)n)
+    }
+    if agg == 1 {
+        if n == 0 { return ValError(ERR_NUM) }
+        best: double = vals[0]
+        i = 1
+        while i < n {
+            if vals[i] > best { best = vals[i] }
+            i += 1
+        }
+        return ValNumber(best)
+    }
+    if agg == 2 {
+        if n == 0 { return ValError(ERR_NUM) }
+        best2: double = vals[0]
+        i = 1
+        while i < n {
+            if vals[i] < best2 { best2 = vals[i] }
+            i += 1
+        }
+        return ValNumber(best2)
+    }
+    if agg == 3 {
+        i = 0
+        while i < n { total += vals[i]; i += 1 }
+        return ValNumber(total)
+    }
+    if agg == 4 {
+        i = 0
+        while i < n { prod *= vals[i]; i += 1 }
+        return ValNumber(prod)
+    }
+    i = 0
+    while i < n { total += vals[i]; i += 1 }
+    if n == 0 { return ValError(ERR_NUM) }
+    mean = total / (double)n
+    i = 0
+    while i < n {
+        d: double = vals[i] - mean
+        m2 += d * d
+        i += 1
+    }
+    if agg == 5 {
+        if n < 2 { return ValError(ERR_NUM) }
+        return ValNumber(sqrt(m2 / (double)(n - 1)))
+    }
+    if agg == 6 {
+        return ValNumber(sqrt(m2 / (double)n))
+    }
+    if agg == 7 {
+        if n < 2 { return ValError(ERR_NUM) }
+        return ValNumber(m2 / (double)(n - 1))
+    }
+    return ValNumber(m2 / (double)n)
+}
+
+FnDaverage :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,0,1)
+}
+
+FnDmax :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,1,1)
+}
+
+FnDmin :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,2,1)
+}
+
+FnDsum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,3,0)
+}
+
+FnDproduct :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,4,0)
+}
+
+FnDstdev :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,5,0)
+}
+
+FnDstdevp :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,6,0)
+}
+
+FnDvar :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,7,0)
+}
+
+FnDvarp :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return DbFloatAgg(st,args,count,marks,8,0)
+}
+
+FnDcount :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    vals: [512] Val = {0}
+    n: int = 0
+    err: int = 0
+    i: int = 0
+    n2: int = 0
+    if DbCollectValues(st,args,count,marks,1,1,vals,&n,&err) == 0 {
+        return ValError(err)
+    }
+    i = 0
+    while i < n {
+        if vals[i].kind == VAL_ERROR { i += 1; continue }
+        n2 += 1
+        i += 1
+    }
+    return ValNumber((double)n2)
+}
+
+FnDcounta :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    vals: [512] Val = {0}
+    n: int = 0
+    err: int = 0
+    if DbCollectValues(st,args,count,marks,1,0,vals,&n,&err) == 0 {
+        return ValError(err)
+    }
+    return ValNumber((double)n)
+}
+
+FnDget :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    vals: [512] Val = {0}
+    n: int = 0
+    err: int = 0
+    res: Val = {VAL_EMPTY,0.0,NULL,0,0}
+    if DbCollectValues(st,args,count,marks,0,0,vals,&n,&err) == 0 {
+        return ValError(err)
+    }
+    if n == 0 { return ValError(ERR_VALUE) }
+    res = vals[0]
+    cleanup_i: int = 1
+    while cleanup_i < n {
+        if vals[cleanup_i].kind == VAL_STRING && vals[cleanup_i].text != NULL {
+            free((void *)vals[cleanup_i].text)
+        }
+        cleanup_i += 1
+    }
+    return res
+}
+
+FnGetpivotdata :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    db_start: int = 0
+    db_cols: int = 0
+    db_rows: int = 0
+    groups: int = 0
+    fieldno: int = -1
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].from_range == 0 { return ValError(ERR_VALUE) }
+    groups = ArgGroupCount(args,marks,count)
+    if groups < 1 { return ValError(ERR_REF) }
+    GroupBounds(marks,count,0,&db_start,&db_rows)
+    db_cols = st->call_group_cols[db_start]
+    if db_cols < 1 { return ValError(ERR_REF) }
+    db_rows = db_rows / db_cols
+    if db_rows < 1 { return ValError(ERR_REF) }
+    fieldno = DbFindColumn(args,db_start,db_cols,db_rows,&args[db_start + db_cols * db_rows])
+    if fieldno < 0 || fieldno >= db_cols { return ValError(ERR_REF) }
+    cellv: Val * = &args[db_start + (db_rows - 1) * db_cols + fieldno]
+    if cellv->kind != VAL_FLOAT { return ValError(ERR_REF) }
+    return ValNumber(cellv->number)
+}
+
 CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, marks: int *) -> Val {
     st->hint = 0
 
@@ -5356,6 +5964,19 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"tbillyield") == 0 { return FnTbillyield(st,args,count,marks) }
     if strcmp(name,"effect") == 0 { return FnEffect(st,args,count,marks) }
     if strcmp(name,"nominal") == 0 { return FnNominal(st,args,count,marks) }
+    if strcmp(name,"daverage") == 0 { return FnDaverage(st,args,count,marks) }
+    if strcmp(name,"dcounta") == 0 { return FnDcounta(st,args,count,marks) }
+    if strcmp(name,"dcount") == 0 { return FnDcount(st,args,count,marks) }
+    if strcmp(name,"dget") == 0 { return FnDget(st,args,count,marks) }
+    if strcmp(name,"dmax") == 0 { return FnDmax(st,args,count,marks) }
+    if strcmp(name,"dmin") == 0 { return FnDmin(st,args,count,marks) }
+    if strcmp(name,"dproduct") == 0 { return FnDproduct(st,args,count,marks) }
+    if strcmp(name,"dstdevp") == 0 { return FnDstdevp(st,args,count,marks) }
+    if strcmp(name,"dstdev") == 0 { return FnDstdev(st,args,count,marks) }
+    if strcmp(name,"dsum") == 0 { return FnDsum(st,args,count,marks) }
+    if strcmp(name,"dvarp") == 0 { return FnDvarp(st,args,count,marks) }
+    if strcmp(name,"dvar") == 0 { return FnDvar(st,args,count,marks) }
+    if strcmp(name,"getpivotdata") == 0 { return FnGetpivotdata(st,args,count,marks) }
     if strcmp(name,"dollarde") == 0 { return FnDollarde(st,args,count,marks) }
     if strcmp(name,"dollarfr") == 0 { return FnDollarfr(st,args,count,marks) }
     if strcmp(name,"fvschedule") == 0 { return FnFvschedule(st,args,count,marks) }
@@ -5659,7 +6280,7 @@ ParseGnumericCell :: (sheet: Sheet *, node: KryXml *) {
         return
     }
     wb_replace_text(&cell->serialized,content)
-    if content[0] == '=' {
+    if content[0] == '=' && value_type == -1 {
         wb_replace_text(&cell->text,content)
         cell->kind = CELL_FORMULA
         cell->computed = 0

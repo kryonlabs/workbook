@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <office:document-meta xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"/>
+  <gnm:SheetNameIndex>
+    <gnm:SheetName gnm:Cols="20" gnm:Rows="40">Sheet1</gnm:SheetName>
+  </gnm:SheetNameIndex>
+  <office:settings/>
+  <gnm:Sheets>
+    <gnm:Sheet DisplayFormulas="0" HideZero="0" HideGrid="0" HideColHeader="0" HideRowHeader="0" DisplayOutlines="1" OutlineSymbolsBelow="1" OutlineSymbolsRight="1" Visibility="GNM_SHEET_VISIBILITY_VISIBLE" GridColor="0:0:0">
+      <gnm:Name>Sheet1</gnm:Name>
+      <gnm:MaxCol>19</gnm:MaxCol>
+      <gnm:MaxRow>39</gnm:MaxRow>
+      <gnm:Cells>
+        <gnm:Cell Row="0" Col="0" ValueType="60">Name</gnm:Cell>
+        <gnm:Cell Row="0" Col="1" ValueType="60">Age</gnm:Cell>
+        <gnm:Cell Row="0" Col="10" ValueType="60">Name</gnm:Cell>
+        <gnm:Cell Row="0" Col="12" ValueType="60">Name</gnm:Cell>
+        <gnm:Cell Row="0" Col="14" ValueType="60">Age</gnm:Cell>
+        <gnm:Cell Row="0" Col="2" ValueType="60">Salary</gnm:Cell>
+        <gnm:Cell Row="0" Col="3">=DAVERAGE(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="0" Col="4" ValueType="60">Age</gnm:Cell>
+        <gnm:Cell Row="0" Col="5" ValueType="60">Salary</gnm:Cell>
+        <gnm:Cell Row="0" Col="7" ValueType="60">Name</gnm:Cell>
+        <gnm:Cell Row="1" Col="0" ValueType="60">Ann</gnm:Cell>
+        <gnm:Cell Row="1" Col="1" ValueType="30">34</gnm:Cell>
+        <gnm:Cell Row="1" Col="10" ValueType="60">*o*</gnm:Cell>
+        <gnm:Cell Row="1" Col="12" ValueType="60">&lt;&gt;Bob</gnm:Cell>
+        <gnm:Cell Row="1" Col="2" ValueType="30">43000</gnm:Cell>
+        <gnm:Cell Row="1" Col="3">=DAVERAGE(A1:C7,&quot;Age&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="1" Col="4" ValueType="60">&gt;=40</gnm:Cell>
+        <gnm:Cell Row="1" Col="7" ValueType="60">=Cleo</gnm:Cell>
+        <gnm:Cell Row="10" Col="3">=DMIN(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="11" Col="3">=DPRODUCT(A1:C7,&quot;Salary&quot;,H1:I2)</gnm:Cell>
+        <gnm:Cell Row="12" Col="3">=DSTDEV(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="13" Col="3">=DSTDEVP(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="14" Col="3">=DSUM(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="15" Col="3">=DVAR(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="16" Col="3">=DVARP(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="17" Col="3">=DCOUNT(A1:C7,,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="18" Col="3">=DCOUNTA(A1:C7,,O1:O3)</gnm:Cell>
+        <gnm:Cell Row="19" Col="3">=DGET(A1:C7,&quot;Name&quot;,M1:M2)</gnm:Cell>
+        <gnm:Cell Row="2" Col="0" ValueType="60">Bob</gnm:Cell>
+        <gnm:Cell Row="2" Col="1" ValueType="30">45</gnm:Cell>
+        <gnm:Cell Row="2" Col="2" ValueType="30">44000</gnm:Cell>
+        <gnm:Cell Row="2" Col="3">=DAVERAGE(A1:C7,&quot;Salary&quot;,H1:I2)</gnm:Cell>
+        <gnm:Cell Row="2" Col="4" ValueType="60">&gt;42000</gnm:Cell>
+        <gnm:Cell Row="2" Col="5" ValueType="60">&lt;60</gnm:Cell>
+        <gnm:Cell Row="20" Col="3">=DCOUNT(A1:C7,&quot;Nope&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="21" Col="3">=DAVERAGE(A1:C7,3,H1:I2)</gnm:Cell>
+        <gnm:Cell Row="22" Col="3">=DMAX(A1:C7,2,O1:O3)</gnm:Cell>
+        <gnm:Cell Row="23" Col="3">=GETPIVOTDATA(&quot;Salary&quot;,A1:C7)</gnm:Cell>
+        <gnm:Cell Row="24" Col="3">=GETPIVOTDATA(&quot;Nope&quot;,A1:C7)</gnm:Cell>
+        <gnm:Cell Row="25" Col="3">=DGET(A1:C7,&quot;Salary&quot;,K1:K2)</gnm:Cell>
+        <gnm:Cell Row="3" Col="0" ValueType="60">Cleo</gnm:Cell>
+        <gnm:Cell Row="3" Col="1" ValueType="30">39</gnm:Cell>
+        <gnm:Cell Row="3" Col="2" ValueType="30">40000</gnm:Cell>
+        <gnm:Cell Row="3" Col="3">=DCOUNT(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="4" Col="0" ValueType="60">Don</gnm:Cell>
+        <gnm:Cell Row="4" Col="1" ValueType="30">61</gnm:Cell>
+        <gnm:Cell Row="4" Col="2" ValueType="30">52000</gnm:Cell>
+        <gnm:Cell Row="4" Col="3">=DCOUNT(A1:C7,&quot;Name&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="5" Col="0" ValueType="60">Eve</gnm:Cell>
+        <gnm:Cell Row="5" Col="1" ValueType="30">28</gnm:Cell>
+        <gnm:Cell Row="5" Col="2" ValueType="30">34000</gnm:Cell>
+        <gnm:Cell Row="5" Col="3">=DCOUNTA(A1:C7,&quot;Name&quot;,E1:F3)</gnm:Cell>
+        <gnm:Cell Row="6" Col="0" ValueType="60">Fay</gnm:Cell>
+        <gnm:Cell Row="6" Col="1" ValueType="30">39</gnm:Cell>
+        <gnm:Cell Row="6" Col="2" ValueType="30">39990</gnm:Cell>
+        <gnm:Cell Row="6" Col="3">=DCOUNTA(A1:C7,&quot;Salary&quot;,H1:I2)</gnm:Cell>
+        <gnm:Cell Row="7" Col="3">=DGET(A1:C7,&quot;Salary&quot;,H1:I2)</gnm:Cell>
+        <gnm:Cell Row="8" Col="3">=DGET(A1:C7,&quot;Age&quot;,K1:K2)</gnm:Cell>
+        <gnm:Cell Row="9" Col="3">=DMAX(A1:C7,&quot;Salary&quot;,E1:F3)</gnm:Cell>
+      </gnm:Cells>
+    </gnm:Sheet>
+  </gnm:Sheets>
+</gnm:Workbook>
