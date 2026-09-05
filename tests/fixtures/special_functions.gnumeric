@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+<gnm:SheetNameIndex><gnm:SheetName gnm:Cols="6" gnm:Rows="20">Sheet1</gnm:SheetName></gnm:SheetNameIndex>
+<gnm:Sheets><gnm:Sheet><gnm:Name>Sheet1</gnm:Name><gnm:MaxCol>5</gnm:MaxCol><gnm:MaxRow>19</gnm:MaxRow><gnm:Cells>
+<gnm:Cell Row="0" Col="4">=REDUCEPI(10,1)</gnm:Cell><gnm:Cell Row="1" Col="4">=REDUCEPI(-10,1)</gnm:Cell><gnm:Cell Row="2" Col="4">=REDUCEPI(100,3)</gnm:Cell><gnm:Cell Row="3" Col="4">=REDUCEPI(1e10,1)</gnm:Cell><gnm:Cell Row="4" Col="4">=REDUCEPI(1e20,2)</gnm:Cell><gnm:Cell Row="5" Col="4">=REDUCEPI(0.5,0)</gnm:Cell><gnm:Cell Row="6" Col="4">=REDUCEPI(1e15,-1)</gnm:Cell><gnm:Cell Row="7" Col="4">=REDUCEPI(10,1,TRUE)</gnm:Cell><gnm:Cell Row="8" Col="4">=REDUCEPI(100,3,TRUE)</gnm:Cell><gnm:Cell Row="9" Col="4">=REDUCEPI(1e10,1,TRUE)</gnm:Cell><gnm:Cell Row="10" Col="4">=REDUCEPI(5,-1)</gnm:Cell><gnm:Cell Row="11" Col="4">=REDUCEPI(5,8)</gnm:Cell><gnm:Cell Row="12" Col="4">=REDUCEPI(1e100,7)</gnm:Cell><gnm:Cell Row="13" Col="4">=IMIGAMMA("2","3")</gnm:Cell><gnm:Cell Row="14" Col="4">=IMIGAMMA("0.5","1.5")</gnm:Cell><gnm:Cell Row="15" Col="4">=IMIGAMMA("3","1+i")</gnm:Cell><gnm:Cell Row="16" Col="4">=IMIGAMMA("1","10i")</gnm:Cell><gnm:Cell Row="17" Col="4">=IMIGAMMA("2","3",FALSE)</gnm:Cell><gnm:Cell Row="18" Col="4">=IMIGAMMA("2","3",TRUE,FALSE)</gnm:Cell><gnm:Cell Row="19" Col="4">=IMIGAMMA("-1","2")</gnm:Cell>
+</gnm:Cells></gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>

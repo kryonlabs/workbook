@@ -5857,6 +5857,41 @@ else {
     if (k & 2) != 0 { return 0 - y }
     return y
 }
+GoCospi :: (x_in: double) -> double {
+    x: double = x_in
+    k: int = 0
+    y: double = 0
+    if x < 0 {
+        k2: int = 0
+        x = 0 - ReduceHalfPos(0 - x,&k2)
+        k = 4 - k2
+        if x == -0.25 {
+            x += 0.5
+            k += 3
+        }
+    }
+else {
+        x = ReduceHalfPos(x,&k)
+    }
+    if x == 0 && (k & 1) == 1 { return 0.0 }
+    k += 1
+    if x == 0 {
+        y = (k & 1) != 0 ? 1 : 0
+    }
+else if x == 0.25 {
+        y = 0.707106781186547524400844362104849039284835937688474036588339
+    }
+else {
+        if (k & 1) != 0 {
+            y = cos(3.141592653589793 * x)
+        }
+else {
+            y = sin(3.141592653589793 * x)
+        }
+    }
+    if (k & 2) != 0 { return 0 - y }
+    return y
+}
 
 BesselICore :: (x: double, nu: double, nb: int, bi: double *) -> int {
     nend: int = 0
@@ -13440,6 +13475,7 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"improduct") == 0 { return FnImproduct(st,args,count,marks) }
     if strcmp(name,"imfact") == 0 { return FnImfact(st,args,count,marks) }
     if strcmp(name,"imgamma") == 0 { return FnImgamma(st,args,count,marks) }
+    if strcmp(name,"imigamma") == 0 { return FnImigamma(st,args,count,marks) }
     if strcmp(name,"acot") == 0 { return FnMath1(0,args,count) }
     if strcmp(name,"acoth") == 0 { return FnMath1(1,args,count) }
     if strcmp(name,"acosh") == 0 { return FnMath1(2,args,count) }
@@ -13867,6 +13903,7 @@ else {
     if strcmp(name,"odf.sumproduct") == 0 { return FnSumProduct(st,args,count,marks) }
     if strcmp(name,"fourier") == 0 { return FnFourier(st,args,count,marks) }
     if strcmp(name,"hpfilter") == 0 { return FnHpfilter(st,args,count,marks) }
+    if strcmp(name,"reducepi") == 0 { return FnReducepi(st,args,count,marks) }
     if strcmp(name,"pearson") == 0 { return FnCorrel(st,args,count,marks) }
     if strcmp(name,"findb") == 0 { return FnFind(st,args,count,marks) }
     if strcmp(name,"searchb") == 0 { return FnSearch(st,args,count,marks) }
@@ -15949,6 +15986,415 @@ else {
         res = 0 - res
     }
     return res
+}
+
+CxTemmeD :: (a: Cplx, z: Cplx) -> Cplx {
+    t: Cplx = {0,0}
+    t = CxDiv(CxPow(z,a),CxExp(z))
+    f: Cplx = CxMul(CxGamma(a),a)
+    return CxDiv(t,f)
+}
+
+CxIgammaLowerCoefs :: (ai: Cplx *, bi: Cplx *, i: int, a: Cplx *, z: Cplx *) {
+    f: Cplx = {0,0}
+    if i == 1 {
+        ai[0].re = 1
+        ai[0].im = 0
+    }
+else if (i & 1) != 0 {
+        ai[0] = CxScale(z[0],i >> 1)
+    }
+else {
+        f.re = 0 - (a->re + ((i >> 1) - 1))
+        f.im = 0 - a->im
+        ai[0] = CxMul(f,z[0])
+    }
+    bi[0].re = a->re + (i - 1)
+    bi[0].im = a->im
+}
+
+CxIgammaLowerCf :: (dst: Cplx *, a: Cplx *, z: Cplx *) -> int {
+    a0: Cplx = {1,0}
+    a1v: Cplx = {0,0}
+    b0: Cplx = {0,0}
+    b1v: Cplx = {1,0}
+    ai: Cplx = {0,0}
+    bi: Cplx = {0,0}
+    t1: Cplx = {0,0}
+    t2: Cplx = {0,0}
+    c1: Cplx = {0,0}
+    c2: Cplx = {0,0}
+    big: double = 18446744073709551616.0
+    i: int = 1
+    e: int = 0
+    s: double = 0
+    m: double = 0
+    while i < 100 {
+        CxIgammaLowerCoefs(&ai,&bi,i,a,z)
+        t1 = CxMul(bi,a1v)
+        t2 = CxMul(ai,a0)
+        a2v: Cplx = CxAdd(t1,t2)
+        a0 = a1v
+        a1v = a2v
+        t1 = CxMul(bi,b1v)
+        t2 = CxMul(ai,b0)
+        b2v: Cplx = CxAdd(t1,t2)
+        b0 = b1v
+        b1v = b2v
+        m = fabs(b1v.re) + fabs(b1v.im)
+        if m >= big || m <= 1 / big {
+            if m == 0 { return 0 }
+            frexp(m,&e)
+            s = ldexp(1.0,-e + 1)
+            a0 = CxScale(a0,s)
+            a1v = CxScale(a1v,s)
+            b0 = CxScale(b0,s)
+            b1v = CxScale(b1v,s)
+        }
+        t1 = CxMul(a1v,b0)
+        t2 = CxMul(a0,b1v)
+        c1 = CxSub(t1,t2)
+        c2 = CxMul(b0,b1v)
+        if CxMod(c1) <= CxMod(c2) * (2.2204460492503131e-16 / 2) {
+            break
+        }
+        i += 1
+    }
+    if i == 100 {
+        return 0
+    }
+    res2: Cplx = CxDiv(a1v,b1v)
+    zn: Cplx = CxNeg(z[0])
+    dst[0] = CxMul(CxMul(res2,CxExp(zn)),CxPow(z[0],a[0]))
+    return 1
+}
+
+CxIgammaUpperAsymp :: (dst: Cplx *, a: Cplx *, z: Cplx *) -> int {
+    am: double = CxMod(a[0])
+    zm: double = CxMod(z[0])
+    s: Cplx = {0,0}
+    t: Cplx = {0,0}
+    zero2: Cplx = {0,0}
+    i: int = 0
+    if am >= zm { return 0 }
+    if 2 * zm < 53 * 0.693147180559945309417232121458 { return 0 }
+    s = zero2
+    a1c: Cplx = {1,0}
+    t = CxTemmeD(CxSub(a[0],a1c),z[0])
+    i = 0
+    while i < 100 {
+        s = CxAdd(s,t)
+        if CxMod(t) <= CxMod(s) * 2.2204460492503131e-16 {
+            dst[0] = s
+            return 1
+        }
+        t = CxDiv(t,z[0])
+        ip1: Cplx = {(double)(i + 1),0}
+        t = CxMul(t,CxSub(a[0],ip1))
+        i += 1
+    }
+    return 0
+}
+
+CxIgammaFixupUpperReal :: (res: Cplx *, a: Cplx, z: Cplx) {
+    lres: Cplx = {0,0}
+    one: Cplx = {1,0}
+    if z.im == 0 && z.re < 0 && a.im == 0 && a.re != floor(a.re) {
+        lres = CxSub(one,res[0])
+        m2: double = CxMod(lres)
+        res[0].re = m2 * GoCospi(a.re)
+        res[0].im = m2 * GoSinpi(a.re)
+        res[0] = CxSub(one,res[0])
+    }
+}
+
+CxIgammaFixup :: (a: Cplx, z: Cplx, lower: int, regularized: int, res_in: Cplx, have_lower: int, have_regularized: int, have_ga_in: int) -> Cplx {
+    res: Cplx = res_in
+    ga: Cplx = {0,0}
+    have_ga: int = have_ga_in
+    one: Cplx = {1,0}
+    if regularized != have_regularized {
+        ga = CxGamma(a)
+        have_ga = 1
+        if have_regularized != 0 {
+            res = CxMul(res,ga)
+        }
+else {
+            res = CxDiv(res,ga)
+        }
+        have_regularized = 1
+    }
+    if lower != have_lower {
+        if have_regularized != 0 {
+            res = CxSub(one,res)
+        }
+else {
+            if have_ga == 0 {
+                ga = CxGamma(a)
+            }
+            res = CxSub(ga,res)
+        }
+    }
+    return res
+}
+CxIgamma :: (a: Cplx, z: Cplx, lower: int, regularized: int) -> Cplx {
+    res: Cplx = {0,0}
+    ga: Cplx = {0,0}
+    have_lower: int = 0
+    have_regularized: int = 0
+    have_ga: int = 0
+    one: Cplx = {1,0}
+    zero: Cplx = {0,0}
+    if regularized != 0 && a.im == 0 && a.re <= 0 && a.re == floor(a.re) {
+        res = zero
+        have_lower = 0
+        have_regularized = 1
+        return CxIgammaFixup(a,z,lower,regularized,res,have_lower,have_regularized,0)
+    }
+    if a.im == 0 && a.re >= 0 && z.im == 0 && z.re >= 0 {
+        res.re = pgamma(z.re,a.re,1,lower != 0 ? 1 : 0,0)
+        res.im = 0
+        have_lower = lower
+        have_regularized = 1
+        return CxIgammaFixup(a,z,lower,regularized,res,have_lower,have_regularized,0)
+    }
+    if CxIgammaUpperAsymp(&res,&a,&z) != 0 {
+        have_lower = 0
+        have_regularized = 1
+        CxIgammaFixupUpperReal(&res,a,z)
+        return CxIgammaFixup(a,z,lower,regularized,res,have_lower,have_regularized,0)
+    }
+    if CxIgammaLowerCf(&res,&a,&z) != 0 {
+        have_lower = 1
+        have_regularized = 0
+        return CxIgammaFixup(a,z,lower,regularized,res,have_lower,have_regularized,0)
+    }
+    res.re = 0.0 / 0.0
+    res.im = 0.0 / 0.0
+    return res
+}
+
+
+FnImigamma :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: Cplx = {0,0}
+    z: Cplx = {0,0}
+    unit: int = 105
+    unit2: int = 105
+    lower: int = 1
+    reg: int = 1
+    if count < 2 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,0,&a,&unit) < 0 { return ValError(ERR_VALUE) }
+    if CxArg(args,count,1,&z,&unit2) < 0 { return ValError(ERR_VALUE) }
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        lower = CoerceNumber(&args[2]) != 0 ? 1 : 0
+    }
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        reg = CoerceNumber(&args[3]) != 0 ? 1 : 0
+    }
+    return CxVal(CxIgamma(a,z,lower,reg),unit)
+}
+
+ReducePiSimple :: (x: double, pk: int *, kbits: int) -> double {
+    two_over_pi: double = 0.63661977236758134307553505349
+    pi_over_two: [5] double = {1.5707963109016418,1.5893254712295857e-08,6.123233932053594e-17,6.368317055225283e-25,1.082856653238257e-32}
+    k: double = 0
+    xx: double = 0
+    i: int = 0
+    k = round(x * ldexp(two_over_pi,kbits - 2))
+    xx = 0
+    pk[0] = (int)k
+    if k == 0 {
+        return x
+    }
+    x -= k * ldexp(pi_over_two[0],2 - kbits)
+    i = 1
+    while i < 5 {
+        dx: double = k * ldexp(pi_over_two[i],2 - kbits)
+        s: double = x - dx
+        xx += x - s - dx
+        x = s
+        i += 1
+    }
+    return x + xx
+}
+
+ReducePiAddAt :: (dst: unsigned *, p_in: unsigned long) {
+    p: unsigned long = p_in
+    h: unsigned = (unsigned)(p >> 63)
+    p += *dst
+    dst[0] = (unsigned)(p & 0xffffffff)
+    dst -= 1
+    p = p >> 32
+    if p != 0 {
+        p += *dst
+        dst[0] = (unsigned)(p & 0xffffffff)
+        dst -= 1
+        if (p >> 32) != 0 {
+            while 1 {
+                *dst += 1
+                if *dst != 0 { break }
+                dst -= 1
+            }
+        }
+    }
+else if h != 0 {
+        dst -= 1
+        while 1 {
+            *dst += 1
+            if *dst != 0 { break }
+            dst -= 1
+        }
+    }
+}
+
+ReducePiFull :: (x: double, pk: int *, kbits: int) -> double {
+    one_over_two_pi: [36] unsigned = {0x28be60db,0x9391054a,0x7f09d5f4,0x7d4d3770,
+        0x36d8a566,0x4f10e410,0x7f9458ea,0xf7aef158,0x6dc91b8e,0x909374b8,
+        0x01924bba,0x82746487,0x3f877ac7,0x2c4a69cf,0xba208d7d,0x4baed121,
+        0x3a671c09,0xad17df90,0x4e64758e,0x60d4ce7d,0x272117e2,0xef7e4a0e,
+        0xc7fe25ff,0xf7816603,0xfbcbc462,0xd6829b47,0xdb4d9fb3,0xc9f2c26d,
+        0xd3d18fd9,0xa797fa8b,0x5d49eeb1,0xfaf97c5e,0xcf41ce7d,0xe294a4ba,
+        0x9afed7ec,0x47e35742}
+    pi_over_four: [4] unsigned = {0xc90fdaa2,0x2168c234,0xc4c6628b,0x80dc1cd1}
+    m: double = 0
+    e: int = 0
+    di: unsigned = 0
+    i: int = 0
+    j: int = 0
+    neg: int = 0
+    w2: unsigned = 0
+    w1: unsigned = 0
+    w0: unsigned = 0
+    wm1: unsigned = 0
+    wm2: unsigned = 0
+    r: [6] unsigned = {0}
+    r4: [4] unsigned = {0}
+    rh: double = 0
+    rl: double = 0
+    l48: double = 0
+    h48: double = 0
+    m = frexp(x,&e)
+    if e >= 53 {
+        di = ((unsigned)e - 53) / 32
+        e -= (int)(di * 32)
+    }
+else {
+        di = 0
+    }
+    m = ldexp(m,e - 64)
+    w2 = (unsigned)floor(m)
+    m = ldexp(m - w2,32)
+    w1 = (unsigned)floor(m)
+    m = ldexp(m - w1,32)
+    w0 = (unsigned)floor(m)
+    m = ldexp(m - w0,32)
+    wm1 = (unsigned)floor(m)
+    m = ldexp(m - wm1,32)
+    wm2 = (unsigned)floor(m)
+    r[0] = 0
+    i = 0
+    while i < 5 {
+        r[i + 1] = 0
+        if wm2 != 0 && i > 1 {
+            ReducePiAddAt(&r[i + 1],(unsigned long)wm2 * one_over_two_pi[i - 2])
+        }
+        if wm1 != 0 && i > 0 {
+            ReducePiAddAt(&r[i + 1],(unsigned long)wm1 * one_over_two_pi[i - 1])
+        }
+        if w0 != 0 {
+            ReducePiAddAt(&r[i + 1],(unsigned long)w0 * one_over_two_pi[i + di])
+        }
+        if w1 != 0 {
+            ReducePiAddAt(&r[i + 1],(unsigned long)w1 * one_over_two_pi[i + 1 + di])
+        }
+        if w2 != 0 {
+            ReducePiAddAt(&r[i + 1],(unsigned long)w2 * one_over_two_pi[i + 2 + di])
+        }
+        if i == 3 && ((r[1] + 1) & (0x7fffffff >> kbits)) > 1 {
+            break
+        }
+        i += 1
+    }
+    pk[0] = kbits != 0 ? (int)(r[1] >> (32 - kbits)) : 0
+    neg = (int)((r[1] >> (31 - kbits)) & 1)
+    if neg != 0 {
+        pk[0] += 1
+        j = 1
+        while j <= i {
+            r[j] = r[j] ^ 0xffffffff
+            j += 1
+        }
+        ReducePiAddAt(&r[i],1)
+    }
+    r[1] = r[1] & (0xffffffff >> kbits)
+    j = 1
+    if r[j] == 0 { j += 1 }
+    r4[0] = 0
+    r4[1] = 0
+    r4[2] = 0
+    r4[3] = 0
+    ReducePiAddAt(&r4[1],(unsigned long)r[j] * pi_over_four[0])
+    ReducePiAddAt(&r4[2],(unsigned long)r[j] * pi_over_four[1])
+    ReducePiAddAt(&r4[2],(unsigned long)r[j + 1] * pi_over_four[0])
+    ReducePiAddAt(&r4[3],(unsigned long)r[j] * pi_over_four[2])
+    ReducePiAddAt(&r4[3],(unsigned long)r[j + 1] * pi_over_four[1])
+    ReducePiAddAt(&r4[3],(unsigned long)r[j + 2] * pi_over_four[0])
+    h48 = ldexp((double)(((unsigned long)r4[0] << 16) | (r4[1] >> 16)),-32 * j + (kbits + 1) - 16)
+    l48 = ldexp((double)(((unsigned long)(r4[1] & 0xffff) << 32) | r4[2]),-32 * j + (kbits + 1) - 64)
+    rh = h48 + l48
+    rl = h48 - rh + l48
+    if neg != 0 {
+        rh = 0 - rh
+        rl = 0 - rl
+    }
+    return ldexp(rh + rl,2 - kbits)
+}
+
+GnmReducePi :: (x: double, e: int, k: int *) -> double {
+    xr: double = 0
+    ax: double = 0
+    if isfinite(x) == 0 {
+        k[0] = 0
+        return x * (0.0 / 0.0)
+    }
+    ax = fabs(x)
+    if ax < ldexp(1.0,27 - e) {
+        xr = ReducePiSimple(ax,k,e + 1)
+    }
+else {
+        xr = ReducePiFull(ax,k,e + 1)
+    }
+    if x < 0 {
+        xr = 0 - xr
+        k[0] = 0 - k[0]
+    }
+    k[0] = k[0] & ((1 << (e + 1)) - 1)
+    return xr
+}
+
+FnReducepi :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    e: int = 0
+    q: int = 0
+    j: int = 0
+    xr: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    x = CoerceNumber(&args[0])
+    e = (int)CoerceNumber(&args[1])
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        q = CoerceNumber(&args[2]) != 0 ? 1 : 0
+    }
+    if e < -1 || e > 7 { return ValError(ERR_VALUE) }
+    xr = GnmReducePi(x,e,&j)
+    if q != 0 {
+        return ValNumber(j)
+    }
+    return ValNumber(xr)
 }
 
 FourierFft :: (inp: Cplx *, n: int, skip: int, out: Cplx *, inverse: int) {
