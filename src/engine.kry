@@ -1,4 +1,5 @@
 #import "kryon.h"
+#import "kry_quad.h"
 #import "kry_xml.h"
 #import "kry_gzip.h"
 #import "ctype.h"
@@ -7258,7 +7259,7 @@ lbeta_go :: (a: double, b: double) -> double {
 }
 
 gnm_fact_port :: (x: double) -> double {
-    mant: Qd = {0,0}
+    mant: Quad = {0,0}
     e: int = 0
     r: double = 0
     if x != x {
@@ -7276,328 +7277,21 @@ gnm_fact_port :: (x: double) -> double {
     if qfactf(x,&mant,&e) != 0 {
         return 0.0 / 0.0
     }
-    r = Q_Val(&mant)
+    r = quad_val(&mant)
     return scalbn(r,e)
 }
 
-Qd :: struct {
-    h: double
-    l: double
-}
-
-Q_Init :: (r: Qd *, hv: double) {
-    r->h = hv
-    r->l = 0
-}
-
-Q_Val :: (a: Qd *) -> double {
-    return a->h + a->l
-}
-
-Q_Neg :: (r: Qd *, a: Qd *) {
-    r->h = 0 - a->h
-    r->l = 0 - a->l
-}
-
-Q_Add :: (r: Qd *, a: Qd *, b: Qd *) {
-    rr: double = a->h + b->h
-    s: double = fabs(a->h) > fabs(b->h) ? a->h - rr + b->h + b->l + a->l : b->h - rr + a->h + a->l + b->l
-    r->h = rr + s
-    r->l = rr - r->h + s
-}
-
-Q_Sub :: (r: Qd *, a: Qd *, b: Qd *) {
-    rr: double = a->h - b->h
-    s: double = fabs(a->h) > fabs(b->h) ? a->h - rr - b->h - b->l + a->l : 0 - b->h - rr + a->h + a->l - b->l
-    r->h = rr + s
-    r->l = rr - r->h + s
-}
-
-Q_Split1 :: (x_in: double, h: double *, t: double *) -> double {
-    x: double = x_in
-    p: double = x * 134217729.0
-    if (isfinite(p) == 0 && isfinite(x) != 0) {
-        x *= 2.2204460492503131e-16
-        p = x * 134217729.0
-        h[0] = x - p + p
-        t[0] = x - h[0]
-        h[0] *= (1 / 2.2204460492503131e-16)
-        t[0] *= (1 / 2.2204460492503131e-16)
-    }
-else {
-        h[0] = x - p + p
-        t[0] = x - h[0]
-    }
-    return x
-}
-
-Q_Mul12 :: (r: Qd *, xv: double, yv: double) {
-    hx: double = 0
-    tx: double = 0
-    hy: double = 0
-    ty: double = 0
-    p: double = 0
-    q: double = 0
-    x: double = Q_Split1(xv,&hx,&tx)
-    y: double = Q_Split1(yv,&hy,&ty)
-    p = hx * hy
-    q = hx * ty + tx * hy
-    r->h = p + q
-    r->l = p - r->h + q + tx * ty
-}
-
-Q_Mul :: (r: Qd *, a: Qd *, b: Qd *) {
-    c: Qd = {0,0}
-    Q_Mul12(&c,a->h,b->h)
-    c.l = a->h * b->l + a->l * b->h + c.l
-    r->h = c.h + c.l
-    r->l = c.h - r->h + c.l
-}
-
-Q_Div :: (r: Qd *, a: Qd *, b: Qd *) {
-    c_h: double = a->h / b->h
-    u: Qd = {0,0}
-    Q_Mul12(&u,c_h,b->h)
-    c_l: double = (a->h - u.h - u.l + a->l - c_h * b->l) / b->h
-    r->h = c_h + c_l
-    r->l = c_h - r->h + c_l
-}
-
-Q_Scalbn :: (r: Qd *, a: Qd *, n: int) {
-    r->h = scalbn(a->h,n)
-    r->l = scalbn(a->l,n)
-}
-
-Q_Sqrt :: (r: Qd *, a: Qd *) {
-    if a->h > 0 {
-        c_h: double = sqrt(a->h)
-        u: Qd = {0,0}
-        Q_Mul12(&u,c_h,c_h)
-        c_l: double = (a->h - u.h - u.l + a->l) * 0.5 / c_h
-        r->h = c_h + c_l
-        r->l = c_h - r->h + c_l
-    }
-else {
-        r->h = 0
-        r->l = 0
-    }
-}
-
-Q_Floor :: (r: Qd *, a: Qd *) {
-    qh: Qd = {0,0}
-    ql: Qd = {0,0}
-    q: Qd = {0,0}
-    rr: Qd = {0,0}
-    Q_Init(&qh,floor(a->h))
-    Q_Init(&ql,floor(a->l))
-    Q_Add(&q,&qh,&ql)
-    Q_Sub(&rr,a,&q)
-    one: Qd = {1,0}
-    if Q_Val(&rr) < 0 {
-        Q_Sub(r,&q,&one)
-    }
-else {
-        Q_Sub(&rr,&rr,&one)
-        if Q_Val(&rr) < 0 {
-            r->h = q.h
-            r->l = q.l
-        }
-else {
-            Q_Add(r,&q,&one)
-        }
-    }
-}
-
-Q_Compare :: (a: Qd *, b: Qd *) -> int {
-    sa: int = a->h < 0 ? 1 : 0
-    sb: int = b->h < 0 ? 1 : 0
-    d: Qd = {0,0}
-    if sa != sb {
-        if sa != 0 { return -1 }
-        return 1
-    }
-    Q_Sub(&d,a,b)
-    if d.h > 0 { return 1 }
-    if d.h == 0 { return 0 }
-    return -1
-}
-
-Q_RescaleBase :: (x: Qd *, e: double *) {
-    xe: int = ilogb(Q_Val(x))
-    if xe != 0 {
-        qs: Qd = {0,0}
-        Q_Init(&qs,scalbn(1.0,-xe))
-        Q_Mul(x,x,&qs)
-        e[0] += xe
-    }
-}
-
-Q_PowInt :: (r: Qd *, exp2: double *, x: Qd *, y: Qd *) {
-    xn: Qd = {0,0}
-    xe: double = 0
-    dy: double = 0
-    xn.h = x->h
-    xn.l = x->l
-    exp2[0] = 0
-    dy = Q_Val(y)
-    r->h = 1
-    r->l = 0
-    Q_RescaleBase(&xn,&xe)
-    while dy > 0 {
-        if fmod(dy,2) > 0 {
-            Q_Mul(r,r,&xn)
-            exp2[0] += xe
-            Q_RescaleBase(r,exp2)
-            dy -= 1
-            if dy == 0 { break }
-        }
-        dy /= 2
-        Q_Mul(&xn,&xn,&xn)
-        xe *= 2
-        Q_RescaleBase(&xn,&xe)
-    }
-}
-
-Q_Sqrt1pm1 :: (r: Qd *, a: Qd *) {
-    x0: Qd = {0,0}
-    x1: Qd = {0,0}
-    d: Qd = {0,0}
-    one: Qd = {1,0}
-    Q_Add(&x0,a,&one)
-    Q_Sqrt(&x0,&x0)
-    Q_Sub(&x0,&x0,&one)
-    Q_Mul(&x1,&x0,&x0)
-    Q_Add(&x1,&x1,a)
-    Q_Add(&d,&x0,&one)
-    Q_Add(&d,&d,&d)
-    Q_Div(r,&x1,&d)
-}
-
-Q_PowFrac :: (r: Qd *, x: Qd *, y: Qd *) {
-    qx: Qd = {0,0}
-    qr: Qd = {0,0}
-    qy: Qd = {0,0}
-    dy: double = 0
-    x1m: int = 0
-    one: Qd = {1,0}
-    qy.h = y->h
-    qy.l = y->l
-    x1m = fabs(Q_Val(x)) >= 0.5 ? 1 : 0
-    if x1m != 0 {
-        Q_Sub(&qx,x,&one)
-    }
-else {
-        qx.h = x->h
-        qx.l = x->l
-    }
-    qr.h = 1
-    qr.l = 0
-    while 1 {
-        dy = Q_Val(&qy)
-        if dy <= 0 { break }
-        Q_Add(&qy,&qy,&qy)
-        if x1m != 0 {
-            Q_Sqrt1pm1(&qx,&qx)
-            if Q_Val(&qx) == 0 { break }
-        }
-else {
-            Q_Sqrt(&qx,&qx)
-            if Q_Val(&qx) >= 0.5 {
-                x1m = 1
-                Q_Sub(&qx,&qx,&one)
-            }
-        }
-        if dy >= 0.5 {
-            qp: Qd = {0,0}
-            Q_Sub(&qy,&qy,&one)
-            Q_Mul(&qp,&qx,&qr)
-            if x1m != 0 {
-                Q_Add(&qr,&qr,&qp)
-            }
-else {
-                qr.h = qp.h
-                qr.l = qp.l
-            }
-        }
-    }
-    r->h = qr.h
-    r->l = qr.l
-}
-
-Q_Pow :: (r: Qd *, expb: double *, x: Qd *, y: Qd *) {
-    one: Qd = {1,0}
-    half: Qd = {0.5,0}
-    if expb != NULL { expb[0] = 0 }
-    if (y->h == 0 || Q_Compare(x,&one) == 0) {
-        r->h = 1
-        r->l = 0
-        return
-    }
-    if (x->h == 0 && y->h > 0) {
-        r->h = 0
-        r->l = 0
-        return
-    }
-    if (x->h != x->h) {
-        r->h = x->h
-        r->l = x->l
-        return
-    }
-    if (y->h != y->h) {
-        r->h = y->h
-        r->l = y->l
-        return
-    }
-    if Q_Compare(y,&one) == 0 {
-        r->h = x->h
-        r->l = x->l
-        return
-    }
-    if (x->h > 0 && Q_Compare(y,&half) == 0) {
-        Q_Sqrt(r,x)
-        return
-    }
-    dy: double = Q_Val(y)
-    if dy < 0 {
-        my: Qd = {0,0}
-        zero: Qd = {0,0}
-        Q_Sub(&my,&zero,y)
-        Q_Pow(r,expb,x,&my)
-        one2: Qd = {1,0}
-        Q_Div(r,&one2,r)
-        if expb != NULL { expb[0] = 0 - expb[0] }
-        return
-    }
-    qew: Qd = {0,0}
-    qef: Qd = {0,0}
-    exp2ew: double = 0
-    yint: Qd = {0,0}
-    Q_Floor(&yint,y)
-    qf: Qd = {0,0}
-    Q_Sub(&qf,y,&yint)
-    Q_PowInt(&qew,&exp2ew,x,&yint)
-    Q_PowFrac(&qef,x,&qf)
-    Q_Mul(r,&qew,&qef)
-    if expb != NULL {
-        expb[0] = exp2ew
-    }
-else {
-        e: int = (int)exp2ew
-        Q_Scalbn(r,r,e)
-    }
-}
-
-rescale_mantexp :: (mant: Qd *, expb: int *) {
-    e: int = ilogb(Q_Val(mant))
+rescale_mantexp :: (mant: Quad *, expb: int *) {
+    e: int = ilogb(quad_val(mant))
     if e != -1 {
-        qs: Qd = {0,0}
-        Q_Init(&qs,scalbn(1.0,-e - 1))
-        Q_Mul(mant,mant,&qs)
+        qs: Quad = {0,0}
+        quad_init(&qs,scalbn(1.0,-e - 1))
+        quad_mul(mant,mant,&qs)
         expb[0] += e + 1
     }
 }
 
-qfacti :: (n: int, mant: Qd *, expb: int *) -> int {
+qfacti :: (n: int, mant: Quad *, expb: int *) -> int {
     if (n < 0 || n >= 10000) {
         mant->h = 0
         mant->l = 0
@@ -7605,21 +7299,21 @@ qfacti :: (n: int, mant: Qd *, expb: int *) -> int {
         return 1
     }
     if QFACT_BUILT == 0 {
-        m0: Qd = {0,0}
-        Q_Init(&m0,0.5)
+        m0: Quad = {0,0}
+        quad_init(&m0,0.5)
         QFACT_MANT_H[0] = m0.h
         QFACT_MANT_L[0] = m0.l
         QFACT_EXP[0] = 1
         QFACT_BUILT = 1
     }
     while n >= QFACT_BUILT {
-        m: Qd = {0,0}
-        nxt: Qd = {0,0}
+        m: Quad = {0,0}
+        nxt: Quad = {0,0}
         e: int = 0
-        Q_Init(&m,(double)QFACT_BUILT)
+        quad_init(&m,(double)QFACT_BUILT)
         nxt.h = QFACT_MANT_H[QFACT_BUILT - 1]
         nxt.l = QFACT_MANT_L[QFACT_BUILT - 1]
-        Q_Mul(&m,&m,&nxt)
+        quad_mul(&m,&m,&nxt)
         e = QFACT_EXP[QFACT_BUILT - 1]
         rescale_mantexp(&m,&e)
         QFACT_MANT_H[QFACT_BUILT] = m.h
@@ -7633,7 +7327,7 @@ qfacti :: (n: int, mant: Qd *, expb: int *) -> int {
     return 0
 }
 
-qfactf :: (x: double, mant: Qd *, expb: int *) -> int {
+qfactf :: (x: double, mant: Quad *, expb: int *) -> int {
     res: int = 0
     w: double = 0
     f: double = 0
@@ -7659,33 +7353,33 @@ qfactf :: (x: double, mant: Qd *, expb: int *) -> int {
             res = 1
         }
 else {
-            b: Qd = {0,0}
+            b: Quad = {0,0}
             z: double = 0 - x
             k: double = round(z)
             fr: double = z - k
             sv: double = sin(3.14159265358979323846 * fr)
             if fmod(k,2) != 0 { sv = 0 - sv }
-            Q_Init(&b,sv)
-            Q_Mul(&b,&b,mant)
-            piq: Qd = {3.141592653589793,1.2246467991473532e-16}
-            Q_Div(mant,&piq,&b)
+            quad_init(&b,sv)
+            quad_mul(&b,&b,mant)
+            piq: Quad = {3.141592653589793,1.2246467991473532e-16}
+            quad_div(mant,&piq,&b)
             expb[0] = 0 - expb[0]
         }
     }
 else if x >= 9999.5 {
-        y: Qd = {0,0}
-        f1: Qd = {0,0}
-        f2: Qd = {0,0}
-        f3: Qd = {0,0}
-        f4: Qd = {0,0}
-        eq: Qd = {2.718281828459045,1.4456468917292502e-16}
+        y: Quad = {0,0}
+        f1: Quad = {0,0}
+        f2: Quad = {0,0}
+        f3: Quad = {0,0}
+        f4: Quad = {0,0}
+        eq: Quad = {2.718281828459045,1.4456468917292502e-16}
         ef2: double = 0
-        Q_Init(&y,x + 1)
+        quad_init(&y,x + 1)
         expb[0] = 0
-        twopi: Qd = {6.283185307179586,2.4492935982947064e-16}
-        Q_Sqrt(&f1,&twopi)
-        Q_Div(&f2,&y,&eq)
-        Q_Pow(&f2,&ef2,&f2,&y)
+        twopi: Quad = {6.283185307179586,2.4492935982947064e-16}
+        quad_sqrt(&f1,&twopi)
+        quad_div(&f2,&y,&eq)
+        quad_pow(&f2,&ef2,&f2,&y)
         if ef2 > 1073741823 || ef2 < -1073741823 {
             res = 1
             f2.h = 1e308 * 10
@@ -7694,26 +7388,26 @@ else if x >= 9999.5 {
 else {
             expb[0] += (int)ef2
         }
-        Q_Sqrt(&f3,&y)
+        quad_sqrt(&f3,&y)
         GammaErrorFactor(&f4,&y)
-        Q_Mul(mant,&f1,&f2)
-        Q_Div(mant,mant,&f3)
-        Q_Mul(mant,mant,&f4)
+        quad_mul(mant,&f1,&f2)
+        quad_div(mant,mant,&f3)
+        quad_mul(mant,mant,&f4)
     }
 else {
-        qx: Qd = {0,0}
-        s: Qd = {0,0}
-        one2: Qd = {1,0}
-        mfw: Qd = {0,0}
-        r2: Qd = {0,0}
+        qx: Quad = {0,0}
+        s: Quad = {0,0}
+        one2: Quad = {1,0}
+        mfw: Quad = {0,0}
+        r2: Quad = {0,0}
         w = round(x)
         f = x - w
-        Q_Init(&qx,x)
-        Q_Init(&s,1)
+        quad_init(&qx,x)
+        quad_init(&s,1)
         while w < 20 {
-            Q_Add(&qx,&qx,&one2)
+            quad_add(&qx,&qx,&one2)
             w += 1
-            Q_Mul(&s,&s,&qx)
+            quad_mul(&s,&s,&qx)
         }
         if qfacti((int)w,&mfw,&efw) != 0 {
             mant->h = 1e308 * 10
@@ -7722,8 +7416,8 @@ else {
         }
 else {
             PochhammerSmallN(w + 1,f,&r2)
-            Q_Mul(mant,&mfw,&r2)
-            Q_Div(mant,mant,&s)
+            quad_mul(mant,&mfw,&r2)
+            quad_div(mant,mant,&s)
             expb[0] = efw
         }
     }
@@ -7785,16 +7479,6 @@ log1px3 :: (x: double) -> double {
         return x - x * x / 2 + x * x * x / 3
     }
     return x
-}
-
-Q_Exp :: (r: Qd *, expb: double *, a: Qd *) {
-    qe: Qd = {2.718281828459045,1.4456468917292502e-16}
-    if a->h != a->h {
-        r->h = a->h
-        r->l = 0
-        return
-    }
-    Q_Pow(r,expb,&qe,a)
 }
 
 Lgamma1p :: (a: double) -> double {
@@ -7967,21 +7651,21 @@ dpois_raw :: (x: double, lambda: double, give_log: int) -> double {
         res: double = 0
         eres: double = 0
         e3: int = 0
-        qx: Qd = {0,0}
-        ql: Qd = {0,0}
-        qf1: Qd = {0,0}
-        qf2: Qd = {0,0}
-        qf3: Qd = {0,0}
-        qres: Qd = {0,0}
-        Q_Init(&qx, x)
-        Q_Init(&ql, lambda)
-        Q_Pow(&qf1, &e1, &ql, &qx)
-        Q_Neg(&ql, &ql)
-        Q_Exp(&qf2, &e2, &ql)
+        qx: Quad = {0,0}
+        ql: Quad = {0,0}
+        qf1: Quad = {0,0}
+        qf2: Quad = {0,0}
+        qf3: Quad = {0,0}
+        qres: Quad = {0,0}
+        quad_init(&qx, x)
+        quad_init(&ql, lambda)
+        quad_pow(&qf1, &e1, &ql, &qx)
+        quad_neg(&ql, &ql)
+        quad_exp(&qf2, &e2, &ql)
         qfactf(x, &qf3, &e3)
-        Q_Mul(&qres, &qf1, &qf2)
-        Q_Div(&qres, &qres, &qf3)
-        res = Q_Val(&qres)
+        quad_mul(&qres, &qf1, &qf2)
+        quad_div(&qres, &qres, &qf3)
+        res = quad_val(&qres)
         eres = e1 + e2 - e3
         
         return scalbn(res, eres)
@@ -8053,16 +7737,16 @@ dbinom_raw :: (x: double, n: double, p: double, q: double, give_log: int) -> dou
         return( 0.0 )
     }
     if (give_log == 0) {
-                qp: Qd = {0,0}
-qq: Qd = {0,0}
-qx: Qd = {0,0}
-qnmx: Qd = {0,0}
-        qf1: Qd = {0,0}
-        qf2: Qd = {0,0}
-        qf3: Qd = {0,0}
-        qf4: Qd = {0,0}
-        qf5: Qd = {0,0}
-        qres: Qd = {0,0}
+                qp: Quad = {0,0}
+qq: Quad = {0,0}
+qx: Quad = {0,0}
+qnmx: Quad = {0,0}
+        qf1: Quad = {0,0}
+        qf2: Quad = {0,0}
+        qf3: Quad = {0,0}
+        qf4: Quad = {0,0}
+        qf5: Quad = {0,0}
+        qres: Quad = {0,0}
         e1: int = 0
         e2: int = 0
         e3: int = 0
@@ -8070,24 +7754,24 @@ qnmx: Qd = {0,0}
         e4: double = 0
         e5: double = 0
         e: double = 0
-        Q_Init(&qp, p)
-        Q_Init(&qq, q)
-        Q_Init(&qx, x)
-        Q_Init(&qnmx, n - x)
+        quad_init(&qp, p)
+        quad_init(&qq, q)
+        quad_init(&qx, x)
+        quad_init(&qnmx, n - x)
         bad += qfactf (n, &qf1, &e1)
         bad += qfactf (x, &qf2, &e2)
         bad += qfactf (n - x, &qf3, &e3)
-        Q_Pow(&qf4, &e4, &qp, &qx)
-        Q_Pow(&qf5, &e5, &qq, &qnmx)
-        Q_Mul(&qres, &qf2, &qf3)
-        Q_Div(&qres, &qf1, &qres)
-        Q_Mul(&qres, &qres, &qf4)
-        Q_Mul(&qres, &qres, &qf5)
+        quad_pow(&qf4, &e4, &qp, &qx)
+        quad_pow(&qf5, &e5, &qq, &qnmx)
+        quad_mul(&qres, &qf2, &qf3)
+        quad_div(&qres, &qf1, &qres)
+        quad_mul(&qres, &qres, &qf4)
+        quad_mul(&qres, &qres, &qf5)
         e = e4 + e5 + e1 - e2 - e3
         
         if (bad == 0) && isfinite(qres.h) && qres.h > 0 {
             e = e
-            return scalbn(Q_Val(&qres), e)
+            return scalbn(quad_val(&qres), e)
         }
     }
     lc = stirlerr(n) - stirlerr(x) - stirlerr(n-x) - bd0(x,n*p) - bd0(n-x,n*q)
@@ -10266,44 +9950,44 @@ else {
 }
 
 StatAverage :: (xs: double *, n: int) -> double {
-    acc: Qd = {0,0}
-    one: Qd = {1,0}
-    q: Qd = {0,0}
+    acc: Quad = {0,0}
+    one: Quad = {1,0}
+    q: Quad = {0,0}
     i: int = 0
     while i < n {
-        Q_Init(&q,xs[i])
-        Q_Add(&acc,&acc,&q)
+        quad_init(&q,xs[i])
+        quad_add(&acc,&acc,&q)
         i += 1
     }
-    qn: Qd = {0,0}
-    Q_Init(&qn,(double)n)
-    Q_Div(&acc,&acc,&qn)
-    return Q_Val(&acc)
+    qn: Quad = {0,0}
+    quad_init(&qn,(double)n)
+    quad_div(&acc,&acc,&qn)
+    return quad_val(&acc)
 }
 
 StatDevsq :: (xs: double *, n: int) -> double {
     sumh: double = 0
     suml: double = 0
-    qavg: Qd = {0,0}
-    acc: Qd = {0,0}
-    q: Qd = {0,0}
+    qavg: Quad = {0,0}
+    acc: Quad = {0,0}
+    q: Quad = {0,0}
     i: int = 0
     StatAccSum(xs,n,&sumh,&suml)
-    Q_Init(&qavg,sumh)
-    Q_Init(&q,suml)
-    Q_Add(&qavg,&qavg,&q)
-    qn: Qd = {0,0}
-    Q_Init(&qn,(double)n)
-    Q_Div(&qavg,&qavg,&qn)
+    quad_init(&qavg,sumh)
+    quad_init(&q,suml)
+    quad_add(&qavg,&qavg,&q)
+    qn: Quad = {0,0}
+    quad_init(&qn,(double)n)
+    quad_div(&qavg,&qavg,&qn)
     i = 0
     while i < n {
-        Q_Init(&q,xs[i])
-        Q_Sub(&q,&q,&qavg)
-        Q_Mul(&q,&q,&q)
-        Q_Add(&acc,&acc,&q)
+        quad_init(&q,xs[i])
+        quad_sub(&q,&q,&qavg)
+        quad_mul(&q,&q,&q)
+        quad_add(&acc,&acc,&q)
         i += 1
     }
-    return Q_Val(&acc)
+    return quad_val(&acc)
 }
 
 StatAccSum :: (xs: double *, n: int, sumh: double *, suml: double *) {
@@ -14480,395 +14164,9 @@ FnSsMedian :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
 }
 
 /* ==== quad matrix core: exact ports of goffice go-matrix.c/go-accumulator.c ==== */
-QMat :: struct {
-    m: int
-    n: int
-    data: [16][16] Qd
-}
-
-QQR :: struct {
-    V: QMat
-    R: QMat
-    qdet: int
-}
-
-QAcc :: struct {
-    partials: [128] double
-    len: int
-}
-
-QAccClear :: (acc: QAcc *) {
-    acc->len = 0
-}
-
-QAccAdd :: (acc: QAcc *, x: double) {
-    ui: int = 0
-    uj: int = 0
-    y: double = 0
-    hi: double = 0
-    lo: double = 0
-    t: double = 0
-    uj = 0
-    while uj < acc->len {
-        y = acc->partials[uj]
-        if fabs(x) < fabs(y) {
-            t = x
-            x = y
-            y = t
-        }
-        hi = x + y
-        if isfinite(hi) == 0 {
-            x = hi
-            ui = 0
-            break
-        }
-        lo = y - (hi - x)
-        if lo != 0 {
-            acc->partials[ui] = lo
-            ui += 1
-        }
-        x = hi
-        uj += 1
-    }
-    acc->len = ui + 1
-    acc->partials[ui] = x
-}
-
-QAccAddQuad :: (acc: QAcc *, x: Qd *) {
-    QAccAdd(acc,x->h)
-    QAccAdd(acc,x->l)
-}
-
-QZero :: (r: Qd *) {
-    r->h = 0
-    r->l = 0
-}
-
-QAccValue :: (acc: QAcc *) -> double {
-    sum: double = 0
-    ui: int = 0
-    while ui < acc->len {
-        sum += acc->partials[ui]
-        ui += 1
-    }
-    return sum
-}
-
-QQRNew :: (A: QMat *) -> QQR {
-    qr: QQR = {0}
-    qdet: int = 1
-    R: QMat = {0}
-    i: int = 0
-    j: int = 0
-    k: int = 0
-    m: int = A->m
-    n: int = A->n
-    L: Qd = {0,0}
-    L2: Qd = {0,0}
-    L2p: Qd = {0,0}
-    s: Qd = {0,0}
-    p: Qd = {0,0}
-    tmp: [16] Qd = {0}
-    qr.V.m = m
-    qr.V.n = n
-    qr.R.m = n
-    qr.R.n = n
-    R.m = m
-    R.n = n
-    i = 0
-    while i < m {
-        j = 0
-        while j < n {
-            R.data[i][j] = A->data[i][j]
-            j += 1
-        }
-        i += 1
-    }
-    k = 0
-    while k < n {
-        QZero(&L2)
-        QZero(&L2p)
-        i = m - 1
-        while i >= k {
-            qr.V.data[i][k] = R.data[i][k]
-            Q_Mul(&s,&qr.V.data[i][k],&qr.V.data[i][k])
-            L2p = L2
-            Q_Add(&L2,&L2,&s)
-            i -= 1
-        }
-        Q_Sqrt(&L,&L2)
-        if Q_Val(&qr.V.data[k][k]) < 0 {
-            Q_Sub(&qr.V.data[k][k],&qr.V.data[k][k],&L)
-        }
-else {
-            Q_Add(&qr.V.data[k][k],&qr.V.data[k][k],&L)
-        }
-        Q_Mul(&s,&qr.V.data[k][k],&qr.V.data[k][k])
-        Q_Add(&L2p,&L2p,&s)
-        Q_Sqrt(&L,&L2p)
-        if Q_Val(&L) == 0 {
-            k += 1
-            continue
-        }
-        i = k
-        while i < m {
-            Q_Div(&qr.V.data[i][k],&qr.V.data[i][k],&L)
-            i += 1
-        }
-        qdet = -qdet
-        j = k
-        while j < n {
-            QZero(&tmp[j])
-            i = k
-            while i < m {
-                Q_Mul(&p,&qr.V.data[i][k],&R.data[i][j])
-                Q_Add(&tmp[j],&tmp[j],&p)
-                i += 1
-            }
-            j += 1
-        }
-        j = k
-        while j < n {
-            i = k
-            while i < m {
-                Q_Mul(&p,&qr.V.data[i][k],&tmp[j])
-                Q_Add(&p,&p,&p)
-                Q_Sub(&R.data[i][j],&R.data[i][j],&p)
-                i += 1
-            }
-            j += 1
-        }
-        i = k + 1
-        while i < m {
-            QZero(&R.data[i][k])
-            i += 1
-        }
-        k += 1
-    }
-    i = 0
-    while i < n {
-        j = 0
-        while j < n {
-            qr.R.data[i][j] = R.data[i][j]
-            j += 1
-        }
-        i += 1
-    }
-    qr.qdet = qdet
-    return qr
-}
-
-QQRMultiplyQt :: (qr: QQR *, x: Qd *) {
-    k: int = 0
-    i: int = 0
-    s: Qd = {0,0}
-    p: Qd = {0,0}
-    k = 0
-    while k < qr->V.n {
-        QZero(&s)
-        i = k
-        while i < qr->V.m {
-            Q_Mul(&p,&x[i],&qr->V.data[i][k])
-            Q_Add(&s,&s,&p)
-            i += 1
-        }
-        Q_Add(&s,&s,&s)
-        i = k
-        while i < qr->V.m {
-            Q_Mul(&p,&s,&qr->V.data[i][k])
-            Q_Sub(&x[i],&x[i],&p)
-            i += 1
-        }
-        k += 1
-    }
-}
-
-QMatFwdSolve :: (R: QMat *, x: Qd *, b: Qd *, allow_degenerate: int) -> int {
-    i: int = 0
-    j: int = 0
-    n: int = R->m
-    d: Qd = {0,0}
-    Rii: Qd = {0,0}
-    p: Qd = {0,0}
-    i = 0
-    while i < n {
-        d = b[i]
-        Rii = R->data[i][i]
-        if Q_Val(&Rii) == 0 {
-            if allow_degenerate != 0 {
-                QZero(&x[i])
-                i += 1
-                continue
-            }
-            while i < n {
-                QZero(&x[i])
-                i += 1
-            }
-            return 1
-        }
-        j = 0
-        while j < i {
-            Q_Mul(&p,&R->data[j][i],&x[j])
-            Q_Sub(&d,&d,&p)
-            j += 1
-        }
-        Q_Div(&x[i],&d,&Rii)
-        i += 1
-    }
-    return 0
-}
-
-QMatMultiplyQuad :: (C: QMat *, A: QMat *, B: QMat *) {
-    i: int = 0
-    j: int = 0
-    k: int = 0
-    p: Qd = {0,0}
-    i = 0
-    while i < C->m {
-        j = 0
-        while j < C->n {
-            acc: Qd = {0,0}
-            k = 0
-            while k < A->n {
-                Q_Mul(&p,&A->data[i][k],&B->data[k][j])
-                Q_Add(&acc,&acc,&p)
-                k += 1
-            }
-            C->data[i][j] = acc
-            j += 1
-        }
-        i += 1
-    }
-}
-
-QMatTransposeQuad :: (A: QMat *, B: QMat *) {
-    i: int = 0
-    j: int = 0
-    i = 0
-    while i < A->m {
-        j = 0
-        while j < A->n {
-            A->data[i][j] = B->data[j][i]
-            j += 1
-        }
-        i += 1
-    }
-}
-
-QMatBackSolve :: (R: QMat *, x: Qd *, b: Qd *, allow_degenerate: int) -> int {
-    i: int = 0
-    j: int = 0
-    n: int = R->m
-    d: Qd = {0,0}
-    Rii: Qd = {0,0}
-    p: Qd = {0,0}
-    i = n - 1
-    while i >= 0 {
-        d = b[i]
-        Rii = R->data[i][i]
-        if Q_Val(&Rii) == 0 {
-            if allow_degenerate != 0 {
-                QZero(&x[i])
-                i -= 1
-                continue
-            }
-            while i >= 0 {
-                QZero(&x[i])
-                i -= 1
-            }
-            return 1
-        }
-        j = i + 1
-        while j < n {
-            Q_Mul(&p,&R->data[i][j],&x[j])
-            Q_Sub(&d,&d,&p)
-            j += 1
-        }
-        Q_Div(&x[i],&d,&Rii)
-        i -= 1
-    }
-    return 0
-}
-
-QMatEigenRange :: (A: QMat *, emin: double *, emax: double *) {
-    i: int = 0
-    abs_e: double = 0
-    abs_e = fabs(Q_Val(&A->data[0][0]))
-    emin[0] = abs_e
-    emax[0] = abs_e
-    i = 1
-    while i < A->m {
-        abs_e = fabs(Q_Val(&A->data[i][i]))
-        if abs_e < emin[0] { emin[0] = abs_e }
-        if abs_e > emax[0] { emax[0] = abs_e }
-        i += 1
-    }
-}
-
-QMatDetQuad :: (A: QMat *, res: Qd *) {
-    qr: QQR = {0}
-    a: Qd = {0,0}
-    b: Qd = {0,0}
-    i: int = 0
-    if A->m == 1 {
-        res[0] = A->data[0][0]
-        return
-    }
-    if A->m == 2 {
-        Q_Mul(&a,&A->data[0][0],&A->data[1][1])
-        Q_Mul(&b,&A->data[1][0],&A->data[0][1])
-        Q_Sub(res,&a,&b)
-        return
-    }
-    qr = QQRNew(A)
-    Q_Init(res,qr.qdet)
-    i = 0
-    while i < qr.R.n {
-        Q_Mul(res,res,&qr.R.data[i][i])
-        i += 1
-    }
-}
-
-QMatInverse :: (A: QMat *, threshold: double, Z: QMat *) -> int {
-    qr: QQR = {0}
-    n: int = A->n
-    i: int = 0
-    k: int = 0
-    ok: int = 0
-    emin: double = 0
-    emax: double = 0
-    x: [16] Qd = {0}
-    QTk: [16] Qd = {0}
-    qr = QQRNew(A)
-    Z->m = n
-    Z->n = n
-    QMatEigenRange(&qr.R,&emin,&emax)
-    ok = emin > emax * threshold ? 1 : 0
-    k = 0
-    while ok != 0 && k < n {
-        i = 0
-        while i < n {
-            Q_Init(&QTk[i],i == k ? 1.0 : 0.0)
-            i += 1
-        }
-        QQRMultiplyQt(&qr,QTk)
-        if QMatBackSolve(&qr.R,x,QTk,0) != 0 {
-            ok = 0
-            break
-        }
-        i = 0
-        while i < n {
-            Z->data[i][k] = x[i]
-            i += 1
-        }
-        k += 1
-    }
-    return ok
-}
-
 GoMatrixDeterminant :: (a: double *, n: int) -> double {
-    qA: QMat = {0}
-    qres: Qd = {0,0}
+    qA: QuadMatrix = {0}
+    qres: Quad = {0,0}
     i: int = 0
     j: int = 0
     if n < 1 { return 0 }
@@ -14878,18 +14176,18 @@ GoMatrixDeterminant :: (a: double *, n: int) -> double {
     while i < n {
         j = 0
         while j < n {
-            Q_Init(&qA.data[i][j],a[i * 16 + j])
+            quad_init(&qA.data[i][j],a[i * 16 + j])
             j += 1
         }
         i += 1
     }
-    QMatDetQuad(&qA,&qres)
-    return Q_Val(&qres)
+    quad_matrix_determinant(&qA,&qres)
+    return quad_val(&qres)
 }
 
 GoMatrixInvert :: (a: double *, n: int) -> int {
-    qA: QMat = {0}
-    qZ: QMat = {0}
+    qA: QuadMatrix = {0}
+    qZ: QuadMatrix = {0}
     i: int = 0
     j: int = 0
     qA.m = n
@@ -14898,17 +14196,17 @@ GoMatrixInvert :: (a: double *, n: int) -> int {
     while i < n {
         j = 0
         while j < n {
-            Q_Init(&qA.data[i][j],a[i * 16 + j])
+            quad_init(&qA.data[i][j],a[i * 16 + j])
             j += 1
         }
         i += 1
     }
-    if QMatInverse(&qA,256 * 2.220446049250313e-16,&qZ) == 0 { return 0 }
+    if quad_matrix_inverse(&qA,256 * 2.220446049250313e-16,&qZ) == 0 { return 0 }
     i = 0
     while i < n {
         j = 0
         while j < n {
-            a[i * 16 + j] = Q_Val(&qZ.data[i][j])
+            a[i * 16 + j] = quad_val(&qZ.data[i][j])
             j += 1
         }
         i += 1
@@ -14917,13 +14215,13 @@ GoMatrixInvert :: (a: double *, n: int) -> int {
 }
 
 GoLinearSolveMultiple :: (a: double *, n: int, b: double *, bn: int) -> int {
-    qA: QMat = {0}
-    qr: QQR = {0}
+    qA: QuadMatrix = {0}
+    qr: QuadQR = {0}
     i: int = 0
     j: int = 0
     regres: int = 0
-    QTb: [16] Qd = {0}
-    x: [16] Qd = {0}
+    QTb: [16] Quad = {0}
+    x: [16] Quad = {0}
     if n < 1 || bn < 1 { return 2 }
     if n == 1 {
         d0: double = a[0]
@@ -14941,25 +14239,25 @@ GoLinearSolveMultiple :: (a: double *, n: int, b: double *, bn: int) -> int {
     while i < n {
         j = 0
         while j < n {
-            Q_Init(&qA.data[i][j],a[i * 16 + j])
+            quad_init(&qA.data[i][j],a[i * 16 + j])
             j += 1
         }
         i += 1
     }
-    qr = QQRNew(&qA)
+    qr = quad_qr_new(&qA)
     regres = 0
     j = 0
     while j < bn {
         i = 0
         while i < n {
-            Q_Init(&QTb[i],b[i * 16 + j])
+            quad_init(&QTb[i],b[i * 16 + j])
             i += 1
         }
-        QQRMultiplyQt(&qr,QTb)
-        if QMatBackSolve(&qr.R,x,QTb,0) != 0 { regres = 1 }
+        quad_qr_multiply_qt(&qr,QTb)
+        if quad_matrix_back_solve(&qr.R,x,QTb,0) != 0 { regres = 1 }
         i = 0
         while i < n {
-            b[i * 16 + j] = Q_Val(&x[i])
+            b[i * 16 + j] = quad_val(&x[i])
             i += 1
         }
         j += 1
@@ -15001,8 +14299,8 @@ FnMmult :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     bc: int = 0
     ok1: int = 0
     ok2: int = 0
-    acc: QAcc = {0}
-    p: Qd = {0,0}
+    acc: QuadAcc = {0}
+    p: Quad = {0,0}
     sum: double = 0
     i: int = 0
     if groups < 2 { return ValError(ERR_VALUE) }
@@ -15017,11 +14315,11 @@ FnMmult :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     if ac != br { return ValError(ERR_VALUE) }
     i = 0
     while i < ac {
-        Q_Mul12(&p,a[0][i],b[i][0])
-        QAccAddQuad(&acc,&p)
+        quad_mul12(&p,a[0][i],b[i][0])
+        quad_acc_add_quad(&acc,&p)
         i += 1
     }
-    sum = QAccValue(&acc)
+    sum = quad_acc_value(&acc)
     return ValNumber(sum)
 }
 
@@ -15497,44 +14795,44 @@ CalcScale :: (xs: double *, m: int) -> double {
 }
 
 GoRangeSumsq :: (xs: double *, n: int) -> double {
-    acc: QAcc = {0}
-    q: Qd = {0,0}
+    acc: QuadAcc = {0}
+    q: Quad = {0,0}
     while n > 0 {
         n -= 1
-        Q_Mul12(&q,xs[n],xs[n])
-        QAccAddQuad(&acc,&q)
+        quad_mul12(&q,xs[n],xs[n])
+        quad_acc_add_quad(&acc,&q)
     }
-    return QAccValue(&acc)
+    return quad_acc_value(&acc)
 }
 
 CalcResidual :: (xsst: double *, ys: double *, m: int, n: int, y: double *) -> double {
-    n2: Qd = {0,0}
-    d: Qd = {0,0}
-    e: Qd = {0,0}
+    n2: Quad = {0,0}
+    d: Quad = {0,0}
+    e: Quad = {0,0}
     i: int = 0
     j: int = 0
     i = 0
     while i < m {
-        Q_Init(&d,ys[i])
+        quad_init(&d,ys[i])
         j = 0
         while j < n {
-            Q_Mul12(&e,xsst[j * 64 + i],y[j])
-            Q_Sub(&d,&d,&e)
+            quad_mul12(&e,xsst[j * 64 + i],y[j])
+            quad_sub(&d,&d,&e)
             j += 1
         }
-        Q_Mul(&d,&d,&d)
-        Q_Add(&n2,&n2,&d)
+        quad_mul(&d,&d,&d)
+        quad_add(&n2,&n2,&d)
         i += 1
     }
-    return Q_Val(&n2)
+    return quad_val(&n2)
 }
 
 GenLinReg :: (xsst: double *, dim: int, ys: double *, n: int, affine: int, result: double *) -> int {
-    qss: QMat = {0}
-    qr: QQR = {0}
+    qss: QuadMatrix = {0}
+    qr: QuadQR = {0}
     xscale: [16] double = {0}
-    qty: [64] Qd = {0}
-    qresult: [16] Qd = {0}
+    qty: [64] Quad = {0}
+    qresult: [16] Quad = {0}
     emax: double = 0
     emin_dummy: double = 0
     df_resid: int = 0
@@ -15553,36 +14851,36 @@ GenLinReg :: (xsst: double *, dim: int, ys: double *, n: int, affine: int, resul
         xscale[j] = CalcScale(&xsst[j * 64],n)
         i = 0
         while i < n {
-            Q_Init(&qss.data[i][j],xsst[j * 64 + i] / xscale[j])
+            quad_init(&qss.data[i][j],xsst[j * 64 + i] / xscale[j])
             i += 1
         }
         j += 1
     }
-    qr = QQRNew(&qss)
-    QMatEigenRange(&qr.R,&emin_dummy,&emax)
+    qr = quad_qr_new(&qss)
+    quad_matrix_eigen_range(&qr.R,&emin_dummy,&emax)
     df_resid = n - dim
     i = 0
     while i < dim {
-        ei: double = Q_Val(&qr.R.data[i][i])
+        ei: double = quad_val(&qr.R.data[i][i])
         if fabs(ei) >= emax * (256 * 2.220446049250313e-16) {
             /* not degenerate */
         }
 else {
-            QZero(&qr.R.data[i][i])
+            quad_zero(&qr.R.data[i][i])
             df_resid += 1
         }
         i += 1
     }
     i = 0
     while i < n {
-        Q_Init(&qty[i],ys[i])
+        quad_init(&qty[i],ys[i])
         i += 1
     }
-    QQRMultiplyQt(&qr,qty)
-    QMatBackSolve(&qr.R,qresult,qty,1)
+    quad_qr_multiply_qt(&qr,qty)
+    quad_matrix_back_solve(&qr.R,qresult,qty,1)
     i = 0
     while i < dim {
-        result[i] = Q_Val(&qresult[i]) / xscale[i]
+        result[i] = quad_val(&qresult[i]) / xscale[i]
         i += 1
     }
     ss_resid = CalcResidual(xsst,ys,n,dim,result)
@@ -16126,28 +15424,28 @@ FnPfactor :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
 
 /* ==== pochhammer: exact port of sf-gamma.c paths reachable from PERMUT ==== */
 PochhammerNaive :: (x: double, n: int) -> double {
-    qp: Qd = {1,0}
-    qx: Qd = {0,0}
-    one: Qd = {1,0}
+    qp: Quad = {1,0}
+    qx: Quad = {0,0}
+    one: Quad = {1,0}
     r: double = 0
-    Q_Init(&qx,x)
+    quad_init(&qx,x)
     while n > 0 {
-        Q_Mul(&qp,&qp,&qx)
-        Q_Add(&qx,&qx,&one)
+        quad_mul(&qp,&qp,&qx)
+        quad_add(&qx,&qx,&one)
         n -= 1
     }
-    r = Q_Val(&qp)
+    r = quad_val(&qp)
     return r
 }
 
 PochhammerHammer :: (x: double, n: double) -> double {
     rn: double = 0
     rx: double = 0
-    m1: Qd = {0,0}
-    m2: Qd = {0,0}
+    m1: Quad = {0,0}
+    m2: Quad = {0,0}
     e1: int = 0
     e2: int = 0
-    qr: Qd = {0,0}
+    qr: Quad = {0,0}
     r: double = 0
     de: int = 0
     if n != n || x != x { return 0.0 / 0.0 }
@@ -16159,8 +15457,8 @@ PochhammerHammer :: (x: double, n: double) -> double {
     }
     if qfactf(x + n - 1,&m1,&e1) == 0 && qfactf(x - 1,&m2,&e2) == 0 {
         de = e1 - e2
-        Q_Div(&qr,&m1,&m2)
-        r = Q_Val(&qr)
+        quad_div(&qr,&m1,&m2)
+        r = quad_val(&qr)
         return ldexp(r,de)
     }
     if x == rx && x <= 0 {
@@ -16277,93 +15575,93 @@ FnSechCsch :: (st: EvalState *, args: Val *, count: int, marks: int *, which: in
     return ValNumber(1 / sinh(x))
 }
 
-GammaErrorFactor :: (res: Qd *, x: Qd *) {
+GammaErrorFactor :: (res: Quad *, x: Quad *) {
     num: [9] double = {1,1,-139,-571,163879,5246819,-534703531,-4483131259,432261921612371}
     den: [9] double = {12,288,51840,2488320,209018880,75246796800,902961561600,86684309913600,514904800886784000}
-    zn: Qd = {0,0}
-    xpn: Qd = {0,0}
-    t: Qd = {0,0}
-    c: Qd = {0,0}
+    zn: Quad = {0,0}
+    xpn: Quad = {0,0}
+    t: Quad = {0,0}
+    c: Quad = {0,0}
     xval: double = 0
     n: int = 0
     i: int = 0
-    xval = Q_Val(x)
+    xval = quad_val(x)
     if xval < 20 {
         n = (int)floor(21 - xval)
     }
 else {
         n = 0
     }
-    Q_Init(&xpn,n)
-    Q_Add(&xpn,&xpn,x)
-    Q_Init(&zn,1)
+    quad_init(&xpn,n)
+    quad_add(&xpn,&xpn,x)
+    quad_init(&zn,1)
     res[0] = zn
     i = 0
     while i < 9 {
-        Q_Mul(&zn,&zn,&xpn)
-        Q_Init(&c,den[i])
-        Q_Mul(&t,&zn,&c)
-        Q_Init(&c,num[i])
-        Q_Div(&t,&c,&t)
-        Q_Add(res,res,&t)
+        quad_mul(&zn,&zn,&xpn)
+        quad_init(&c,den[i])
+        quad_mul(&t,&zn,&c)
+        quad_init(&c,num[i])
+        quad_div(&t,&c,&t)
+        quad_add(res,res,&t)
         i += 1
     }
     if n > 0 {
-        en: Qd = {0,0}
-        xxn: Qd = {0,0}
-        xph: Qd = {0,0}
-        xpi: Qd = {0,0}
+        en: Quad = {0,0}
+        xxn: Quad = {0,0}
+        xph: Quad = {0,0}
+        xpi: Quad = {0,0}
         i = 1
         while i < n {
-            Q_Init(&xpi,i)
-            Q_Add(&xpi,&xpi,x)
-            Q_Div(res,res,&xpi)
-            Q_Mul(res,res,&xpn)
+            quad_init(&xpi,i)
+            quad_add(&xpi,&xpi,x)
+            quad_div(res,res,&xpi)
+            quad_mul(res,res,&xpn)
             i += 1
         }
-        Q_Init(&en,n)
-        Q_Exp(&en,NULL,&en)
-        Q_Div(res,res,&en)
-        Q_Init(&xph,0.5)
-        Q_Add(&xph,&xph,x)
-        Q_Div(&xxn,x,&xpn)
-        Q_Pow(&xxn,NULL,&xxn,&xph)
-        Q_Div(res,res,&xxn)
+        quad_init(&en,n)
+        quad_exp(&en,NULL,&en)
+        quad_div(res,res,&en)
+        quad_init(&xph,0.5)
+        quad_add(&xph,&xph,x)
+        quad_div(&xxn,x,&xpn)
+        quad_pow(&xxn,NULL,&xxn,&xph)
+        quad_div(res,res,&xxn)
     }
 }
 
-PochhammerSmallN :: (x: double, n: double, res: Qd *) {
-    qx: Qd = {0,0}
-    qn: Qd = {0,0}
-    qr: Qd = {0,0}
-    qs: Qd = {0,0}
-    f1: Qd = {0,0}
-    f2: Qd = {0,0}
-    f3: Qd = {0,0}
-    f4: Qd = {0,0}
-    f5: Qd = {0,0}
+PochhammerSmallN :: (x: double, n: double, res: Quad *) {
+    qx: Quad = {0,0}
+    qn: Quad = {0,0}
+    qr: Quad = {0,0}
+    qs: Quad = {0,0}
+    f1: Quad = {0,0}
+    f2: Quad = {0,0}
+    f3: Quad = {0,0}
+    f4: Quad = {0,0}
+    f5: Quad = {0,0}
     r: double = 0
-    Q_Init(&qx,x)
-    Q_Init(&qn,n)
-    Q_Div(&qr,&qn,&qx)
-    r = Q_Val(&qr)
-    Q_Add(&qs,&qx,&qn)
-    Q_Mul12(&f1,Log1pmx(r),x)
-    Q_Exp(&f1,NULL,&f1)
-    Q_Init(&f2,1)
-    Q_Add(&f2,&f2,&qr)
-    Q_Sqrt(&f2,&f2)
-    Q_Pow(&f3,NULL,&qs,&qn)
+    quad_init(&qx,x)
+    quad_init(&qn,n)
+    quad_div(&qr,&qn,&qx)
+    r = quad_val(&qr)
+    quad_add(&qs,&qx,&qn)
+    quad_mul12(&f1,Log1pmx(r),x)
+    quad_exp(&f1,NULL,&f1)
+    quad_init(&f2,1)
+    quad_add(&f2,&f2,&qr)
+    quad_sqrt(&f2,&f2)
+    quad_pow(&f3,NULL,&qs,&qn)
     GammaErrorFactor(&f4,&qs)
     GammaErrorFactor(&f5,&qx)
-    Q_Div(res,&f1,&f2)
-    Q_Mul(res,res,&f3)
-    Q_Mul(res,res,&f4)
-    Q_Div(res,res,&f5)
+    quad_div(res,&f1,&f2)
+    quad_mul(res,res,&f3)
+    quad_mul(res,res,&f4)
+    quad_div(res,res,&f5)
 }
 
-QGammaF :: (x: double, mant: Qd *, expb: int *) -> int {
-    qx: Qd = {0,0}
+QGammaF :: (x: double, mant: Quad *, expb: int *) -> int {
+    qx: Quad = {0,0}
     if x < -1.5 || x > 0.5 {
         return qfactf(x - 1,mant,expb)
     }
@@ -16374,16 +15672,16 @@ QGammaF :: (x: double, mant: Qd *, expb: int *) -> int {
         return 2
     }
     qfactf(x,mant,expb)
-    Q_Init(&qx,x)
-    Q_Div(mant,mant,&qx)
+    quad_init(&qx,x)
+    quad_div(mant,mant,&qx)
     rescale_mantexp(mant,expb)
     return 0
 }
 
-QBetaF :: (a: double, b: double, mant: Qd *, expb: int *) -> int {
-    ma: Qd = {0,0}
-    mb: Qd = {0,0}
-    mab: Qd = {0,0}
+QBetaF :: (a: double, b: double, mant: Quad *, expb: int *) -> int {
+    ma: Quad = {0,0}
+    mb: Quad = {0,0}
+    mab: Quad = {0,0}
     ea: int = 0
     eb: int = 0
     eab: int = 0
@@ -16393,7 +15691,7 @@ QBetaF :: (a: double, b: double, mant: Qd *, expb: int *) -> int {
         return 2
     }
     if ab <= 0 && ab == floor(ab) {
-        Q_Init(mant,0)
+        quad_init(mant,0)
         expb[0] = 0
         return 0
     }
@@ -16405,13 +15703,13 @@ QBetaF :: (a: double, b: double, mant: Qd *, expb: int *) -> int {
     if a > 1 && fabs(b) < 1 {
         if QGammaF(b,&mb,&eb) != 0 { return 1 }
         PochhammerSmallN(a,b,&ma)
-        Q_Div(mant,&mb,&ma)
+        quad_div(mant,&mb,&ma)
         expb[0] = eb
         return 0
     }
     if QGammaF(a,&ma,&ea) == 0 && QGammaF(b,&mb,&eb) == 0 && QGammaF(ab,&mab,&eab) == 0 {
-        Q_Mul(&ma,&ma,&mb)
-        Q_Div(mant,&ma,&mab)
+        quad_mul(&ma,&ma,&mb)
+        quad_div(mant,&ma,&mab)
         expb[0] = ea + eb - eab
         rescale_mantexp(mant,expb)
         return 0
@@ -16422,7 +15720,7 @@ QBetaF :: (a: double, b: double, mant: Qd *, expb: int *) -> int {
 FnBeta :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     a: double = 0
     b: double = 0
-    r: Qd = {0,0}
+    r: Quad = {0,0}
     e: int = 0
     rc: int = 0
     if count < 2 { return ValError(ERR_VALUE) }
@@ -16432,7 +15730,7 @@ FnBeta :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     b = CoerceNumber(&args[1])
     rc = QBetaF(a,b,&r,&e)
     if rc == 0 {
-        return ValNumber(ldexp(Q_Val(&r),e))
+        return ValNumber(ldexp(quad_val(&r),e))
     }
     if rc == 1 {
         return ValNumber(1e308 * 10)
@@ -16663,25 +15961,25 @@ FnMpseudoinverse :: (st: EvalState *, args: Val *, count: int, marks: int *) -> 
     m: int = 0
     n: int = 0
     threshold: double = 256 * 2.220446049250313e-16
-    qa: QMat = {0}
-    qt: QMat = {0}
-    qr: QQR = {0}
-    rt: QMat = {0}
-    rtr: QMat = {0}
-    b0: QMat = {0}
-    bi: QMat = {0}
-    w: QMat = {0}
-    bip1: QMat = {0}
-    x: [16] Qd = {0}
+    qa: QuadMatrix = {0}
+    qt: QuadMatrix = {0}
+    qr: QuadQR = {0}
+    rt: QuadMatrix = {0}
+    rtr: QuadMatrix = {0}
+    b0: QuadMatrix = {0}
+    bi: QuadMatrix = {0}
+    w: QuadMatrix = {0}
+    bip1: QuadMatrix = {0}
+    x: [16] Quad = {0}
     i: int = 0
     j: int = 0
     k: int = 0
     emax: double = 0
     emin_dummy: double = 0
     full_rank: int = 1
-    delta: Qd = {0,0}
-    two: Qd = {0,0}
-    p: Qd = {0,0}
+    delta: Quad = {0,0}
+    two: Quad = {0,0}
+    p: Quad = {0,0}
     transposed: int = 0
     if groups < 1 { return ValError(ERR_VALUE) }
     if groups > 2 { return ValError(ERR_NA) }
@@ -16704,7 +16002,7 @@ FnMpseudoinverse :: (st: EvalState *, args: Val *, count: int, marks: int *) -> 
         while i < m {
             j = 0
             while j < n {
-                Q_Init(&qt.data[j][i],a[i][j])
+                quad_init(&qt.data[j][i],a[i][j])
                 j += 1
             }
             i += 1
@@ -16721,64 +16019,64 @@ else {
         while i < m {
             j = 0
             while j < n {
-                Q_Init(&qa.data[i][j],a[i][j])
+                quad_init(&qa.data[i][j],a[i][j])
                 j += 1
             }
             i += 1
         }
     }
-    qr = QQRNew(&qa)
-    QMatEigenRange(&qr.R,&emin_dummy,&emax)
+    qr = quad_qr_new(&qa)
+    quad_matrix_eigen_range(&qr.R,&emin_dummy,&emax)
     if emax == 0 { return ValNumber(0) }
     i = 0
     while i < n {
-        abs_e: double = fabs(Q_Val(&qr.R.data[i][i]))
+        abs_e: double = fabs(quad_val(&qr.R.data[i][i]))
         if abs_e <= emax * threshold {
             full_rank = 0
-            QZero(&qr.R.data[i][i])
+            quad_zero(&qr.R.data[i][i])
         }
         i += 1
     }
-    Q_Init(&delta,full_rank != 0 ? 0 : emax * threshold)
+    quad_init(&delta,full_rank != 0 ? 0 : emax * threshold)
     rt.m = n
     rt.n = n
-    QMatTransposeQuad(&rt,&qr.R)
+    quad_matrix_transpose(&rt,&qr.R)
     rtr.m = n
     rtr.n = n
-    QMatMultiplyQuad(&rtr,&rt,&qr.R)
+    quad_matrix_multiply(&rtr,&rt,&qr.R)
     i = 0
     while i < n {
-        Q_Add(&rtr.data[i][i],&rtr.data[i][i],&delta)
+        quad_add(&rtr.data[i][i],&rtr.data[i][i],&delta)
         i += 1
     }
-    if QMatInverse(&rtr,0.0,&b0) == 0 { return ValError(ERR_NUM) }
+    if quad_matrix_inverse(&rtr,0.0,&b0) == 0 { return ValError(ERR_NUM) }
     bi.m = n
     bi.n = n
-    QMatMultiplyQuad(&bi,&b0,&rt)
+    quad_matrix_multiply(&bi,&b0,&rt)
     k = 0
     while k < 10 {
         w.m = n
         w.n = n
         bip1.m = n
         bip1.n = n
-        QMatMultiplyQuad(&w,&bi,&qr.R)
-        Q_Init(&two,2)
+        quad_matrix_multiply(&w,&bi,&qr.R)
+        quad_init(&two,2)
         i = 0
         while i < n {
             j = 0
             while j < n {
                 if i == j {
-                    Q_Sub(&w.data[i][j],&two,&w.data[i][j])
+                    quad_sub(&w.data[i][j],&two,&w.data[i][j])
                 }
 else {
-                    QZero(&p)
-                    Q_Sub(&w.data[i][j],&p,&w.data[i][j])
+                    quad_zero(&p)
+                    quad_sub(&w.data[i][j],&p,&w.data[i][j])
                 }
                 j += 1
             }
             i += 1
         }
-        QMatMultiplyQuad(&bip1,&w,&bi)
+        quad_matrix_multiply(&bip1,&w,&bi)
         i = 0
         while i < n {
             j = 0
@@ -16794,19 +16092,19 @@ else {
     while j < m {
         i = 0
         while i < m {
-            Q_Init(&x[i],i == j ? 1.0 : 0.0)
+            quad_init(&x[i],i == j ? 1.0 : 0.0)
             i += 1
         }
-        QQRMultiplyQt(&qr,x)
+        quad_qr_multiply_qt(&qr,x)
         if j == 0 {
-            acc2: Qd = {0,0}
+            acc2: Quad = {0,0}
             k = 0
             while k < n {
-                Q_Mul(&p,&bi.data[0][k],&x[k])
-                Q_Add(&acc2,&acc2,&p)
+                quad_mul(&p,&bi.data[0][k],&x[k])
+                quad_add(&acc2,&acc2,&p)
                 k += 1
             }
-            return ValNumber(Q_Val(&acc2))
+            return ValNumber(quad_val(&acc2))
         }
         j += 1
     }
@@ -16823,18 +16121,18 @@ FnLeverage :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     ok: int = 0
     m: int = 0
     n: int = 0
-    qa: QMat = {0}
-    qr: QQR = {0}
+    qa: QuadMatrix = {0}
+    qr: QuadQR = {0}
     xscale: [16] double = {0}
     aj: [16] double = {0}
-    b: [16] Qd = {0}
+    b: [16] Quad = {0}
     emin: double = 0
     emax: double = 0
     i: int = 0
     j: int = 0
     k: int = 0
-    acc: Qd = {0,0}
-    p: Qd = {0,0}
+    acc: Quad = {0,0}
+    p: Quad = {0,0}
     if groups < 1 { return ValError(ERR_VALUE) }
     if groups > 1 { return ValError(ERR_NA) }
     GroupBounds(marks,count,0,&gx0,&gl0)
@@ -16860,32 +16158,32 @@ FnLeverage :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     while i < m {
         j = 0
         while j < n {
-            Q_Init(&qa.data[i][j],a[i][j] / xscale[j])
+            quad_init(&qa.data[i][j],a[i][j] / xscale[j])
             j += 1
         }
         i += 1
     }
-    qr = QQRNew(&qa)
-    QMatEigenRange(&qr.R,&emin,&emax)
+    qr = quad_qr_new(&qa)
+    quad_matrix_eigen_range(&qr.R,&emin,&emax)
     if emin <= emax * (256 * 2.220446049250313e-16) { return ValError(ERR_NUM) }
     k = 0
     while k < m {
-        QZero(&acc)
+        quad_zero(&acc)
         i = 0
         while i < n {
             b[i] = qa.data[k][i]
             i += 1
         }
-        if QMatFwdSolve(&qr.R,b,b,0) != 0 { return ValError(ERR_NUM) }
-        if QMatBackSolve(&qr.R,b,b,0) != 0 { return ValError(ERR_NUM) }
+        if quad_matrix_fwd_solve(&qr.R,b,b,0) != 0 { return ValError(ERR_NUM) }
+        if quad_matrix_back_solve(&qr.R,b,b,0) != 0 { return ValError(ERR_NUM) }
         i = 0
         while i < n {
-            Q_Mul(&p,&qa.data[k][i],&b[i])
-            Q_Add(&acc,&acc,&p)
+            quad_mul(&p,&qa.data[k][i],&b[i])
+            quad_add(&acc,&acc,&p)
             i += 1
         }
         if k == 0 {
-            return ValNumber(Q_Val(&acc))
+            return ValNumber(quad_val(&acc))
         }
         k += 1
     }
