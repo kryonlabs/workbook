@@ -7305,6 +7305,451 @@ FnGetpivotdata :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Va
     return ValNumber(cellv->number)
 }
 
+FnClean :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    out: [512] char = ""
+    n: int = 0
+    i: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    i = 0
+    while txt[i] != 0 {
+        if (unsigned char)txt[i] >= 32 {
+            out[n] = txt[i]
+            n += 1
+        }
+        i += 1
+    }
+    out[n] = 0
+    return ValString(wb_strdup(out))
+}
+
+Utf8Encode :: (cp: int, out: char *) -> int {
+    if cp < 0 {
+        return 0
+    }
+    if cp < 128 {
+        out[0] = (char)cp
+        out[1] = 0
+        return 1
+    }
+    if cp < 2048 {
+        out[0] = (char)(192 | cp >> 6)
+        out[1] = (char)(128 | (cp & 63))
+        out[2] = 0
+        return 2
+    }
+    if cp < 65536 {
+        out[0] = (char)(224 | cp >> 12)
+        out[1] = (char)(128 | ((cp >> 6) & 63))
+        out[2] = (char)(128 | (cp & 63))
+        out[3] = 0
+        return 3
+    }
+    if cp < 1114112 {
+        out[0] = (char)(240 | cp >> 18)
+        out[1] = (char)(128 | ((cp >> 12) & 63))
+        out[2] = (char)(128 | ((cp >> 6) & 63))
+        out[3] = (char)(128 | (cp & 63))
+        out[4] = 0
+        return 4
+    }
+    return 0
+}
+
+Utf8Decode1 :: (s: const char *) -> int {
+    b0: int = (unsigned char)s[0]
+    if b0 < 128 { return b0 }
+    if (b0 & 224) == 192 {
+        return ((b0 & 31) << 6) | ((unsigned char)s[1] & 63)
+    }
+    if (b0 & 240) == 224 {
+        return ((b0 & 15) << 12) | (((unsigned char)s[1] & 63) << 6) | ((unsigned char)s[2] & 63)
+    }
+    if (b0 & 248) == 240 {
+        return ((b0 & 7) << 18) | (((unsigned char)s[1] & 63) << 12) | (((unsigned char)s[2] & 63) << 6) | ((unsigned char)s[3] & 63)
+    }
+    return b0
+}
+
+FnUnichar :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    out: [8] char = ""
+    n: int = 0
+    cp: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    cp = (int)CoerceNumber(&args[0])
+    if (cp < 0 || cp > 1114111) { return ValError(ERR_VALUE) }
+    if (cp >= 55296 && cp <= 57343) { return ValError(ERR_VALUE) }
+    n = Utf8Encode(cp,out)
+    if n == 0 { return ValError(ERR_VALUE) }
+    return ValString(wb_strdup(out))
+}
+
+FnUnicode :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    if txt[0] == 0 { return ValError(ERR_VALUE) }
+    return ValNumber((double)Utf8Decode1(txt))
+}
+
+FnTextjoin :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    delim: [64] char = ""
+    ignore_empty: int = 1
+    out: [2048] char = ""
+    n: int = 0
+    first: int = 1
+    i: int = 2
+    piece: [512] char = ""
+    if count < 3 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,delim,sizeof(delim)) < 0 { return ValError(ERR_VALUE) }
+    if count >= 2 { ignore_empty = CoerceNumber(&args[1]) != 0 ? 1 : 0 }
+    while i < count {
+        if args[i].kind == VAL_ERROR { return ValError(args[i].err) }
+        if args[i].kind == VAL_FLOAT {
+            FormatNumber(args[i].number,piece,sizeof(piece))
+        }
+else if args[i].kind == VAL_STRING {
+            snprintf(piece,sizeof(piece),"%s",args[i].text)
+        }
+else {
+            piece[0] = 0
+        }
+        if (piece[0] != 0 || ignore_empty == 0) {
+            if first == 0 {
+                n = (int)strlen(out)
+                snprintf(out + n,sizeof(out) - n,"%s",delim)
+            }
+            n = (int)strlen(out)
+            snprintf(out + n,sizeof(out) - n,"%s",piece)
+            first = 0
+        }
+        i += 1
+    }
+    return ValString(wb_strdup(out))
+}
+
+FnArabic :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [256] char = ""
+    result: int = 0
+    last: int = 0
+    i: int = 0
+    this_val: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    i = (int)strlen(txt) - 1
+    while i >= 0 {
+        this_val = 0
+        if (txt[i] == 105 || txt[i] == 73) { this_val = 1 }
+        if (txt[i] == 118 || txt[i] == 86) { this_val = 5 }
+        if (txt[i] == 120 || txt[i] == 88) { this_val = 10 }
+        if (txt[i] == 108 || txt[i] == 76) { this_val = 50 }
+        if (txt[i] == 99 || txt[i] == 67) { this_val = 100 }
+        if (txt[i] == 100 || txt[i] == 68) { this_val = 500 }
+        if (txt[i] == 109 || txt[i] == 77) { this_val = 1000 }
+        if this_val > 0 {
+            if this_val < last {
+                result -= this_val
+            }
+else {
+                result += this_val
+                last = this_val
+            }
+        }
+        i -= 1
+    }
+    return ValNumber((double)result)
+}
+
+RomanSub2 :: (buf: char *, find: const char *, a: int, b: int, shrink: int) {
+    p: CString = strstr(buf,find)
+    i: int = 0
+    j: int = 0
+    if p == NULL { return }
+    i = (int)(p - buf)
+    buf[i] = (char)a
+    buf[i + 1] = (char)b
+    j = i + 2
+    while buf[j + shrink] != 0 {
+        buf[j] = buf[j + shrink]
+        j += 1
+    }
+    buf[j] = 0
+}
+
+RomanSub3 :: (buf: char *, find: const char *, a: int, b: int, c: int, shrink: int) {
+    p: CString = strstr(buf,find)
+    i: int = 0
+    j: int = 0
+    if p == NULL { return }
+    i = (int)(p - buf)
+    buf[i] = (char)a
+    buf[i + 1] = (char)b
+    buf[i + 2] = (char)c
+    j = i + 3
+    while buf[j + shrink] != 0 {
+        buf[j] = buf[j + shrink]
+        j += 1
+    }
+    buf[j] = 0
+}
+
+RomanSub4 :: (buf: char *, find: const char *, c0: int, c1: int, c2: int, c3: int) {
+    p: CString = strstr(buf,find)
+    i: int = 0
+    if p == NULL { return }
+    i = (int)(p - buf)
+    buf[i] = (char)c0
+    buf[i + 1] = (char)c1
+    buf[i + 2] = (char)c2
+    buf[i + 3] = (char)c3
+}
+
+FnRoman :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    letter: [7] char = {'M','D','C','L','X','V','I'}
+    buf: [256] char = ""
+    n: double = 0
+    form: double = 0
+    dec: int = 1000
+    i: int = 0
+    j: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    n = floor(CoerceNumber(&args[0]))
+    form = count >= 2 ? floor(CoerceNumber(&args[1])) : 0
+    if (n < 0 || n > 3999) { return ValError(ERR_VALUE) }
+    if (form < 0 || form > 4) { return ValError(ERR_VALUE) }
+    if n == 0 { return ValString(wb_strdup("")) }
+    dec = 1000
+    j = 0
+    while dec > 1 {
+        while n > 0 {
+            if n >= dec {
+                buf[i] = letter[j]
+                i += 1
+                n -= dec
+            }
+else if n >= dec - dec / 10 {
+                buf[i] = letter[j + 2]
+                i += 1
+                buf[i] = letter[j]
+                i += 1
+                n -= dec - dec / 10
+            }
+else if n >= dec / 2 {
+                buf[i] = letter[j + 1]
+                i += 1
+                n -= dec / 2
+            }
+else if n >= dec / 2 - dec / 10 {
+                buf[i] = letter[j + 2]
+                i += 1
+                buf[i] = letter[j + 1]
+                i += 1
+                n -= dec / 2 - dec / 10
+            }
+else if dec == 10 {
+                buf[i] = letter[j + 2]
+                i += 1
+                n -= 1
+            }
+else {
+                break
+            }
+        }
+        dec /= 10
+        j += 2
+    }
+    buf[i] = 0
+    if form > 0 {
+        RomanSub2(buf,"XLV",'V','L',1)
+        RomanSub2(buf,"XCV",'V','C',1)
+        RomanSub2(buf,"CDL",'L','D',1)
+        RomanSub2(buf,"CML",'L','M',1)
+        RomanSub4(buf,"CMVC",'L','M','V','L')
+    }
+    if form == 1 {
+        RomanSub4(buf,"CDXC",'L','D','X','L')
+        RomanSub4(buf,"CDVC",'L','D','V','L')
+        RomanSub4(buf,"CMXC",'L','M','X','L')
+        RomanSub4(buf,"XCIX",'V','C','I','V')
+        RomanSub4(buf,"XLIX",'V','L','I','V')
+    }
+    if form > 1 {
+        RomanSub2(buf,"XLIX",'I','L',2)
+        RomanSub2(buf,"XCIX",'I','C',2)
+        RomanSub2(buf,"CDXC",'X','D',2)
+        RomanSub2(buf,"CDVC",'X','D',1)
+        RomanSub4(buf,"CDIC",'X','D','I','X')
+        RomanSub3(buf,"LMVL",'X','M','V',1)
+        RomanSub4(buf,"CMIC",'X','M','I','X')
+        RomanSub2(buf,"CMXC",'X','M',2)
+    }
+    if form > 2 {
+        RomanSub2(buf,"XDV",'V','D',1)
+        RomanSub4(buf,"XDIX",'V','D','I','V')
+        RomanSub2(buf,"XMV",'V','M',1)
+        RomanSub4(buf,"XMIX",'V','M','I','V')
+    }
+    if form == 4 {
+        RomanSub2(buf,"VDIV",'I','D',2)
+        RomanSub2(buf,"VMIV",'I','M',2)
+    }
+    return ValString(wb_strdup(buf))
+}
+
+FnEncodeurl :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    out: [2048] char = ""
+    n: int = 0
+    i: int = 0
+    c: int = 0
+    hexd: CString = "0123456789ABCDEF"
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    if txt[0] == 0 { return ValError(ERR_VALUE) }
+    i = 0
+    while txt[i] != 0 {
+        c = (unsigned char)txt[i]
+        if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 || c == 46 || c == 95 || c == 126 || c == 33 || c == 36 || c == 38 || c == 39 || c == 40 || c == 41 || c == 42 || c == 43 || c == 44 || c == 59 || c == 61 || c == 58 || c == 64 || c == 47) {
+            out[n] = (char)c
+            n += 1
+        }
+else {
+            out[n] = 37
+            out[n + 1] = hexd[c >> 4]
+            out[n + 2] = hexd[c & 15]
+            n += 3
+        }
+        i += 1
+    }
+    out[n] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnLenb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    return ValNumber((double)strlen(txt))
+}
+
+FnLeftb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    out: [512] char = ""
+    cnt: double = 1
+    icount: int = 0
+    len: int = 0
+    newlen: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    cnt = count >= 2 ? CoerceNumber(&args[1]) : 1
+    if cnt < 0 { return ValError(ERR_VALUE) }
+    icount = (int)cnt
+    len = (int)strlen(txt)
+    if icount >= len { return ValString(wb_strdup(txt)) }
+    newlen = icount
+    while (newlen > 0 && ((unsigned char)txt[newlen] & 192) == 128) { newlen -= 1 }
+    memcpy(out,txt,(size_t)newlen)
+    out[newlen] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnRightb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    cnt: double = 1
+    icount: int = 0
+    len: int = 0
+    start: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    cnt = count >= 2 ? CoerceNumber(&args[1]) : 1
+    if cnt < 0 { return ValError(ERR_VALUE) }
+    icount = (int)cnt
+    len = (int)strlen(txt)
+    if icount >= len { return ValString(wb_strdup(txt)) }
+    start = len - icount
+    while (start < len && ((unsigned char)txt[start] & 192) == 128) { start += 1 }
+    return ValString(wb_strdup(txt + start))
+}
+
+FnMidb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [512] char = ""
+    out: [512] char = ""
+    pos: double = 0
+    cnt: double = 0
+    ipos: int = 0
+    icnt: int = 0
+    len: int = 0
+    start: int = 0
+    endp: int = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    pos = CoerceNumber(&args[1])
+    cnt = CoerceNumber(&args[2])
+    if (pos < 1 || cnt < 0) { return ValError(ERR_VALUE) }
+    ipos = (int)pos
+    icnt = (int)cnt
+    len = (int)strlen(txt)
+    if ipos > len { return ValError(ERR_VALUE) }
+    start = ipos - 1
+    while (start < len && ((unsigned char)txt[start] & 192) == 128) { start += 1 }
+    endp = start + icnt
+    if endp > len { endp = len }
+    while (endp > start && endp < len && ((unsigned char)txt[endp] & 192) == 128) { endp -= 1 }
+    memcpy(out,txt + start,(size_t)(endp - start))
+    out[endp - start] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnNumbervalue :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValError(ERR_NA)
+}
+
+FnNumbervalueUnused :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    txt: [256] char = ""
+    sep: [8] char = "."
+    grp: [8] char = ","
+    out: [256] char = ""
+    n: int = 0
+    i: int = 0
+    v: double = 0
+    end: char * = NULL
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_FLOAT { return ValNumber(args[0].number) }
+    if TextArg(args,count,0,txt,sizeof(txt)) < 0 { return ValError(ERR_VALUE) }
+    if count >= 2 {
+        if TextArg(args,count,1,sep,sizeof(sep)) < 0 { return ValError(ERR_VALUE) }
+    }
+    if count >= 3 {
+        if TextArg(args,count,2,grp,sizeof(grp)) < 0 { return ValError(ERR_VALUE) }
+    }
+    if strcmp(sep,grp) == 0 { return ValError(ERR_VALUE) }
+    i = 0
+    while txt[i] != 0 {
+        c: int = (unsigned char)txt[i]
+        if c == 32 {
+            i += 1
+            continue
+        }
+        if grp[0] != 0 && c == (unsigned char)grp[0] && sep[0] != 0 {
+            i += 1
+            continue
+        }
+        if sep[0] != 0 && c == (unsigned char)sep[0] {
+            out[n] = 46
+        }
+else {
+            out[n] = (char)c
+        }
+        n += 1
+        i += 1
+    }
+    out[n] = 0
+    v = strtod(out,&end)
+    if end == out || end[0] != 0 { return ValError(ERR_VALUE) }
+    return ValNumber(v)
+}
+
 GoTanpi :: (x_in: double) -> double {
     x: double = x_in
     x = fmod(x,1.0)
@@ -8573,6 +9018,18 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"sumx2py2") == 0 { return FnPairAgg(1,args,count,marks) }
     if strcmp(name,"sumxmy2") == 0 { return FnPairAgg(2,args,count,marks) }
     if strcmp(name,"multinomial") == 0 { return FnMultinomial(st,args,count,marks) }
+    if strcmp(name,"clean") == 0 { return FnClean(st,args,count,marks) }
+    if strcmp(name,"unichar") == 0 { return FnUnichar(st,args,count,marks) }
+    if strcmp(name,"unicode") == 0 { return FnUnicode(st,args,count,marks) }
+    if strcmp(name,"textjoin") == 0 { return FnTextjoin(st,args,count,marks) }
+    if strcmp(name,"arabic") == 0 { return FnArabic(st,args,count,marks) }
+    if strcmp(name,"roman") == 0 { return FnRoman(st,args,count,marks) }
+    if strcmp(name,"encodeurl") == 0 { return FnEncodeurl(st,args,count,marks) }
+    if strcmp(name,"lenb") == 0 { return FnLenb(st,args,count,marks) }
+    if strcmp(name,"leftb") == 0 { return FnLeftb(st,args,count,marks) }
+    if strcmp(name,"rightb") == 0 { return FnRightb(st,args,count,marks) }
+    if strcmp(name,"midb") == 0 { return FnMidb(st,args,count,marks) }
+    if strcmp(name,"numbervalue") == 0 { return FnNumbervalue(st,args,count,marks) }
     if strcmp(name,"daverage") == 0 { return FnDaverage(st,args,count,marks) }
     if strcmp(name,"dcounta") == 0 { return FnDcounta(st,args,count,marks) }
     if strcmp(name,"dcount") == 0 { return FnDcount(st,args,count,marks) }
