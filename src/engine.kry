@@ -880,6 +880,9 @@ EvalFunction :: (st: EvalState *, text: const char *, pos: int *, name: const ch
             arg_slot: int = st->arg_count
             st->pend_kind = 0
             one: Val = EvalExpression(st,text,&arg_pos)
+            if one.kind == VAL_ERROR && arg_pos == pos[0] && (text[arg_pos] == ',' || text[arg_pos] == ')') {
+                one = ValEmpty()
+            }
             if one.kind == VAL_RANGE {
                 ValFree(&one)
                 if arg_slot < WB_ARGS_MAX {
@@ -14079,6 +14082,10 @@ else {
     if strcmp(name,"unique") == 0 { return FnUnique(st,args,count,marks) }
     if strcmp(name,"eigen") == 0 { return FnEigen(st,args,count,marks) }
     if strcmp(name,"cholesky") == 0 { return FnCholesky(st,args,count,marks) }
+    if strcmp(name,"linest") == 0 { return FnLinEstLogEst(st,args,count,marks,0) }
+    if strcmp(name,"logest") == 0 { return FnLinEstLogEst(st,args,count,marks,1) }
+    if strcmp(name,"trend") == 0 { return FnTrend(st,args,count,marks) }
+    if strcmp(name,"growth") == 0 { return FnGrowth(st,args,count,marks) }
     if strcmp(name,"averageif") == 0 { return FnSumIf(st,args,count,marks,1) }
     if strcmp(name,"countif") == 0 { return FnCountIf(st,args,count,marks) }
     return ValError(ERR_NAME)
@@ -15310,6 +15317,502 @@ FnCholesky :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
         r += 1
     }
     return ValNumber(b[0][0])
+}
+
+/* ==== regression: exact port of goffice go-regression.c ==== */
+CalcScale :: (xs: double *, m: int) -> double {
+    mabs: double = 0
+    e: int = 0
+    i: int = 1
+    if m < 1 { return 1 }
+    mabs = fabs(xs[0])
+    i = 1
+    while i < m {
+        xabs: double = fabs(xs[i])
+        if xabs > mabs { mabs = xabs }
+        i += 1
+    }
+    if mabs == 0 { return 1 }
+    frexp(mabs,&e)
+    return ldexp(1.0,e - 1)
+}
+
+GoRangeSumsq :: (xs: double *, n: int) -> double {
+    acc: QAcc = {0}
+    q: Qd = {0,0}
+    while n > 0 {
+        n -= 1
+        Q_Mul12(&q,xs[n],xs[n])
+        QAccAddQuad(&acc,&q)
+    }
+    return QAccValue(&acc)
+}
+
+CalcResidual :: (xsst: double *, ys: double *, m: int, n: int, y: double *) -> double {
+    n2: Qd = {0,0}
+    d: Qd = {0,0}
+    e: Qd = {0,0}
+    i: int = 0
+    j: int = 0
+    i = 0
+    while i < m {
+        Q_Init(&d,ys[i])
+        j = 0
+        while j < n {
+            Q_Mul12(&e,xsst[j * 64 + i],y[j])
+            Q_Sub(&d,&d,&e)
+            j += 1
+        }
+        Q_Mul(&d,&d,&d)
+        Q_Add(&n2,&n2,&d)
+        i += 1
+    }
+    return Q_Val(&n2)
+}
+
+GenLinReg :: (xsst: double *, dim: int, ys: double *, n: int, affine: int, result: double *) -> int {
+    qss: QMat = {0}
+    qr: QQR = {0}
+    xscale: [16] double = {0}
+    qty: [64] Qd = {0}
+    qresult: [16] Qd = {0}
+    emax: double = 0
+    emin_dummy: double = 0
+    df_resid: int = 0
+    ss_total: double = 0
+    ss_resid: double = 0
+    sqr_r: double = 0
+    i: int = 0
+    j: int = 0
+    if dim < 1 || n < 1 { return 3 }
+    if dim > n { return 3 }
+    if dim > 16 || n > 64 { return 3 }
+    qss.m = n
+    qss.n = dim
+    j = 0
+    while j < dim {
+        xscale[j] = CalcScale(&xsst[j * 64],n)
+        i = 0
+        while i < n {
+            Q_Init(&qss.data[i][j],xsst[j * 64 + i] / xscale[j])
+            i += 1
+        }
+        j += 1
+    }
+    qr = QQRNew(&qss)
+    QMatEigenRange(&qr.R,&emin_dummy,&emax)
+    df_resid = n - dim
+    i = 0
+    while i < dim {
+        ei: double = Q_Val(&qr.R.data[i][i])
+        if fabs(ei) >= emax * (256 * 2.220446049250313e-16) {
+            /* not degenerate */
+        }
+else {
+            QZero(&qr.R.data[i][i])
+            df_resid += 1
+        }
+        i += 1
+    }
+    i = 0
+    while i < n {
+        Q_Init(&qty[i],ys[i])
+        i += 1
+    }
+    QQRMultiplyQt(&qr,qty)
+    QMatBackSolve(&qr.R,qresult,qty,1)
+    i = 0
+    while i < dim {
+        result[i] = Q_Val(&qresult[i]) / xscale[i]
+        i += 1
+    }
+    ss_resid = CalcResidual(xsst,ys,n,dim,result)
+    if affine != 0 {
+        ss_total = StatDevsq(ys,n)
+    }
+else {
+        ss_total = GoRangeSumsq(ys,n)
+    }
+    sqr_r = ss_total == 0 ? 1 : 1 - ss_resid / ss_total
+    if sqr_r < 0 { return 1 }
+    return 0
+}
+
+CollectStrictGroup :: (args: Val *, start: int, len: int, out: double *) -> int {
+    n: int = 0
+    i: int = 0
+    while i < len {
+        v: Val * = &args[start + i]
+        if v->kind == VAL_ERROR { return -1 }
+        if v->kind != VAL_FLOAT { return -2 }
+        if n < 4096 {
+            out[n] = v->number
+            n += 1
+        }
+        i += 1
+    }
+    return n
+}
+
+FnLinEstLogEst :: (st: EvalState *, args: Val *, count: int, marks: int *, want_exp: int) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    gx3: int = 0
+    gl3: int = 0
+    ys: [64] double = {0}
+    xscols: [64] double = {0}
+    xsst: [17][64] double = {0}
+    n: int = 0
+    ny2: int = 0
+    dim: int = 1
+    rtype: int = 0
+    affine: int = 1
+    xcols: int = 0
+    ycols: int = 0
+    xrows: int = 0
+    yrows: int = 0
+    linres: [17] double = {0}
+    regres: int = 0
+    i: int = 0
+    j: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 4 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n = CollectStrictGroup(args,gx0,gl0,ys)
+    if n == -1 { return ValError(args[gx0].err) }
+    if n < -1 { return ValError(ERR_VALUE) }
+    if n < 1 { return ValError(ERR_VALUE) }
+    if n > 64 { return ValError(ERR_VALUE) }
+    ycols = st->call_group_cols[gx0]
+    if ycols < 1 { ycols = n }
+    yrows = gl0 / ycols
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 && args[gx1].kind == VAL_EMPTY { return ValError(ERR_REF) }
+        ny2 = CollectStrictGroup(args,gx1,gl1,xscols)
+        if ny2 == -1 { return ValError(args[gx1].err) }
+        if ny2 < -1 { return ValError(ERR_VALUE) }
+        xcols = st->call_group_cols[gx1]
+        if xcols < 1 { xcols = gl1 }
+        xrows = gl1 / xcols
+        if ycols == 1 {
+            if xrows != yrows { return ValError(ERR_REF) }
+            dim = xcols
+            rtype = 1
+            i = 0
+            while i < dim {
+                j = 0
+                while j < ny2 {
+                    xsst[i + 1][j] = xscols[j * xcols + i]
+                    j += 1
+                }
+                i += 1
+            }
+        }
+else if yrows == 1 {
+            if xcols != ycols { return ValError(ERR_REF) }
+            dim = xrows
+            rtype = 2
+            i = 0
+            while i < dim {
+                j = 0
+                while j < ny2 {
+                    xsst[i + 1][j] = xscols[i * xcols + j]
+                    j += 1
+                }
+                i += 1
+            }
+        }
+else {
+            if xrows != yrows || xcols != ycols { return ValError(ERR_REF) }
+            dim = 1
+            rtype = 0
+            i = 0
+            while i < n {
+                xsst[1][i] = xscols[i]
+                i += 1
+            }
+        }
+    }
+else {
+        i = 0
+        while i < n {
+            xsst[1][i] = i + 1
+            i += 1
+        }
+    }
+    if dim > 16 { return ValError(ERR_VALUE) }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&gx2,&gl2)
+        if gl2 >= 1 { affine = CoerceNumber(&args[gx2]) != 0 ? 1 : 0 }
+    }
+    if want_exp != 0 {
+        i = 0
+        while i < n {
+            if ys[i] <= 0 { return ValError(ERR_NUM) }
+            ys[i] = log(ys[i])
+            i += 1
+        }
+    }
+    if affine != 0 {
+        i = 0
+        while i < n {
+            xsst[0][i] = 1
+            i += 1
+        }
+        regres = GenLinReg(&xsst[0][0],dim + 1,ys,n,1,linres)
+    }
+else {
+        linres[0] = 0
+        regres = GenLinReg(&xsst[1][0],dim,ys,n,0,&linres[1])
+    }
+    if regres != 0 { return ValError(ERR_NUM) }
+    if want_exp != 0 {
+        i = 0
+        while i < dim + 1 {
+            linres[i] = exp(linres[i])
+            i += 1
+        }
+    }
+    return ValNumber(linres[dim])
+}
+
+FnTrend :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx3: int = 0
+    gl3: int = 0
+    ys: [64] double = {0}
+    xscols: [64] double = {0}
+    nxs: [64] double = {0}
+    xsst: [17][64] double = {0}
+    linres: [17] double = {0}
+    n: int = 0
+    nx2: int = 0
+    dim: int = 1
+    rtype: int = 0
+    affine: int = 1
+    xcols: int = 0
+    ycols: int = 0
+    xrows: int = 0
+    yrows: int = 0
+    regres: int = 0
+    i: int = 0
+    j: int = 0
+    res: double = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 4 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n = CollectStrictGroup(args,gx0,gl0,ys)
+    if n == -1 { return ValError(args[gx0].err) }
+    if n < -1 { return ValError(ERR_VALUE) }
+    if n < 1 || n > 64 { return ValError(ERR_VALUE) }
+    ycols = st->call_group_cols[gx0]
+    if ycols < 1 { ycols = n }
+    yrows = gl0 / ycols
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 && args[gx1].kind == VAL_EMPTY { return ValError(ERR_REF) }
+        nx2 = CollectStrictGroup(args,gx1,gl1,xscols)
+        if nx2 == -1 { return ValError(args[gx1].err) }
+        if nx2 < -1 { return ValError(ERR_VALUE) }
+        xcols = st->call_group_cols[gx1]
+        if xcols < 1 { xcols = gl1 }
+        xrows = gl1 / xcols
+        if ycols == 1 {
+            if xrows != yrows { return ValError(ERR_REF) }
+            dim = xcols
+            rtype = 1
+        }
+else if yrows == 1 {
+            if xcols != ycols { return ValError(ERR_REF) }
+            dim = xrows
+            rtype = 2
+        }
+else {
+            if xrows != yrows || xcols != ycols { return ValError(ERR_REF) }
+            dim = 1
+            rtype = 0
+        }
+        i = 0
+        while i < dim {
+            j = 0
+            while j < nx2 {
+                if rtype == 2 {
+                    xsst[i + 1][j] = xscols[i * xcols + j]
+                }
+else {
+                    xsst[i + 1][j] = xscols[j * xcols + i]
+                }
+                j += 1
+            }
+            i += 1
+        }
+    }
+else {
+        i = 0
+        while i < n {
+            xsst[1][i] = i + 1
+            i += 1
+        }
+    }
+    if dim == 1 { rtype = 0 }
+    if dim > 16 { return ValError(ERR_VALUE) }
+    if groups >= 4 {
+        GroupBounds(marks,count,3,&gx3,&gl3)
+        if gl3 >= 1 { affine = CoerceNumber(&args[gx3]) != 0 ? 1 : 0 }
+    }
+    if affine != 0 {
+        i = 0
+        while i < n {
+            xsst[0][i] = 1
+            i += 1
+        }
+        regres = GenLinReg(&xsst[0][0],dim + 1,ys,n,1,linres)
+    }
+else {
+        linres[0] = 0
+        regres = GenLinReg(&xsst[1][0],dim,ys,n,0,&linres[1])
+    }
+    if regres != 0 { return ValError(ERR_NUM) }
+    if groups >= 3 {
+        gxn: int = 0
+        gln: int = 0
+        GroupBounds(marks,count,2,&gxn,&gln)
+        nx2 = CollectStrictGroup(args,gxn,gln,nxs)
+        if nx2 == -1 { return ValError(args[gxn].err) }
+        if nx2 < -1 { return ValError(ERR_VALUE) }
+        if rtype == 1 {
+            if dim != st->call_group_cols[gxn] { return ValError(ERR_NUM) }
+        }
+        res = linres[0]
+        if rtype == 1 {
+            j = 0
+            while j < dim {
+                res += nxs[j] * linres[j + 1]
+                j += 1
+            }
+        }
+else {
+            res += nxs[0] * linres[1]
+        }
+        return ValNumber(res)
+    }
+    if groups >= 2 {
+        res = linres[0]
+        if rtype == 1 {
+            j = 0
+            while j < dim {
+                res += xscols[j] * linres[j + 1]
+                j += 1
+            }
+        }
+else if rtype == 2 {
+            res += xscols[0] * linres[1]
+        }
+else {
+            res += xscols[0] * linres[1]
+        }
+        return ValNumber(res)
+    }
+    return ValNumber(linres[0] + 1 * linres[1])
+}
+
+FnGrowth :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    gx3: int = 0
+    gl3: int = 0
+    ys: [64] double = {0}
+    xs: [64] double = {0}
+    nxs: [64] double = {0}
+    xsst: [17][64] double = {0}
+    expres: [17] double = {0}
+    n: int = 0
+    nx2: int = 0
+    affine: int = 1
+    regres: int = 0
+    i: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 4 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n = CollectStrictGroup(args,gx0,gl0,ys)
+    if n == -1 { return ValError(args[gx0].err) }
+    if n < -1 { return ValError(ERR_VALUE) }
+    if n < 1 || n > 64 { return ValError(ERR_VALUE) }
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 && args[gx1].kind == VAL_EMPTY { return ValError(ERR_REF) }
+        nx2 = CollectStrictGroup(args,gx1,gl1,xs)
+        if nx2 == -1 { return ValError(args[gx1].err) }
+        if nx2 < -1 { return ValError(ERR_VALUE) }
+        if nx2 != n { return ValError(ERR_NUM) }
+    }
+else {
+        i = 0
+        while i < n {
+            xs[i] = i + 1
+            i += 1
+        }
+    }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&gx2,&gl2)
+        nx2 = CollectStrictGroup(args,gx2,gl2,nxs)
+        if nx2 == -1 { return ValError(args[gx2].err) }
+        if nx2 < -1 { return ValError(ERR_VALUE) }
+    }
+else {
+        i = 0
+        while i < n {
+            nxs[i] = xs[i]
+            i += 1
+        }
+        nx2 = n
+    }
+    if nx2 < 1 { return ValError(ERR_NUM) }
+    if groups >= 4 {
+        GroupBounds(marks,count,3,&gx3,&gl3)
+        if gl3 >= 1 { affine = CoerceNumber(&args[gx3]) != 0 ? 1 : 0 }
+    }
+    i = 0
+    while i < n {
+        if ys[i] <= 0 { return ValError(ERR_NUM) }
+        ys[i] = log(ys[i])
+        xsst[1][i] = xs[i]
+        i += 1
+    }
+    if affine != 0 {
+        i = 0
+        while i < n {
+            xsst[0][i] = 1
+            i += 1
+        }
+        regres = GenLinReg(&xsst[0][0],2,ys,n,1,expres)
+    }
+else {
+        expres[0] = 0
+        regres = GenLinReg(&xsst[1][0],1,ys,n,0,&expres[1])
+    }
+    if regres != 0 { return ValError(ERR_NUM) }
+    i = 0
+    while i < 2 {
+        expres[i] = exp(expres[i])
+        i += 1
+    }
+    return ValNumber(pow(expres[1],nxs[0]) * expres[0])
 }
 
 
