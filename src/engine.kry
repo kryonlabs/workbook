@@ -13490,6 +13490,7 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"unix2date") == 0 { return FnUnix2date(st,args,count,marks) }
     if strcmp(name,"timevalue") == 0 { return FnTimevalue(st,args,count,marks) }
     if strcmp(name,"odf.time") == 0 { return FnOdfTime(st,args,count,marks) }
+    if strcmp(name,"logreg") == 0 { return FnLogReg(st,args,count,marks) }
     if strcmp(name,"acot") == 0 { return FnMath1(0,args,count) }
     if strcmp(name,"acoth") == 0 { return FnMath1(1,args,count) }
     if strcmp(name,"acosh") == 0 { return FnMath1(2,args,count) }
@@ -17033,6 +17034,109 @@ else {
         y = CoerceNumber(&args[1])
     }
     return ValNumber(nextafter(x,y))
+}
+
+FnLogReg :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    ys: [64] double = {0}
+    xscols: [64] double = {0}
+    xsst: [17][64] double = {0}
+    n: int = 0
+    ny2: int = 0
+    dim: int = 1
+    rtype: int = 0
+    affine: int = 1
+    xcols: int = 0
+    ycols: int = 0
+    xrows: int = 0
+    yrows: int = 0
+    logres: [17] double = {0}
+    regres: int = 0
+    i: int = 0
+    j: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 4 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n = CollectStrictGroup(args,gx0,gl0,ys)
+    if n == -1 { return ValError(args[gx0].err) }
+    if n < -1 { return ValError(ERR_VALUE) }
+    if n < 1 || n > 64 { return ValError(ERR_VALUE) }
+    ycols = st->call_group_cols[gx0]
+    if ycols < 1 { ycols = n }
+    yrows = gl0 / ycols
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        ny2 = CollectStrictGroup(args,gx1,gl1,xscols)
+        if ny2 == -1 { return ValError(args[gx1].err) }
+        if ny2 < -1 { return ValError(ERR_VALUE) }
+        xcols = st->call_group_cols[gx1]
+        if xcols < 1 { xcols = gl1 }
+        xrows = gl1 / xcols
+        if ycols == 1 {
+            if xrows != yrows { return ValError(ERR_REF) }
+            dim = xcols
+            rtype = 1
+        }
+else if yrows == 1 {
+            if xcols != ycols { return ValError(ERR_REF) }
+            dim = xrows
+            rtype = 2
+        }
+else {
+            if xrows != yrows || xcols != ycols { return ValError(ERR_REF) }
+            dim = 1
+            rtype = 0
+        }
+        i = 0
+        while i < dim {
+            j = 0
+            while j < ny2 {
+                xv: double = 0
+                if rtype == 2 {
+                    xv = xscols[i * xcols + j]
+                }
+else {
+                    xv = xscols[j * xcols + i]
+                }
+                if xv <= 0 { return ValError(ERR_NUM) }
+                xsst[i + 1][j] = log(xv)
+                j += 1
+            }
+            i += 1
+        }
+    }
+else {
+        i = 0
+        while i < n {
+            xsst[1][i] = log((double)(i + 1))
+            i += 1
+        }
+    }
+    if dim > 16 { return ValError(ERR_VALUE) }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&gx2,&gl2)
+        if gl2 >= 1 { affine = CoerceNumber(&args[gx2]) != 0 ? 1 : 0 }
+    }
+    if affine != 0 {
+        i = 0
+        while i < n {
+            xsst[0][i] = 1
+            i += 1
+        }
+        regres = GenLinReg(&xsst[0][0],dim + 1,ys,n,1,logres)
+    }
+else {
+        logres[0] = 0
+        regres = GenLinReg(&xsst[1][0],dim,ys,n,0,&logres[1])
+    }
+    if regres != 0 { return ValError(ERR_NUM) }
+    return ValNumber(logres[dim])
 }
 
 FnOwent :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
