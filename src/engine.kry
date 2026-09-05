@@ -67,6 +67,7 @@ state {
     ERR_NULL = 6
     ERR_CYCLE = 7
     ERR_LIMIT = 8
+    ERR_LIMIT2 = 9
 }
 
 #enum {
@@ -13474,6 +13475,86 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
         }
         return ValNumber(dbeta((bx - lo) / (hi - lo),alpha2,beta2,0) / (hi - lo))
     }
+    if strcmp(name,"cot") == 0 {
+        s2: double = sin(CoerceNumber(&args[0]))
+        if s2 == 0 { return ValError(ERR_NUM) }
+        return ValNumber(cos(CoerceNumber(&args[0])) / s2)
+    }
+    if strcmp(name,"coth") == 0 { return ValNumber(1 / tanh(CoerceNumber(&args[0]))) }
+    if strcmp(name,"csc") == 0 { return ValNumber(1 / sin(CoerceNumber(&args[0]))) }
+    if strcmp(name,"agm") == 0 { return ValNumber(GnmAgm(CoerceNumber(&args[0]),CoerceNumber(&args[1]))) }
+    if strcmp(name,"gd") == 0 { return ValNumber(GnmGd(CoerceNumber(&args[0]))) }
+    if strcmp(name,"gamma") == 0 {
+        gx: double = CoerceNumber(&args[0])
+        if gx == 0 { return ValError(ERR_NUM) }
+        if gx < 0 && gx == floor(gx) { return ValError(ERR_NUM) }
+        return ValNumber(tgamma(gx))
+    }
+    if strcmp(name,"erf") == 0 {
+        if count >= 2 {
+            return ValNumber(erf(CoerceNumber(&args[1])) - erf(CoerceNumber(&args[0])))
+        }
+        return ValNumber(erf(CoerceNumber(&args[0])))
+    }
+    if strcmp(name,"gauss") == 0 { return ValNumber(erf(CoerceNumber(&args[0]) / 1.414213562373095048801688724209) / 2) }
+    if strcmp(name,"phi") == 0 { return ValNumber(dnorm_go(CoerceNumber(&args[0]),0,1,0)) }
+    if strcmp(name,"igamma") == 0 {
+        ai: double = CoerceNumber(&args[0])
+        zi: double = CoerceNumber(&args[1])
+        lower_i: int = count >= 3 ? (CoerceNumber(&args[2]) != 0 ? 1 : 0) : 1
+        reg_i: int = count >= 4 ? (CoerceNumber(&args[3]) != 0 ? 1 : 0) : 1
+        re_i: int = count >= 5 ? (CoerceNumber(&args[4]) != 0 ? 1 : 0) : 1
+        aic: Cplx = {ai,0}
+        zic: Cplx = {zi,0}
+        igv: Cplx = CxIgamma(aic,zic,lower_i,reg_i)
+        if re_i != 0 { return ValNumber(igv.re) }
+        return ValNumber(igv.im)
+    }
+    if strcmp(name,"fib") == 0 { return FnFib(st,args,count,marks) }
+    if strcmp(name,"rri") == 0 { return FnRri(st,args,count,marks) }
+    if strcmp(name,"ftest") == 0 { return FnFtest(st,args,count,marks) }
+    if strcmp(name,"days") == 0 { return FnDays(st,args,count,marks) }
+    if strcmp(name,"type") == 0 { return FnType(st,args,count,marks) }
+    if strcmp(name,"error") == 0 { return FnErrorFn(st,args,count,marks) }
+    if strcmp(name,"weeknum") == 0 { return FnWeeknum(st,args,count,marks) }
+    if strcmp(name,"rank") == 0 { return FnRankPlain(st,args,count,marks) }
+    if strcmp(name,"rsq") == 0 { return FnRsq(st,args,count,marks) }
+    if strcmp(name,"percentof") == 0 { return FnPercentof(st,args,count,marks) }
+    if strcmp(name,"nt_d") == 0 { return FnNtFunc(st,args,count,marks,0) }
+    if strcmp(name,"nt_sigma") == 0 { return FnNtFunc(st,args,count,marks,1) }
+    if strcmp(name,"nt_phi") == 0 { return FnNtFunc(st,args,count,marks,2) }
+    if strcmp(name,"nt_radical") == 0 { return FnNtFunc(st,args,count,marks,3) }
+    if strcmp(name,"nt_mu") == 0 { return FnNtFunc(st,args,count,marks,4) }
+    if strcmp(name,"nt_omega") == 0 { return FnNtFunc(st,args,count,marks,5) }
+    if strcmp(name,"nt_pi") == 0 { return FnNtFunc(st,args,count,marks,6) }
+    if strcmp(name,"hdate") == 0 { return FnHdate(st,args,count,marks) }
+    if strcmp(name,"hdate_julian") == 0 { return FnHdateJulian(st,args,count,marks) }
+    if strcmp(name,"g_duration") == 0 {
+        gr: double = CoerceNumber(&args[0])
+        gpv: double = CoerceNumber(&args[1])
+        gfv: double = CoerceNumber(&args[2])
+        if gr <= 0 { return ValError(ERR_DIV0) }
+        if gfv == 0 || gpv == 0 { return ValError(ERR_DIV0) }
+        if gfv / gpv < 0 { return ValError(ERR_VALUE) }
+        return ValNumber(log(gfv / gpv) / log1p(gr))
+    }
+    if strcmp(name,"geomdist") == 0 {
+        gk: double = eval_fake_floor(CoerceNumber(&args[0]))
+        gpp: double = CoerceNumber(&args[1])
+        gcum: int = count >= 3 ? (CoerceNumber(&args[2]) != 0 ? 1 : 0) : 0
+        if gpp < 0 || gpp > 1 || gk < 0 { return ValError(ERR_NUM) }
+        if gcum != 0 { return ValNumber(PgeomGo(gk,gpp,1,0)) }
+        return ValNumber(DgeomGo(gk,gpp,0))
+    }
+    if strcmp(name,"binomdist") == 0 {
+        bn: double = eval_fake_floor(CoerceNumber(&args[0]))
+        bt: double = eval_fake_floor(CoerceNumber(&args[1]))
+        bp: double = CoerceNumber(&args[2])
+        bcum: int = CoerceNumber(&args[3]) != 0 ? 1 : 0
+        if bn < 0 || bt < 0 || bp < 0 || bp > 1 || bn > bt { return ValError(ERR_NUM) }
+        if bcum != 0 { return ValNumber(pbinom(bn,bt,bp,1,0)) }
+        return ValNumber(dbinom(bn,bt,bp,0))
+    }
     if strcmp(name,"r.dnorm") == 0 { return ValNumber(dnorm_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
     if strcmp(name,"r.dchisq") == 0 { return ValNumber(DchisqGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0)) }
     if strcmp(name,"r.dexp") == 0 { return ValNumber(dexp_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]))) }
@@ -17155,6 +17236,296 @@ PcauchyGo :: (x_in: double, location: double, scale: double, lower_tail: int, lo
     return log_p != 0 ? log(v2) : v2
 }
 
+FibTable :: () -> int {
+    fibs: [47] int = {0}
+    fibs[1] = 1
+    fibs[2] = 1
+    i: int = 3
+    while i < 47 {
+        fibs[i] = fibs[i - 1] + fibs[i - 2]
+        i += 1
+    }
+    return 0
+}
+
+FnFib :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: double = 0
+    s5: double = 0
+    r1: double = 0
+    r2: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    n = floor(CoerceNumber(&args[0]))
+    if n <= 0 { return ValError(ERR_NUM) }
+    if n < 47 {
+        fibs: [47] int = {0}
+        fibs[1] = 1
+        fibs[2] = 1
+        i2: int = 3
+        while i2 < 47 {
+            fibs[i2] = fibs[i2 - 1] + fibs[i2 - 2]
+            i2 += 1
+        }
+        return ValNumber(fibs[(int)n])
+    }
+    s5 = sqrt(5.0)
+    r1 = (1 + s5) / 2
+    r2 = (1 - s5) / 2
+    return ValNumber((pow(r1,n) - pow(r2,n)) / s5)
+}
+
+FnRri :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    per: double = 0
+    pv: double = 0
+    fv: double = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    per = CoerceNumber(&args[0])
+    pv = CoerceNumber(&args[1])
+    fv = CoerceNumber(&args[2])
+    if per < 0 { return ValError(ERR_NUM) }
+    if pv == 0 || per == 0 { return ValError(ERR_DIV0) }
+    return ValNumber(pow(fv / pv,1 / per) - 1)
+}
+
+FnFtest :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    nx: int = 0
+    ny: int = 0
+    varx: double = 0
+    vary: double = 0
+    p: double = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    nx = CashList(args + gx0,gl0,xs)
+    ny = CashList(args + gx1,gl1,ys)
+    if nx <= 1 || ny <= 1 { return ValError(ERR_DIV0) }
+    varx = StatDevsq(xs,nx) / (nx - 1)
+    vary = StatDevsq(ys,ny) / (ny - 1)
+    if vary == 0 { return ValError(ERR_DIV0) }
+    p = pf(varx / vary,nx - 1,ny - 1,0,0)
+    if p > 0.5 {
+        p = pf(varx / vary,nx - 1,ny - 1,1,0)
+    }
+    return ValNumber(2 * p)
+}
+
+FnDays :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    d1: double = 0
+    d2: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    d1 = floor(CoerceNumber(&args[0]))
+    d2 = floor(CoerceNumber(&args[1]))
+    return ValNumber((int)d1 - (int)d2)
+}
+
+FnType :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_BOOL { return ValNumber(4) }
+    if args[0].kind == VAL_EMPTY || args[0].kind == VAL_FLOAT { return ValNumber(1) }
+    if args[0].kind == VAL_ERROR { return ValNumber(16) }
+    if args[0].kind == VAL_STRING { return ValNumber(2) }
+    return ValNumber(1)
+}
+
+FnErrorFn :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    label: [256] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    CoerceText(&args[0],label,sizeof(label))
+    return ValString(wb_strdup(label))
+}
+
+WeekdayOfSerial :: (serial: int) -> int {
+    return ((serial - 25569 + 3) % 7 + 7) % 7 + 1
+}
+
+DayOfYear :: (serial: int) -> int {
+    y: int = 0
+    jan1: int = 0
+    y2: int = 0
+    CivilFromDays(serial + SerialEpoch(),&y,&y2,&jan1)
+    return serial - (DaysFromCivil(y,1,1) - SerialEpoch()) + 1
+}
+
+IsoWeekOfYear :: (serial: int) -> int {
+    doy2: int = DayOfYear(serial)
+    wd2: int = WeekdayOfSerial(serial)
+    week2: int = (doy2 - wd2 + 10) / 7
+    if week2 < 1 {
+        y4: int = 0
+        m4: int = 0
+        d4: int = 0
+        CivilFromDays(serial + SerialEpoch(),&y4,&m4,&d4)
+        return IsoWeekOfYear(DaysFromCivil(y4 - 1,12,28) - SerialEpoch())
+    }
+    if week2 == 53 {
+        y3: int = 0
+        m3: int = 0
+        d3: int = 0
+        CivilFromDays(serial + SerialEpoch(),&y3,&m3,&d3)
+        jan1s: int = DaysFromCivil(y3,1,1) - SerialEpoch()
+        dec31s: int = DaysFromCivil(y3,12,31) - SerialEpoch()
+        if WeekdayOfSerial(jan1s) == 4 || WeekdayOfSerial(dec31s) == 4 {
+            return 53
+        }
+        return 1
+    }
+    return week2
+}
+
+GnmWeeknum :: (serial: int, start_day: int) -> int {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    jan1_serial: int = 0
+    jan1_wd: int = 0
+    start_wd: int = 0
+    offset: int = 0
+    diff: int = 0
+    CivilFromDays(serial + SerialEpoch(),&y,&m,&d)
+    jan1_serial = DaysFromCivil(y,1,1) - SerialEpoch()
+    jan1_wd = WeekdayOfSerial(jan1_serial)
+    if jan1_wd == 7 { jan1_wd = 0 }
+    start_wd = start_day % 7
+    offset = jan1_wd - start_wd
+    if offset < 0 { offset += 7 }
+    diff = DayOfYear(serial) - 1 + offset
+    return (diff / 7) + 1
+}
+
+FnWeeknum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    serial: double = 0
+    method: double = 1
+    start_day: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    serial = CoerceNumber(&args[0])
+    if serial < 1 { return ValError(ERR_NUM) }
+    if count >= 2 {
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        method = floor(CoerceNumber(&args[1]))
+    }
+    if method == 21 || method == 150 {
+        return ValNumber(IsoWeekOfYear((int)serial))
+    }
+    if method == 1 || method == 17 {
+        start_day = 7
+    }
+else if method == 2 || method == 11 {
+        start_day = 1
+    }
+else if (method >= 12 && method <= 16) {
+        start_day = (int)method - 10
+    }
+else {
+        return ValError(ERR_VALUE)
+    }
+    return ValNumber(GnmWeeknum((int)serial,start_day))
+}
+
+FnRankPlain :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    x: double = 0
+    xs: [4096] double = {0}
+    n: int = 0
+    increasing: int = 0
+    r: int = 1
+    i: int = 0
+    found: int = 0
+    g: int = 0
+    rgx: int = 0
+    rgl: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    x = CoerceNumber(&args[0])
+    g = 0
+    while g < groups {
+        GroupBounds(marks,count,g,&rgx,&rgl)
+        if rgl > 1 { break }
+        g += 1
+    }
+    if g == groups { return ValError(ERR_VALUE) }
+    gx0 = rgx
+    gl0 = rgl
+    n = CashList(args + gx0,gl0,xs)
+    if n < 0 { return ValError(args[gx0].err) }
+    if groups >= 3 {
+        GroupBounds(marks,count,groups - 1,&gx0,&gl0)
+        if gl0 >= 1 {
+            if args[gx0].kind == VAL_ERROR { return ValError(args[gx0].err) }
+            increasing = CoerceNumber(&args[gx0]) != 0 ? 1 : 0
+        }
+    }
+    i = 0
+    while i < n {
+        y: double = xs[i]
+        if y == x { found = 1 }
+        hit2: int = 0
+        if increasing != 0 {
+            if y < x { hit2 = 1 }
+        }
+else {
+            if y > x { hit2 = 1 }
+        }
+        if hit2 != 0 { r += 1 }
+        i += 1
+    }
+    if found == 0 { return ValError(ERR_NA) }
+    return ValNumber(r)
+}
+
+FnRsq :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double = 0
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    xn: int = 0
+    yn: int = 0
+    if StatAggArgs(args,count,marks,xs,ys,&xn,&yn,1) == 0 { return ValError(ERR_VALUE) }
+    if GoRangeCorrelPop(xs,ys,xn,&c) != 0 { return ValError(ERR_VALUE) }
+    return ValNumber(c * c)
+}
+
+FnPercentof :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    sub: [4096] double = {0}
+    all: [4096] double = {0}
+    nsub: int = 0
+    nall: int = 0
+    ssub: double = 0
+    sall: double = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    nsub = CashList(args + gx0,gl0,sub)
+    nall = CashList(args + gx1,gl1,all)
+    if nsub < 0 { return ValError(args[gx0].err) }
+    if nall < 0 { return ValError(args[gx1].err) }
+    i: int = 0
+    while i < nsub {
+        ssub += sub[i]
+        i += 1
+    }
+    i = 0
+    while i < nall {
+        sall += all[i]
+        i += 1
+    }
+    if sall == 0 { return ValError(ERR_DIV0) }
+    return ValNumber(ssub / sall)
+}
+
 DchisqGo :: (x: double, df: double, give_log: int) -> double {
     return dgamma_go(x,df / 2,2,give_log)
 }
@@ -17676,6 +18047,256 @@ else {
     hi = n
     if nr < hi { hi = nr }
     return DiscPFuncInverter(p,shape,lower_tail,log_p,lo,hi,y,0)
+}
+
+NT_BITMAX :: () -> double {
+    return 9007199254740992.0
+}
+
+NtFactorizeNext :: (n: unsigned long *, p_out: unsigned long *, v_out: int *) -> int {
+    p: unsigned long = 2
+    i: int = 1
+    v: int = 0
+    n2: unsigned long = n[0]
+    if n2 <= 1 { return 1 }
+    while 1 {
+        if NtIthPrime(i,&p) != 0 { return 1 }
+        v = 0
+        while n2 % p == 0 {
+            v += 1
+            n2 /= p
+        }
+        if v != 0 { break }
+        i += 1
+    }
+    n[0] = n2
+    p_out[0] = p
+    v_out[0] = v
+    return 0
+}
+
+NtFactorEach :: (n_in: double, mode: int, out: unsigned long *) -> int {
+    mu_val: int = 1
+    n2: unsigned long = (unsigned long)n_in
+    p: unsigned long = 0
+    v: int = 0
+    ip: int = 1
+    if n2 <= 1 {
+        out[0] = mode == 4 ? 1 : (mode == 5 ? 1 : (mode == 6 ? 1 : 1))
+        return 0
+    }
+    if NtIsPrime(n2) != 0 {
+        p = n2
+        v = 1
+        n2 = 1
+    }
+else {
+        while n2 > 1 {
+            if NtIthPrime(ip,&p) != 0 { return 1 }
+            v = 0
+            while n2 % p == 0 {
+                v += 1
+                n2 /= p
+            }
+            if v != 0 {
+                if (p * p) > n2 {
+                    break
+                }
+            }
+            ip += 1
+        }
+    }
+    {
+        pp: unsigned long = 0
+        vv: int = 0
+        n3: unsigned long = (unsigned long)n_in
+        ip2: int = 1
+        while n3 > 1 {
+            if NtIthPrime(ip2,&pp) != 0 { return 1 }
+            vv = 0
+            while n3 % pp == 0 {
+                vv += 1
+                n3 /= pp
+            }
+            if vv != 0 {
+                if mode == 0 {
+                    out[0] *= vv + 1
+                }
+else if mode == 1 {
+                    pv: unsigned long = 1
+                    k2: int = 0
+                    while k2 < vv {
+                        pv *= pp
+                        k2 += 1
+                    }
+                    if vv == 1 {
+                        out[0] *= pp + 1
+                    }
+else {
+                        sv: unsigned long = (pv - 1) / (pp - 1)
+                        out[0] *= sv * pp + 1
+                    }
+                }
+else if mode == 2 {
+                    pv2: unsigned long = 1
+                    k3: int = 0
+                    while k3 < vv - 1 {
+                        pv2 *= pp
+                        k3 += 1
+                    }
+                    out[0] *= pv2 * (pp - 1)
+                }
+else if mode == 3 {
+                    out[0] *= pp
+                }
+                else if mode == 4 {
+                    if vv >= 2 {
+                        out[0] = 1
+                        mu_val = 0
+                    }
+else {
+                        mu_val = 0 - mu_val
+                    }
+                }
+else if mode == 5 {
+                    out[0] += 1
+                }
+            }
+            ip2 += 1
+        }
+        if mode == 4 {
+            out[0] = (unsigned long)mu_val
+        }
+        return 0
+    }
+    return 0
+}
+
+ComputeNtPi :: (n: unsigned long) -> double {
+    lower: unsigned long = 2
+    upper: unsigned long = 4
+    mid: unsigned long = 0
+    p: unsigned long = 7
+    if n <= 1 { return 0 }
+    if n < 4 { return (double)(n - 1) }
+    while p < n {
+        lower = upper
+        if upper * 2 < 100000000 {
+            upper = upper + 1
+            if upper * 2 > 100000000 { upper = 100000000 }
+        }
+else {
+            upper = 100000000
+        }
+        if upper + 1 > 100000 { upper = 100000 }
+        if NtIthPrime((int)upper,&p) != 0 { return -1 }
+    }
+    while upper - lower > 1 {
+        mid = (lower + upper) / 2
+        NtIthPrime((int)mid,&p)
+        if p < n {
+            lower = mid
+        }
+else if p > n {
+            upper = mid
+        }
+else {
+            return (double)mid
+        }
+    }
+    NtIthPrime((int)upper,&p)
+    if p == n { return (double)(lower + 1) }
+    return (double)lower
+}
+
+FnNtFunc :: (st: EvalState *, args: Val *, count: int, marks: int *, mode: int) -> Val {
+    n: double = 0
+    res: unsigned long = 1
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    n = floor(CoerceNumber(&args[0]))
+    if n < 1 || n > NT_BITMAX() { return ValError(ERR_NUM) }
+    if mode == 6 {
+        if n < 0 { return ValNumber(0) }
+        if n > NT_BITMAX() { return ValError(ERR_LIMIT) }
+        return ValNumber(ComputeNtPi((unsigned long)n))
+    }
+    res = 1
+    if mode == 4 { res = 1 }
+    if mode == 5 { res = 0 }
+    if NtFactorEach(n,mode,&res) != 0 { return ValError(ERR_LIMIT) }
+    if mode == 4 {
+        sres: int = 0
+        sres = (int)res
+        if res > 0x7fffffffffffffff { sres = -1 }
+        return ValNumber(sres)
+    }
+    return ValNumber((double)res)
+}
+
+FnHdate :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    jd: int = 0
+    hy: int = 0
+    hm: int = 0
+    hd: int = 0
+    mname: [64] char = ""
+    out: [128] char = ""
+    if count < 3 { return ValError(ERR_VALUE) }
+    y = (int)CoerceNumber(&args[0])
+    m = (int)CoerceNumber(&args[1])
+    d = (int)CoerceNumber(&args[2])
+    jd = HdateGdateToJd(d,m,y)
+    HdateJdToHdate(jd,&hd,&hm,&hy)
+    HdateMonthName(hm,mname)
+    snprintf(out,sizeof(out),"%d %s %d",hd + 1,mname,hy)
+    return ValString(wb_strdup(out))
+}
+
+FnHdateJulian :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    y = (int)CoerceNumber(&args[0])
+    m = (int)CoerceNumber(&args[1])
+    d = (int)CoerceNumber(&args[2])
+    return ValNumber(HdateGdateToJd(d,m,y))
+}
+
+GnmAgm :: (a: double, b: double) -> double {
+    ab: double = a * b
+    scale: double = 1
+    i: int = 0
+    ea: int = 0
+    eb: int = 0
+    if a < 0 || b < 0 || ab != ab { return 0.0 / 0.0 }
+    if a == b { return a }
+    if ab == 0 { return 0 }
+    if ab == 1e308 * 10 {
+        if a == 0 || b == 0 { return 0 }
+        frexp(a,&ea)
+        frexp(b,&eb)
+        scale = ldexp(1.0,0 - (ea + eb) / 2)
+        a *= scale
+        b *= scale
+    }
+    i = 1
+    while i < 20 {
+        am: double = (a + b) / 2
+        gm: double = sqrt(a * b)
+        a = am
+        b = gm
+        if fabs(a - b) < a * 2.2204460492503131e-16 { break }
+        i += 1
+    }
+    return a * (scale == 1 ? 1 : 1 / scale)
+}
+
+GnmGd :: (x: double) -> double {
+    return 2 * atan(tanh(x / 2))
 }
 
 Random01 :: () -> double {
