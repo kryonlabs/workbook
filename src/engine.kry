@@ -7305,6 +7305,172 @@ FnGetpivotdata :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Va
     return ValNumber(cellv->number)
 }
 
+GoTanpi :: (x_in: double) -> double {
+    x: double = x_in
+    x = fmod(x,1.0)
+    if x == 0 { return copysign(0.0,x) }
+    if fabs(x) == 0.5 { return copysign(0.0 / 0.0,x) }
+    return GoSinpi(x) / GoCosPi(x)
+}
+
+GoCotpi :: (x_in: double) -> double {
+    x: double = x_in
+    x = fmod(x,1.0)
+    if x == 0 { return copysign(0.0 / 0.0,x) }
+    if fabs(x) == 0.5 { return copysign(0.0,x) }
+    return GoCosPi(x) / GoSinpi(x)
+}
+
+FnMath1 :: (op: int, args: Val *, count: int) -> Val {
+    v: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    v = CoerceNumber(&args[0])
+    if op == 0 { return ValNumber(atan(1 / v)) }
+    if op == 1 {
+        if fabs(v) > 2 { return ValNumber(0.5 * log1p(2 / (v - 1))) }
+        return ValNumber(0.5 * log((v + 1) / (v - 1)))
+    }
+    if op == 2 { return ValNumber(acosh(v)) }
+    if op == 3 { return ValNumber(asinh(v)) }
+    if op == 4 { return ValNumber(atanh(v)) }
+    if op == 5 { return ValNumber(expm1(v)) }
+    if op == 6 { return ValNumber(log2(v)) }
+    if op == 7 { return ValNumber(sqrt(v * 3.141592653589793)) }
+    if op == 8 { return ValNumber(GoSinpi(v)) }
+    if op == 9 { return ValNumber(GoCosPi(v)) }
+    if op == 10 { return ValNumber(GoTanpi(v)) }
+    return ValNumber(GoCotpi(v))
+}
+
+FnHypot :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: double = 0
+    b: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    a = CoerceNumber(&args[0])
+    b = CoerceNumber(&args[1])
+    return ValNumber(hypot(a,b))
+}
+
+FnCeiling :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    s: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    s = count >= 2 ? CoerceNumber(&args[1]) : (x > 0 ? 1 : -1)
+    if (x == 0 || s == 0) { return ValNumber(0) }
+    if (x > 0 && s < 0) { return ValError(ERR_NUM) }
+    return ValNumber(ceil(x / s) * s)
+}
+
+FnMround :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    number: double = 0
+    multiple: double = 0
+    sign: int = 1
+    mod: double = 0
+    div: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    number = CoerceNumber(&args[0])
+    multiple = CoerceNumber(&args[1])
+    if multiple == 0 { return ValNumber(0) }
+    if ((number > 0 && multiple < 0) || (number < 0 && multiple > 0)) { return ValError(ERR_NUM) }
+    if number < 0 {
+        sign = -1
+        number = -number
+        multiple = -multiple
+    }
+    mod = fmod(number,multiple)
+    div = (mod >= multiple / 2 ? multiple : 0) + (number - mod)
+    return ValNumber(sign * div)
+}
+
+FnIsEvenOdd :: (even: int, args: Val *, count: int) -> Val {
+    v: double = 0
+    r: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    v = CoerceNumber(&args[0])
+    r = fmod(fabs(v),2)
+    if even != 0 { return ValBool(r < 1 ? 1 : 0) }
+    return ValBool(r >= 1 ? 1 : 0)
+}
+
+FnPairAgg :: (op: int, args: Val *, count: int, marks: int *) -> Val {
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    s: double = 0
+    i: int = 0
+    n: int = 0
+    gx: int = 0
+    gl: int = 0
+    hy: int = 0
+    hl: int = 0
+    xn: int = 0
+    yn: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].from_range != 0 || args[1].from_range != 0 { return ValError(ERR_VALUE) }
+    if GroupBounds(marks,count,0,&gx,&gl) == 0 { return ValError(ERR_VALUE) }
+    if GroupBounds(marks,count,1,&hy,&hl) == 0 { return ValError(ERR_VALUE) }
+    xn = CashList(args + gx,gl,xs)
+    yn = CashList(args + hy,hl,ys)
+    if (xn < 0 || yn < 0) { return ValError(ERR_VALUE) }
+    if (xn != yn || xn == 0) { return ValError(ERR_NA) }
+    n = xn
+    i = 0
+    while i < n {
+        if op == 0 {
+            s += xs[i] * xs[i] - ys[i] * ys[i]
+        }
+else if op == 1 {
+            s += xs[i] * xs[i] + ys[i] * ys[i]
+        }
+else {
+            s += (xs[i] - ys[i]) * (xs[i] - ys[i])
+        }
+        i += 1
+    }
+    return ValNumber(s)
+}
+
+FnSumsq :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    s: double = 0
+    i: int = 0
+    CollectNumbers(args,count,&list)
+    while i < list.count {
+        s += list.data[i] * list.data[i]
+        i += 1
+    }
+    return ValNumber(s)
+}
+
+FnMultinomial :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    result: double = 1
+    sum: int = 0
+    i: int = 0
+    j: int = 0
+    CollectNumbers(args,count,&list)
+    while i < list.count {
+        x: double = list.data[i]
+        xi: int = 0
+        if (x < 0 || x > 2147483647) { return ValError(ERR_NUM) }
+        xi = (int)x
+        if (sum != 0 && xi != 0) {
+            f: int = sum + xi
+            result *= f
+            f -= 1
+            j = 2
+            while j <= xi {
+                result = result * f / j
+                f -= 1
+                j += 1
+            }
+        }
+        sum += xi
+        i += 1
+    }
+    return ValNumber(result)
+}
+
 Cplx :: struct {
     re: double
     im: double
@@ -8385,6 +8551,28 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"improduct") == 0 { return FnImproduct(st,args,count,marks) }
     if strcmp(name,"imfact") == 0 { return FnImfact(st,args,count,marks) }
     if strcmp(name,"imgamma") == 0 { return FnImgamma(st,args,count,marks) }
+    if strcmp(name,"acot") == 0 { return FnMath1(0,args,count) }
+    if strcmp(name,"acoth") == 0 { return FnMath1(1,args,count) }
+    if strcmp(name,"acosh") == 0 { return FnMath1(2,args,count) }
+    if strcmp(name,"asinh") == 0 { return FnMath1(3,args,count) }
+    if strcmp(name,"atanh") == 0 { return FnMath1(4,args,count) }
+    if strcmp(name,"expm1") == 0 { return FnMath1(5,args,count) }
+    if strcmp(name,"log2") == 0 { return FnMath1(6,args,count) }
+    if strcmp(name,"sqrtpi") == 0 { return FnMath1(7,args,count) }
+    if strcmp(name,"sinpi") == 0 { return FnMath1(8,args,count) }
+    if strcmp(name,"cospi") == 0 { return FnMath1(9,args,count) }
+    if strcmp(name,"tanpi") == 0 { return FnMath1(10,args,count) }
+    if strcmp(name,"cotpi") == 0 { return FnMath1(11,args,count) }
+    if strcmp(name,"hypot") == 0 { return FnHypot(st,args,count,marks) }
+    if strcmp(name,"ceiling") == 0 { return FnCeiling(st,args,count,marks) }
+    if strcmp(name,"mround") == 0 { return FnMround(st,args,count,marks) }
+    if strcmp(name,"iseven") == 0 { return FnIsEvenOdd(1,args,count) }
+    if strcmp(name,"isodd") == 0 { return FnIsEvenOdd(0,args,count) }
+    if strcmp(name,"sumsq") == 0 { return FnSumsq(st,args,count,marks) }
+    if strcmp(name,"sumx2my2") == 0 { return FnPairAgg(0,args,count,marks) }
+    if strcmp(name,"sumx2py2") == 0 { return FnPairAgg(1,args,count,marks) }
+    if strcmp(name,"sumxmy2") == 0 { return FnPairAgg(2,args,count,marks) }
+    if strcmp(name,"multinomial") == 0 { return FnMultinomial(st,args,count,marks) }
     if strcmp(name,"daverage") == 0 { return FnDaverage(st,args,count,marks) }
     if strcmp(name,"dcounta") == 0 { return FnDcounta(st,args,count,marks) }
     if strcmp(name,"dcount") == 0 { return FnDcount(st,args,count,marks) }
