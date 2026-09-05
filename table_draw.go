@@ -586,9 +586,9 @@ func (a *app) drawFormulaBar(u *uiState) {
 	})
 }
 
-func (a *app) workbookTableRows(u *uiState) []rl.UITableRow {
+func (a *app) workbookTableRows(u *uiState) []rl.TableRow {
 	a.ensureProfileCells()
-	rows := make([]rl.UITableRow, len(u.disp))
+	rows := make([]rl.TableRow, len(u.disp))
 	for i, dr := range u.disp {
 		rowNumber := strconv.Itoa(i + 1)
 		switch dr.kind {
@@ -599,7 +599,7 @@ func (a *app) workbookTableRows(u *uiState) []rl.UITableRow {
 		case dispBlank:
 			cells := make([]string, len(visibleTableColumns))
 			cells[0] = rowNumber
-			rows[i] = rl.UITableRow{Cells: cells}
+			rows[i] = rl.TableRow{Cells: cells}
 		case dispTotalPending, dispTotal:
 			rows[i] = a.workbookTotalRow(dr.kind, rowNumber)
 		}
@@ -607,15 +607,15 @@ func (a *app) workbookTableRows(u *uiState) []rl.UITableRow {
 	return rows
 }
 
-func (a *app) workbookTotalRow(kind int, rowNumber string) rl.UITableRow {
+func (a *app) workbookTotalRow(kind int, rowNumber string) rl.TableRow {
 	cells := make([]string, len(visibleDataCols))
 	for i, col := range visibleDataCols {
 		cells[i] = a.totalCellDisplayText(kind, col)
 	}
-	return rl.UITableRow{Cells: append([]string{rowNumber}, cells...)}
+	return rl.TableRow{Cells: append([]string{rowNumber}, cells...)}
 }
 
-func (a *app) workbookDataRow(dr displayRow) rl.UITableRow {
+func (a *app) workbookDataRow(dr displayRow) rl.TableRow {
 	as := a.wb.Rows[dr.idx]
 	units, _ := a.cellNumber(dr.idx, 3, map[string]bool{})
 	rate, _ := a.cellNumber(dr.idx, 4, map[string]bool{})
@@ -635,7 +635,7 @@ func (a *app) workbookDataRow(dr displayRow) rl.UITableRow {
 	}
 	unitsText := fmtUnits(units)
 	rateText := fmtRate(rate)
-	row := rl.UITableRow{Cells: []string{
+	row := rl.TableRow{Cells: []string{
 		section,
 		as.Label,
 		name,
