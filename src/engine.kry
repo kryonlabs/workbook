@@ -14060,6 +14060,15 @@ else {
     if strcmp(name,"isref") == 0 { return FnIsref(st,args,count,marks) }
     if strcmp(name,"columnnumber") == 0 { return FnColumnnumber(st,args,count,marks) }
     if strcmp(name,"sumif") == 0 { return FnSumIf(st,args,count,marks,0) }
+    if strcmp(name,"sumifs") == 0 { return FnIfs(st,args,count,marks,1) }
+    if strcmp(name,"averageifs") == 0 { return FnIfs(st,args,count,marks,2) }
+    if strcmp(name,"countifs") == 0 { return FnIfs(st,args,count,marks,0) }
+    if strcmp(name,"maxifs") == 0 { return FnIfs(st,args,count,marks,3) }
+    if strcmp(name,"minifs") == 0 { return FnIfs(st,args,count,marks,4) }
+    if strcmp(name,"suma") == 0 { return FnSumA(st,args,count,marks) }
+    if strcmp(name,"prob") == 0 { return FnProb(st,args,count,marks) }
+    if strcmp(name,"subtotal") == 0 { return FnSubtotal(st,args,count,marks) }
+    if strcmp(name,"ssmedian") == 0 { return FnSsMedian(st,args,count,marks) }
     if strcmp(name,"averageif") == 0 { return FnSumIf(st,args,count,marks,1) }
     if strcmp(name,"countif") == 0 { return FnCountIf(st,args,count,marks) }
     return ValError(ERR_NAME)
@@ -14131,6 +14140,238 @@ FnCountIf :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
         i += 1
     }
     return ValNumber(matched)
+}
+
+FnIfs :: (st: EvalState *, args: Val *, count: int, marks: int *, which: int) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    pairs: int = 0
+    p: int = 0
+    base_start: int = 0
+    base_len: int = 0
+    base_cols: int = 0
+    crange_start: [16] int = {0}
+    crange_len: [16] int = {0}
+    crit_start: [16] int = {0}
+    i: int = 0
+    matched: int = 0
+    total: double = 0
+    vmax: double = 0
+    vmin: double = 0
+    first_hit: int = 1
+    if which == 0 {
+        if groups < 2 || groups % 2 != 0 { return ValError(ERR_VALUE) }
+        pairs = groups / 2
+    }
+else {
+        if groups < 1 || groups % 2 != 1 { return ValError(ERR_VALUE) }
+        if st->call_refs[0].kind == 0 { return ValError(ERR_VALUE) }
+        pairs = (groups - 1) / 2
+    }
+    if pairs > 16 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&base_start,&base_len)
+    if which != 0 {
+        base_cols = st->call_group_cols[base_start]
+        if base_cols < 1 { base_cols = base_len }
+    }
+    p = 0
+    while p < pairs {
+        rstart: int = 0
+        rlen: int = 0
+        cstart: int = 0
+        clen: int = 0
+        gidx: int = (which == 0 ? 0 : 1) + 2 * p
+        GroupBounds(marks,count,gidx,&rstart,&rlen)
+        GroupBounds(marks,count,gidx + 1,&cstart,&clen)
+        if clen != 1 { return ValError(ERR_VALUE) }
+        if args[cstart].kind == VAL_ERROR { return ValError(args[cstart].err) }
+        if rlen != base_len { return ValError(ERR_VALUE) }
+        if which != 0 {
+            rcols: int = st->call_group_cols[rstart]
+            if rcols < 1 { rcols = rlen }
+            if rcols != base_cols { return ValError(ERR_VALUE) }
+        }
+        crange_start[p] = rstart
+        crange_len[p] = rlen
+        crit_start[p] = cstart
+        p += 1
+    }
+    i = 0
+    while i < base_len {
+        hit: int = 1
+        p = 0
+        while p < pairs {
+            one: int = CriterionMatch(&args[crit_start[p]],&args[crange_start[p] + i])
+            if one < 0 { return ValError(ERR_VALUE) }
+            if one == 0 { hit = 0 }
+            p += 1
+        }
+        if hit != 0 {
+            v: Val * = NULL
+            if which == 0 {
+                v = &args[base_start + i]
+                if v->kind == VAL_ERROR { return ValError(v->err) }
+                matched += 1
+            }
+else {
+                v = &args[base_start + i]
+                if v->kind == VAL_ERROR { return ValError(v->err) }
+                if v->kind == VAL_FLOAT {
+                    total += v->number
+                    if first_hit != 0 {
+                        vmax = v->number
+                        vmin = v->number
+                        first_hit = 0
+                    }
+else {
+                        if v->number > vmax { vmax = v->number }
+                        if v->number < vmin { vmin = v->number }
+                    }
+                    matched += 1
+                }
+            }
+        }
+        i += 1
+    }
+    if which == 0 { return ValNumber(matched) }
+    if which == 1 { return ValNumber(total) }
+    if matched == 0 { return ValError(ERR_DIV0) }
+    if which == 2 { return ValNumber(total / matched) }
+    return ValNumber(which == 3 ? vmax : vmin)
+}
+
+FnSumA :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    total: double = 0
+    i: int = 0
+    while i < count {
+        v: Val * = &args[i]
+        if v->kind == VAL_ERROR { return ValError(v->err) }
+        if v->kind == VAL_FLOAT || v->kind == VAL_BOOL {
+            total += v->number
+        }
+        i += 1
+    }
+    return ValNumber(total)
+}
+
+FnProb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    xs: [4096] double = {0}
+    ps: [4096] double = {0}
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    xn: int = 0
+    pn: int = 0
+    low: double = 0
+    high: double = 0
+    total: double = 0
+    sum: double = 0
+    i: int = 0
+    if groups < 3 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    GroupBounds(marks,count,2,&gx2,&gl2)
+    xn = CashList(args + gx0,gl0,xs)
+    pn = CashList(args + gx1,gl1,ps)
+    if xn < 0 || pn < 0 { return ValError(ERR_VALUE) }
+    if xn != pn { return ValError(ERR_NA) }
+    if gl2 < 1 { return ValError(ERR_VALUE) }
+    low = CoerceNumber(&args[gx2])
+    if groups >= 4 {
+        gx3: int = 0
+        gl3: int = 0
+        GroupBounds(marks,count,3,&gx3,&gl3)
+        if gl3 < 1 { return ValError(ERR_VALUE) }
+        high = CoerceNumber(&args[gx3])
+    }
+else {
+        high = low
+    }
+    i = 0
+    while i < xn {
+        prob: double = ps[i]
+        if prob <= 0 || prob > 1 { return ValError(ERR_NUM) }
+        total += prob
+        if xs[i] >= low && xs[i] <= high { sum += prob }
+        i += 1
+    }
+    if fabs(total - 1) > xn * 2 * 2.220446049250313e-16 { return ValError(ERR_NUM) }
+    return ValNumber(sum)
+}
+
+FnSubtotal :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    fun: int = 0
+    if count < 1 { return ValError(ERR_NUM) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    fun = (int)CoerceNumber(&args[0])
+    if fun == 1 { return FnAverage(st,args + 1,count - 1,marks + 1) }
+    if fun == 2 { return FnCount(st,args + 1,count - 1,marks + 1) }
+    if fun == 3 { return FnCounta(st,args + 1,count - 1,marks + 1) }
+    if fun == 4 { return FnMinMax(st,args + 1,count - 1,marks + 1,1) }
+    if fun == 5 { return FnMinMax(st,args + 1,count - 1,marks + 1,0) }
+    if fun == 6 { return FnProduct(st,args + 1,count - 1,marks + 1) }
+    if fun == 7 { return FnVar(st,args + 1,count - 1,marks + 1,1,1) }
+    if fun == 8 { return FnVar(st,args + 1,count - 1,marks + 1,0,1) }
+    if fun == 9 { return FnSum(st,args + 1,count - 1,marks + 1) }
+    if fun == 10 { return FnVar(st,args + 1,count - 1,marks + 1,1,0) }
+    if fun == 11 { return FnVar(st,args + 1,count - 1,marks + 1,0,0) }
+    return ValError(ERR_NUM)
+}
+
+SsMedianCalc :: (sorted_data: double *, len: int, mid_val: double, interval: double) -> double {
+    l_lower: double = mid_val - interval / 2
+    l_upper: double = mid_val + interval / 2
+    f_below: int = 0
+    f_within: int = 0
+    i: int = 0
+    while i < len {
+        if sorted_data[i] < l_lower {
+            f_below += 1
+        }
+else if sorted_data[i] <= l_upper {
+            f_within += 1
+        }
+else {
+            break
+        }
+        i += 1
+    }
+    return l_lower + (len / 2.0 - f_below) * interval / f_within
+}
+
+FnSsMedian :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    data: [4096] double = {0}
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    n: int = 0
+    interval: double = 1
+    if groups < 1 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n = CashList(args + gx0,gl0,data)
+    if n < 0 { return ValError(ERR_VALUE) }
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 { interval = CoerceNumber(&args[gx1]) }
+    }
+    if interval <= 0 || n == 0 { return ValError(ERR_NUM) }
+    SortDoubles(data,n)
+    if n == 1 { return ValNumber(data[0]) }
+    if n == 2 { return ValNumber((data[0] + data[1]) / 2) }
+    if n % 2 == 0 {
+        m1: double = data[n / 2]
+        m0: double = data[n / 2 - 1]
+        if m0 == m1 {
+            return ValNumber(SsMedianCalc(data,n,m1,interval))
+        }
+        return ValNumber((m0 + m1) / 2)
+    }
+    return ValNumber(SsMedianCalc(data,n,data[n / 2],interval))
 }
 
 
