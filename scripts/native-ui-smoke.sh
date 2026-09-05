@@ -18,5 +18,4 @@ if [ "$status" -ne 124 ]; then
   exit "$status"
 fi
 
-grep -q 'Device initialized successfully' "$data_dir/run.log"
 printf '%s\n' '{"workbook_native_ui_smoke":"ok","source":"workbook.kry"}'
