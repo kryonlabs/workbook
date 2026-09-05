@@ -166,21 +166,85 @@ wb_free_val :: (cell: Cell *) {
 }
 
 FormatNumber :: (value: double, out: char *, cap: int) {
+    tmp: [64] char = ""
+    sci: [64] char = ""
+    precision: int = 15
+    digits: int = 0
+    exp10: int = 0
+    i: int = 0
+    mant_len: int = 0
+    decimals: int = 0
+    epos: int = -1
+    sign: int = 0
+    explen: int = 0
+    mant: [32] char = ""
     if value != value {
         snprintf(out,cap,"#NUM!")
         return
     }
-    if value == (double)(long long)value && value > -1e15 && value < 1e15 {
+    if value == 0 {
+        snprintf(out,cap,"0")
+        return
+    }
+    if value == (double)(long long)value && value > -1e17 && value < 1e17 {
         snprintf(out,cap,"%lld",(long long)value)
         return
     }
-    precision: int = 15
     while precision <= 17 {
-        snprintf(out,cap,"%.*g",precision,value)
-        if strtod(out,NULL) == value { return }
+        snprintf(tmp,sizeof(tmp),"%.*g",precision,value)
+        if strtod(tmp,NULL) == value { break }
         precision += 1
     }
-    snprintf(out,cap,"%.17g",value)
+    snprintf(sci,sizeof(sci),"%.*e",precision - 1,value)
+    mant[0] = sci[0]
+    mant_len = 1
+    i = 1
+    while sci[i] != 0 && sci[i] != 101 && sci[i] != 69 {
+        if sci[i] != 46 {
+            mant[mant_len] = sci[i]
+            mant_len += 1
+        }
+        i += 1
+    }
+    while mant_len > 1 && mant[mant_len - 1] == 48 { mant_len -= 1 }
+    mant[mant_len] = 0
+    if mant[0] == 45 {
+        digits = mant_len - 1
+    }
+else {
+        digits = mant_len
+    }
+    if sci[i] == 101 || sci[i] == 69 {
+        exp10 = (int)strtol(sci + i + 1,NULL,10)
+    }
+    if (exp10 >= -4 && exp10 <= 16) {
+        decimals = digits - 1 - exp10
+        if decimals < 0 { decimals = 0 }
+        snprintf(out,cap,"%.*f",decimals,value)
+        return
+    }
+    snprintf(out,cap,"%.*e",digits - 1,value)
+    epos = -1
+    i = 0
+    while out[i] != 0 {
+        if out[i] == 101 { epos = i }
+        i += 1
+    }
+    if epos >= 0 {
+        out[epos] = 69
+        sign = 0
+        if out[epos + 1] == 43 || out[epos + 1] == 45 { sign = 1 }
+        explen = 0
+        while out[epos + 1 + sign + explen] != 0 { explen += 1 }
+        if explen < 2 {
+            shift: int = explen + 1
+            while shift >= 1 {
+                out[epos + 1 + sign + shift] = out[epos + 1 + sign + shift - 1]
+                shift -= 1
+            }
+            out[epos + 1 + sign] = 48
+        }
+    }
 }
 
 TextLooksNumeric :: (text: const char *) -> int {
@@ -5291,6 +5355,1348 @@ else {
     return c > 0
 }
 
+ReduceHalfPos :: (x_in: double, pk: int *) -> double {
+    x: double = x_in
+    k: int = 0
+    x = fmod(x,2)
+    if x >= 1 {
+        x -= 1
+        k += 2
+    }
+    if x >= 0.5 {
+        x -= 0.5
+        k += 1
+    }
+    if x > 0.25 {
+        x -= 0.5
+        k += 1
+    }
+    pk[0] = k & 3
+    return x
+}
+
+GoSinpi :: (x_in: double) -> double {
+    x: double = x_in
+    x0: double = x_in
+    k: int = 0
+    y: double = 0
+    if x < 0 {
+        k2: int = 0
+        x = 0 - ReduceHalfPos(0 - x,&k2)
+        k = 4 - k2
+        if x == -0.25 {
+            x += 0.5
+            k += 3
+        }
+    }
+else {
+        x = ReduceHalfPos(x,&k)
+    }
+    if (x == 0 && (k & 1) == 0) { return copysign(0,x0) }
+    if x == 0 {
+        y = (k & 1) != 0 ? 1 : 0
+    }
+else if x == 0.25 {
+        y = 0.707106781186547524400844362104849039284835937688474036588339
+    }
+else {
+        if (k & 1) != 0 {
+            y = cos(3.141592653589793 * x)
+        }
+else {
+            y = sin(3.141592653589793 * x)
+        }
+    }
+    if (k & 2) != 0 { return 0 - y }
+    return y
+}
+
+BesselICore :: (x: double, nu: double, nb: int, bi: double *) -> int {
+    nend: int = 0
+    intx: int = 0
+    nbmx: int = 0
+    k: int = 0
+    l: int = 0
+    n: int = 0
+    nstart: int = 0
+    pold: double = 0
+    test: double = 0
+    p: double = 0
+    em: double = 0
+    en: double = 0
+    empal: double = 0
+    emp2al: double = 0
+    halfx: double = 0
+    aa: double = 0
+    bb: double = 0
+    cc: double = 0
+    psave: double = 0
+    plast: double = 0
+    tover: double = 0
+    psavel: double = 0
+    sum: double = 0
+    twonu: double = nu + nu
+    const_: double = 1.585
+    goto120: int = 0
+    goto220: int = 0
+    goto230: int = 0
+    overflow_hit: int = 0
+    if (nb > 0 && x >= 0 && nu >= 0 && nu < 1) {
+        if x > 709 {
+            k = 1
+            while k <= nb {
+                bi[k] = 1e308 * 10
+                k += 1
+            }
+            return 1
+        }
+        intx = (int)x
+        if x >= 1e-4 {
+            nbmx = nb - intx
+            n = intx + 1
+            en = (double)(n + n) + twonu
+            plast = 1
+            p = en / x
+            test = 1e16 + 1e16
+            if (intx * 2 > 16 * 5) {
+                test = sqrt(test * p)
+            }
+else {
+                test /= pow(const_,(double)intx)
+            }
+            if nbmx >= 3 {
+                tover = 1e308 / 1e16
+                nstart = intx + 2
+                nend = nb - 1
+                k = nstart
+                while k <= nend {
+                    n = k
+                    en += 2
+                    pold = plast
+                    plast = p
+                    p = en * plast / x + pold
+                    if p > tover {
+                        overflow_hit = 1
+                        tover = 1e308
+                        p /= tover
+                        plast /= tover
+                        psave = p
+                        psavel = plast
+                        nstart = n + 1
+                        while 1 {
+                            n += 1
+                            en += 2
+                            pold = plast
+                            plast = p
+                            p = en * plast / x + pold
+                            if p > 1 { break }
+                        }
+                        bb = en / x
+                        test = pold * plast / 1e16
+                        test *= 0.5 - 0.5 / (bb * bb)
+                        p = plast * tover
+                        n -= 1
+                        en -= 2
+                        nend = nb < n ? nb : n
+                        l = nstart
+                        while l <= nend {
+                            pold = psavel
+                            psavel = psave
+                            psave = en * psavel / x + pold
+                            if (psave * psavel > test) { break }
+                            l += 1
+                        }
+                        goto120 = 1
+                    }
+                    if overflow_hit != 0 { break }
+                    k += 1
+                }
+                if goto120 == 0 {
+                    n = nend
+                    en = (double)(n + n) + twonu
+                    test = (test > sqrt(plast * 1e16) * sqrt(p + p) ? test : sqrt(plast * 1e16) * sqrt(p + p))
+                }
+            }
+            if goto120 == 0 {
+                while 1 {
+                    n += 1
+                    en += 2
+                    pold = plast
+                    plast = p
+                    p = en * plast / x + pold
+                    if p >= test { break }
+                }
+            }
+            n += 1
+            en += 2
+            bb = 0
+            aa = 1 / p
+            em = (double)n - 1
+            empal = em + nu
+            emp2al = em - 1 + twonu
+            sum = aa * empal * emp2al / em
+            nend = n - nb
+            if nend < 0 {
+                bi[n] = aa
+                nend = -nend
+                l = 1
+                while l <= nend {
+                    bi[n + l] = 0
+                    l += 1
+                }
+            }
+else {
+                if nend > 0 {
+                    l = 1
+                    while l <= nend {
+                        n -= 1
+                        en -= 2
+                        cc = bb
+                        bb = aa
+                        if (nend > 100 && aa > 1e200) {
+                            cc = ldexp(cc,-900)
+                            bb = ldexp(bb,-900)
+                            sum = ldexp(sum,-900)
+                        }
+                        aa = en * bb / x + cc
+                        em -= 1
+                        emp2al -= 1
+                        if n == 1 { break }
+                        if n == 2 { emp2al = 1 }
+                        empal -= 1
+                        sum = (sum + aa * empal) * emp2al / em
+                        l += 1
+                    }
+                }
+                bi[n] = aa
+                if nb <= 1 {
+                    sum = sum + sum + aa
+                    goto230 = 1
+                }
+                if goto230 == 0 {
+                    n -= 1
+                    en -= 2
+                    bi[n] = en * aa / x + bb
+                    if n == 1 {
+                        goto220 = 1
+                    }
+else {
+                        em -= 1
+                        if n == 2 {
+                            emp2al = 1
+                        }
+else {
+                            emp2al -= 1
+                        }
+                        empal -= 1
+                        sum = (sum + bi[n] * empal) * emp2al / em
+                    }
+                }
+            }
+            if goto220 == 0 && goto230 == 0 {
+                nend = n - 2
+                if nend > 0 {
+                    l = 1
+                    while l <= nend {
+                        n -= 1
+                        en -= 2
+                        bi[n] = en * bi[n + 1] / x + bi[n + 2]
+                        em -= 1
+                        if n == 2 {
+                            emp2al = 1
+                        }
+else {
+                            emp2al -= 1
+                        }
+                        empal -= 1
+                        sum = (sum + bi[n] * empal) * emp2al / em
+                        l += 1
+                    }
+                }
+                bi[1] = 2 * empal * bi[2] / x + bi[3]
+                sum = sum + sum + bi[1]
+            }
+            if goto220 != 0 {
+                sum = sum + sum + bi[1]
+            }
+            if nu != 0 {
+                sum *= tgamma(1 + nu) * pow(x * 0.5,-nu)
+            }
+            sum *= exp(-x)
+            aa = 8.9e-308
+            if sum > 1 { aa *= sum }
+            n = 1
+            while n <= nb {
+                if bi[n] < aa {
+                    bi[n] = 0
+                }
+else {
+                    bi[n] /= sum
+                }
+                n += 1
+            }
+            return 0
+        }
+else {
+            aa = 1
+            empal = 1 + nu
+            halfx = 0.5 * x
+            if nu != 0 {
+                aa = pow(halfx,nu) / tgamma(empal)
+            }
+            bb = halfx * halfx
+            bi[1] = aa + aa * bb / empal
+            if nb > 1 {
+                if x == 0 {
+                    n = 2
+                    while n <= nb {
+                        bi[n] = 0
+                        n += 1
+                    }
+                }
+else {
+                    cc = halfx
+                    tover = (8.9e-308 + 8.9e-308) / x
+                    if bb != 0 { tover = 8.9e-308 / bb }
+                    n = 2
+                    while n <= nb {
+                        aa /= empal
+                        empal += 1
+                        aa *= cc
+                        if (aa <= tover * empal) {
+                            bi[n] = 0
+                            aa = 0
+                        }
+else {
+                            bi[n] = aa + aa * bb / empal
+                        }
+                        n += 1
+                    }
+                }
+            }
+            return 0
+        }
+    }
+    return 1
+}
+
+BesselI :: (x: double, alpha_in: double) -> double {
+    alpha: double = alpha_in
+    na: double = 0
+    nb: int = 0
+    bi: [64] double = {0}
+    ncalc: int = 0
+    if (x != x || alpha != alpha) { return x + alpha }
+    if x < 0 { return 0.0 / 0.0 }
+    na = floor(alpha)
+    if alpha < 0 {
+        if alpha == na { return BesselI(x,-alpha) }
+        return BesselI(x,-alpha) + BesselK(x,-alpha) * 2 / 3.141592653589793 * GoSinpi(-alpha)
+    }
+    nb = 1 + (int)na
+    if nb > 60 { nb = 60 }
+    alpha -= (double)(nb - 1)
+    ncalc = BesselICore(x,alpha,nb,bi)
+    return bi[nb]
+}
+
+BesselKCore :: (x: double, nu_in: double, nb: int, bk: double *) -> int {
+    nu: double = nu_in
+    ex: double = x
+    iend: int = 0
+    i: int = 0
+    j: int = 0
+    k: int = 0
+    m: int = 0
+    ii: int = 0
+    mplus1: int = 0
+    x2by4: double = 0
+    twox: double = 0
+    c: double = 0
+    blpha: double = 0
+    ratio: double = 0
+    wminf: double = 0
+    d1: double = 0
+    d2: double = 0
+    d3: double = 0
+    f0: double = 0
+    f1: double = 0
+    f2: double = 0
+    p0: double = 0
+    q0: double = 0
+    t1: double = 0
+    t2: double = 0
+    twonu: double = 0
+    dm: double = 0
+    bk1: double = 0
+    bk2: double = 0
+    ncalc_v: int = 1
+    a_const: double = 0.11593151565841244881
+    p1: [8] double = {0.805629875690432845,20.4045500205365151,157.705605106676174,536.671116469207504,900.382759291288778,730.923886650660393,229.299301509425145,0.822467033424113231}
+    q1: [7] double = {29.4601986247850434,277.577868510221208,1206.70325591027438,2762.91444159791519,3443.74050506564618,2210.63190113378647,572.267338359892221}
+    r1: [5] double = {-0.48672575865218401848,13.079485869097804016,-101.96490580880537526,347.65409106507813131,3.495898124521934782e-4}
+    s1: [4] double = {-25.579105509976461286,212.57260432226544008,-610.69018684944109624,422.69668805777760407}
+    t1arr: [6] double = {1.6125990452916363814e-10,2.5051878502858255354e-8,2.7557319615147964774e-6,1.9841269840928373686e-4,0.0083333333333334751799,0.16666666666666666446}
+    estm: [6] double = {52.0583,5.7607,2.7782,14.4303,185.3004,9.3715}
+    estf: [7] double = {41.8341,7.1075,6.4306,42.511,1.35633,84.5096,20}
+    sqrt2dpi: double = 0.797884560802865355879892119869
+    twonu = nu + nu
+    if (nb > 0 && nu >= 0 && nu < 1) {
+        if (ex <= 0 || ex > 705.342) {
+            i = 0
+            while i < nb {
+                if ex <= 0 {
+                    bk[i] = 1e308 * 10
+                }
+else {
+                    bk[i] = 0
+                }
+                i += 1
+            }
+            return 0
+        }
+        k = 0
+        if (nu < 1.49e-154) {
+            nu = 0
+        }
+else if nu > 0.5 {
+            k = 1
+            nu -= 1
+        }
+        twonu = nu + nu
+        iend = nb + k - 1
+        c = nu * nu
+        d3 = -c
+        if ex <= 1 {
+            d1 = 0
+            d2 = p1[0]
+            t1 = 1
+            t2 = q1[0]
+            i = 2
+            while i <= 7 {
+                d1 = c * d1 + p1[i - 1]
+                d2 = c * d2 + p1[i]
+                t1 = c * t1 + q1[i - 1]
+                t2 = c * t2 + q1[i]
+                i += 2
+            }
+            d1 = nu * d1
+            t1 = nu * t1
+            f1 = log(ex)
+            f0 = a_const + nu * (p1[7] - nu * (d1 + d2) / (t1 + t2)) - f1
+            q0 = exp(-nu * (a_const - nu * (p1[7] + nu * (d1 - d2) / (t1 - t2)) - f1))
+            f1 = nu * f0
+            p0 = exp(f1)
+            d1 = r1[4]
+            t1 = 1
+            i = 0
+            while i < 4 {
+                d1 = c * d1 + r1[i]
+                t1 = c * t1 + s1[i]
+                i += 1
+            }
+            if (fabs(f1) <= 0.5) {
+                f1 *= f1
+                d2 = 0
+                i = 0
+                while i < 6 {
+                    d2 = f1 * d2 + t1arr[i]
+                    i += 1
+                }
+                d2 = f0 + f0 * f1 * d2
+            }
+else {
+                d2 = sinh(f1) / nu
+            }
+            f0 = d2 - nu * d1 / (t1 * p0)
+            if ex <= 1e-10 {
+                bk[0] = f0 + ex * f0
+                bk[0] -= ex * bk[0]
+                ratio = p0 / f0
+                c = ex * 1.7976931348623157e308
+                if k != 0 {
+                    if bk[0] >= c / ratio {
+                        return 1
+                    }
+                    bk[0] = ratio * bk[0] / ex
+                    twonu += 2
+                    ratio = twonu
+                }
+                if nb == 1 { return 0 }
+                i = 1
+                while i < nb {
+                    if ratio >= c { return 1 }
+                    bk[i] = ratio / ex
+                    twonu += 2
+                    ratio = twonu
+                    i += 1
+                }
+                i = 1
+                while i < nb {
+                    bk[i] *= bk[i - 1]
+                    i += 1
+                }
+                return 0
+            }
+else {
+                c = 1
+                x2by4 = ex * ex / 4
+                p0 = 0.5 * p0
+                q0 = 0.5 * q0
+                d1 = -1
+                d2 = 0
+                bk1 = 0
+                bk2 = 0
+                f1 = f0
+                f2 = p0
+                while 1 {
+                    d1 += 2
+                    d2 += 1
+                    d3 = d1 + d3
+                    c = x2by4 * c / d2
+                    f0 = (d2 * f0 + p0 + q0) / d3
+                    p0 /= d2 - nu
+                    q0 /= d2 + nu
+                    t1 = c * f0
+                    t2 = c * (p0 - d2 * f0)
+                    bk1 += t1
+                    bk2 += t2
+                    if (fabs(t1 / (f1 + bk1)) <= 2.2204460492503131e-16 && fabs(t2 / (f2 + bk2)) <= 2.2204460492503131e-16) { break }
+                }
+                bk1 = f1 + bk1
+                bk2 = 2 * (f2 + bk2) / ex
+                wminf = estf[0] * ex + estf[1]
+            }
+        }
+else if (2.2204460492503131e-16 * ex > 1) {
+            i = 0
+            while i < nb {
+                bk[i] = 1 / (sqrt2dpi * sqrt(ex))
+                i += 1
+            }
+            return 0
+        }
+else {
+            twox = ex + ex
+            blpha = 0
+            ratio = 0
+            if ex <= 4 {
+                d2 = trunc(estm[0] / ex + estm[1])
+                m = (int)d2
+                d1 = d2 + d2
+                d2 -= 0.5
+                d2 *= d2
+                i = 2
+                while i <= m {
+                    d1 -= 2
+                    d2 -= d1
+                    ratio = (d3 + d2) / (twox + d1 - ratio)
+                    i += 1
+                }
+                d2 = trunc(estm[2] * ex + estm[3])
+                m = (int)d2
+                c = fabs(nu)
+                d3 = c + c
+                d1 = d3 - 1
+                f1 = 2.2250738585072014e-308
+                f0 = (2 * (c + d2) / ex + 0.5 * ex / (c + d2 + 1)) * 2.2250738585072014e-308
+                i = 3
+                while i <= m {
+                    d2 -= 1
+                    f2 = (d3 + d2 + d2) * f0
+                    blpha = (1 + d1 / d2) * (f2 + blpha)
+                    f2 = f2 / ex + f1
+                    f1 = f0
+                    f0 = f2
+                    i += 1
+                }
+                f1 = (d3 + 2) * f0 / ex + f1
+                d1 = 0
+                t1 = 1
+                i = 1
+                while i <= 7 {
+                    d1 = c * d1 + p1[i - 1]
+                    t1 = c * t1 + q1[i - 1]
+                    i += 1
+                }
+                p0 = exp(c * (a_const + c * (p1[7] - c * d1 / t1) - log(ex))) / ex
+                f2 = (c + 0.5 - ratio) * f1 / ex
+                bk1 = p0 + (d3 * f0 - f2 + f0 + blpha) / (f2 + f1 + f0) * p0
+                bk1 *= exp(-ex)
+                wminf = estf[2] * ex + estf[3]
+            }
+else {
+                dm = trunc(estm[4] / ex + estm[5])
+                m = (int)dm
+                d2 = dm - 0.5
+                d2 *= d2
+                d1 = dm + dm
+                i = 2
+                while i <= m {
+                    dm -= 1
+                    d1 -= 2
+                    d2 -= d1
+                    ratio = (d3 + d2) / (twox + d1 - ratio)
+                    blpha = (ratio + ratio * blpha) / dm
+                    i += 1
+                }
+                bk1 = 1 / ((sqrt2dpi + sqrt2dpi * blpha) * sqrt(ex))
+                bk1 *= exp(-ex)
+                wminf = estf[4] * (ex - fabs(ex - estf[6])) + estf[5]
+            }
+            bk2 = bk1 + bk1 * (nu + 0.5 - ratio) / ex
+        }
+        bk[0] = bk1
+        if iend == 0 { return 0 }
+        j = 1 - k
+        if j >= 0 { bk[j] = bk2 }
+        if iend == 1 { return 0 }
+        m = (int)(wminf - nu)
+        if m > iend { m = iend }
+        i = 2
+        ii = 0
+        while i <= m {
+            t1 = bk1
+            bk1 = bk2
+            twonu += 2
+            if ex < 1 {
+                if (bk1 >= 1.7976931348623157e308 / twonu * ex) { break }
+            }
+else {
+                if (bk1 / ex >= 1.7976931348623157e308 / twonu) { break }
+            }
+            bk2 = twonu / ex * bk1 + t1
+            ii = i
+            j += 1
+            if j >= 0 { bk[j] = bk2 }
+            i += 1
+        }
+        m = ii
+        if m == iend { return 0 }
+        ratio = bk2 / bk1
+        mplus1 = m + 1
+        i = mplus1
+        while i <= iend {
+            twonu += 2
+            ratio = twonu / ex + 1 / ratio
+            j += 1
+            if j >= 1 {
+                bk[j] = ratio
+            }
+else {
+                if bk2 >= 1.7976931348623157e308 / ratio { return 1 }
+                bk2 *= ratio
+            }
+            i += 1
+        }
+        ncalc_v = mplus1 - k
+        if ncalc_v < 1 { ncalc_v = 1 }
+        if ncalc_v == 1 { bk[0] = bk2 }
+        if nb == 1 { return 0 }
+        i = ncalc_v
+        while i < nb {
+            bk[i] *= bk[i - 1]
+            i += 1
+        }
+        return 0
+    }
+    return 1
+}
+
+BesselK :: (x: double, alpha_in: double) -> double {
+    alpha: double = alpha_in
+    nb: int = 0
+    bk: [64] double = {0}
+    ncalc: int = 0
+    if (x != x || alpha != alpha) { return x + alpha }
+    if x < 0 { return 0.0 / 0.0 }
+    if alpha < 0 { alpha = -alpha }
+    nb = 1 + (int)floor(alpha)
+    if nb > 60 { nb = 60 }
+    alpha -= (double)(nb - 1)
+    ncalc = BesselKCore(x,alpha,nb,bk)
+    return bk[nb - 1]
+}
+
+FnBesseli :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    if count < 2 { return ValError(ERR_VALUE) }
+    return ValNumber(BesselI(CoerceNumber(&args[0]),CoerceNumber(&args[1])))
+}
+
+FnBesselk :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    if count < 2 { return ValError(ERR_VALUE) }
+    return ValNumber(BesselK(CoerceNumber(&args[0]),CoerceNumber(&args[1])))
+}
+
+FnBesselj :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    order: double = 0
+    n: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    order = CoerceNumber(&args[1])
+    if (order < 0 || order != floor(order) || order > 1000) { return ValError(ERR_NUM) }
+    n = (int)order
+    if x < 0 {
+        if (n % 2) != 0 { return ValNumber(0 - jn(n,-x)) }
+        return ValNumber(jn(n,-x))
+    }
+    return ValNumber(jn(n,x))
+}
+
+FnBessely :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    order: double = 0
+    n: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    order = CoerceNumber(&args[1])
+    if (order < 0 || order != floor(order) || order > 1000) { return ValError(ERR_NUM) }
+    if x < 0 { return ValError(ERR_NUM) }
+    n = (int)order
+    return ValNumber(yn(n,x))
+}
+
+ConvUnit :: (cat: int, name: const char *, c: double *) -> int {
+    if cat == 0 {
+        if strcmp(name,"g") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"brton") == 0 { c[0] = 9.8420652761106068e-07; return 1 }
+        if strcmp(name,"cwt") == 0 { c[0] = 2.2046226218487758e-05; return 1 }
+        if strcmp(name,"grain") == 0 { c[0] = 15.432358352941431; return 1 }
+        if strcmp(name,"hweight") == 0 { c[0] = 1.9684130552221215e-05; return 1 }
+        if strcmp(name,"LTON") == 0 { c[0] = 9.8420652761106068e-07; return 1 }
+        if strcmp(name,"sg") == 0 { c[0] = 6.8522050009999999e-05; return 1 }
+        if strcmp(name,"shweight") == 0 { c[0] = 2.2046226218487758e-05; return 1 }
+        if strcmp(name,"lbm") == 0 { c[0] = 0.0022046226218487759; return 1 }
+        if strcmp(name,"lcwt") == 0 { c[0] = 1.9684130552221215e-05; return 1 }
+        if strcmp(name,"u") == 0 { c[0] = 6.02217e+23; return 1 }
+        if strcmp(name,"uk_cwt") == 0 { c[0] = 1.9684130552221215e-05; return 1 }
+        if strcmp(name,"uk_ton") == 0 { c[0] = 9.8420652761106068e-07; return 1 }
+        if strcmp(name,"ozm") == 0 { c[0] = 0.035273961949580414; return 1 }
+        if strcmp(name,"stone") == 0 { c[0] = 0.00015747304441776972; return 1 }
+        if strcmp(name,"ton") == 0 { c[0] = 1.102311310924388e-06; return 1 }
+        return 0
+    }
+    if cat == 1 {
+        if strcmp(name,"m") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"mi") == 0 { c[0] = 0.00062137119223733403; return 1 }
+        if strcmp(name,"survey_mi") == 0 { c[0] = 0.00062136994949511836; return 1 }
+        if strcmp(name,"Nmi") == 0 { c[0] = 0.00053995680345572358; return 1 }
+        if strcmp(name,"in") == 0 { c[0] = 39.370078740157481; return 1 }
+        if strcmp(name,"ft") == 0 { c[0] = 3.2808398950131235; return 1 }
+        if strcmp(name,"yd") == 0 { c[0] = 1.0936132983377078; return 1 }
+        if strcmp(name,"ell") == 0 { c[0] = 0.87489063867016625; return 1 }
+        if strcmp(name,"ang") == 0 { c[0] = 10000000000; return 1 }
+        if strcmp(name,"pc") == 0 { c[0] = 3.2407792700053951e-17; return 1 }
+        if strcmp(name,"parsec") == 0 { c[0] = 3.2407792700053951e-17; return 1 }
+        if strcmp(name,"ly") == 0 { c[0] = 1.0570008340246154e-16; return 1 }
+        if strcmp(name,"Pica") == 0 { c[0] = 2834.6456692913389; return 1 }
+        if strcmp(name,"Picapt") == 0 { c[0] = 2834.6456692913389; return 1 }
+        if strcmp(name,"picapt") == 0 { c[0] = 2834.6456692913389; return 1 }
+        if strcmp(name,"pica") == 0 { c[0] = 236.22047244094489; return 1 }
+        return 0
+    }
+    if cat == 2 {
+        if strcmp(name,"yr") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"day") == 0 { c[0] = 365.25; return 1 }
+        if strcmp(name,"hr") == 0 { c[0] = 8766; return 1 }
+        if strcmp(name,"mn") == 0 { c[0] = 525960; return 1 }
+        if strcmp(name,"sec") == 0 { c[0] = 31557600; return 1 }
+        return 0
+    }
+    if cat == 3 {
+        if strcmp(name,"Pa") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"psi") == 0 { c[0] = 0.00014503773799999999; return 1 }
+        if strcmp(name,"atm") == 0 { c[0] = 9.8692330000000006e-06; return 1 }
+        if strcmp(name,"mmHg") == 0 { c[0] = 0.0075006170799999999; return 1 }
+        if strcmp(name,"Torr") == 0 { c[0] = 0.0075006168270416972; return 1 }
+        return 0
+    }
+    if cat == 4 {
+        if strcmp(name,"N") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"dyn") == 0 { c[0] = 100000; return 1 }
+        if strcmp(name,"pond") == 0 { c[0] = 0.00010197; return 1 }
+        if strcmp(name,"lbf") == 0 { c[0] = 0.22480892399999999; return 1 }
+        return 0
+    }
+    if cat == 5 {
+        if strcmp(name,"J") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"e") == 0 { c[0] = 9999995.193; return 1 }
+        if strcmp(name,"c") == 0 { c[0] = 0.239006249; return 1 }
+        if strcmp(name,"cal") == 0 { c[0] = 0.23884619100000001; return 1 }
+        if strcmp(name,"eV") == 0 { c[0] = 6.2146e+18; return 1 }
+        if strcmp(name,"HPh") == 0 { c[0] = 3.7250557231085619e-07; return 1 }
+        if strcmp(name,"Wh") == 0 { c[0] = 0.00027777777777777778; return 1 }
+        if strcmp(name,"flb") == 0 { c[0] = 23.730422220000001; return 1 }
+        if strcmp(name,"BTU") == 0 { c[0] = 0.00094781499999999996; return 1 }
+        return 0
+    }
+    if cat == 6 {
+        if strcmp(name,"HP") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"PS") == 0 { c[0] = 1.0138711996451388; return 1 }
+        if strcmp(name,"W") == 0 { c[0] = 745.70100000000002; return 1 }
+        return 0
+    }
+    if cat == 7 {
+        if strcmp(name,"T") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"ga") == 0 { c[0] = 10000; return 1 }
+        return 0
+    }
+    if cat == 8 {
+        if strcmp(name,"tsp") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"tspm") == 0 { c[0] = 0.98578431874999983; return 1 }
+        if strcmp(name,"tbs") == 0 { c[0] = 0.33333333333333331; return 1 }
+        if strcmp(name,"oz") == 0 { c[0] = 0.16666666666666666; return 1 }
+        if strcmp(name,"cup") == 0 { c[0] = 0.020833333333333332; return 1 }
+        if strcmp(name,"pt") == 0 { c[0] = 0.010416666666666666; return 1 }
+        if strcmp(name,"qt") == 0 { c[0] = 0.005208333333333333; return 1 }
+        if strcmp(name,"uk_qt") == 0 { c[0] = 0.002168422355804658; return 1 }
+        if strcmp(name,"gal") == 0 { c[0] = 0.0013020833333333333; return 1 }
+        if strcmp(name,"uk_gal") == 0 { c[0] = 0.001084211177902329; return 1 }
+        if strcmp(name,"us_pt") == 0 { c[0] = 0.010416666666666666; return 1 }
+        if strcmp(name,"uk_pt") == 0 { c[0] = 0.0086736894232186321; return 1 }
+        if strcmp(name,"l") == 0 { c[0] = 0.004928921593749999; return 1 }
+        if strcmp(name,"L") == 0 { c[0] = 0.004928921593749999; return 1 }
+        if strcmp(name,"lt") == 0 { c[0] = 0.004928921593749999; return 1 }
+        if strcmp(name,"ang3") == 0 { c[0] = 4.9289215937499993e-30; return 1 }
+        if strcmp(name,"ang^3") == 0 { c[0] = 4.9289215937499993e-30; return 1 }
+        if strcmp(name,"bushel") == 0 { c[0] = 0.00013987059396439362; return 1 }
+        if strcmp(name,"barrel") == 0 { c[0] = 3.1001984126984125e-05; return 1 }
+        if strcmp(name,"GRT") == 0 { c[0] = 1.7406322337962959e-06; return 1 }
+        if strcmp(name,"regton") == 0 { c[0] = 1.7406322337962959e-06; return 1 }
+        if strcmp(name,"MTON") == 0 { c[0] = 4.3515805844907394e-06; return 1 }
+        if strcmp(name,"ft3") == 0 { c[0] = 0.00017406322337962959; return 1 }
+        if strcmp(name,"ft^3") == 0 { c[0] = 0.00017406322337962959; return 1 }
+        if strcmp(name,"in3") == 0 { c[0] = 0.30078124999999994; return 1 }
+        if strcmp(name,"in^3") == 0 { c[0] = 0.30078124999999994; return 1 }
+        if strcmp(name,"ly3") == 0 { c[0] = 5.8207359653452418e-54; return 1 }
+        if strcmp(name,"ly^3") == 0 { c[0] = 5.8207359653452418e-54; return 1 }
+        if strcmp(name,"m3") == 0 { c[0] = 4.9289215937499988e-06; return 1 }
+        if strcmp(name,"m^3") == 0 { c[0] = 4.9289215937499988e-06; return 1 }
+        if strcmp(name,"mi3") == 0 { c[0] = 1.1825111763758073e-15; return 1 }
+        if strcmp(name,"mi^3") == 0 { c[0] = 1.1825111763758073e-15; return 1 }
+        if strcmp(name,"yd3") == 0 { c[0] = 6.4467860510973929e-06; return 1 }
+        if strcmp(name,"yd^3") == 0 { c[0] = 6.4467860510973929e-06; return 1 }
+        if strcmp(name,"Nmi3") == 0 { c[0] = 7.7594146898721952e-16; return 1 }
+        if strcmp(name,"Nmi^3") == 0 { c[0] = 7.7594146898721952e-16; return 1 }
+        if strcmp(name,"Pica3") == 0 { c[0] = 112266.00000000001; return 1 }
+        if strcmp(name,"Pica^3") == 0 { c[0] = 112266.00000000001; return 1 }
+        if strcmp(name,"Picapt3") == 0 { c[0] = 112266.00000000001; return 1 }
+        if strcmp(name,"Picapt^3") == 0 { c[0] = 112266.00000000001; return 1 }
+        return 0
+    }
+    if cat == 9 {
+        if strcmp(name,"byte") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"bit") == 0 { c[0] = 8; return 1 }
+        return 0
+    }
+    if cat == 10 {
+        if strcmp(name,"m/h") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"m/hr") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"admkn") == 0 { c[0] = 0.00053961182483768476; return 1 }
+        if strcmp(name,"kn") == 0 { c[0] = 0.00053995680345572358; return 1 }
+        if strcmp(name,"m/s") == 0 { c[0] = 0.00027777777777777778; return 1 }
+        if strcmp(name,"m/sec") == 0 { c[0] = 0.00027777777777777778; return 1 }
+        if strcmp(name,"mph") == 0 { c[0] = 0.00062137119223733403; return 1 }
+        return 0
+    }
+    if cat == 11 {
+        if strcmp(name,"m2") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"m^2") == 0 { c[0] = 1; return 1 }
+        if strcmp(name,"uk_acre") == 0 { c[0] = 0.00024710538146716532; return 1 }
+        if strcmp(name,"us_acre") == 0 { c[0] = 0.0002471043930466279; return 1 }
+        if strcmp(name,"ang2") == 0 { c[0] = 1e+20; return 1 }
+        if strcmp(name,"ang^2") == 0 { c[0] = 1e+20; return 1 }
+        if strcmp(name,"ar") == 0 { c[0] = 0.01; return 1 }
+        if strcmp(name,"ha") == 0 { c[0] = 0.0001; return 1 }
+        if strcmp(name,"in2") == 0 { c[0] = 1550.0031000062002; return 1 }
+        if strcmp(name,"in^2") == 0 { c[0] = 1550.0031000062002; return 1 }
+        if strcmp(name,"ft2") == 0 { c[0] = 10.763910416709724; return 1 }
+        if strcmp(name,"ft^2") == 0 { c[0] = 10.763910416709724; return 1 }
+        if strcmp(name,"ly2") == 0 { c[0] = 1.1172507631287325e-32; return 1 }
+        if strcmp(name,"ly^2") == 0 { c[0] = 1.1172507631287325e-32; return 1 }
+        if strcmp(name,"mi2") == 0 { c[0] = 3.8610215854244592e-07; return 1 }
+        if strcmp(name,"mi^2") == 0 { c[0] = 3.8610215854244592e-07; return 1 }
+        if strcmp(name,"Nmi2") == 0 { c[0] = 2.915533495981229e-07; return 1 }
+        if strcmp(name,"Nmi^2") == 0 { c[0] = 2.915533495981229e-07; return 1 }
+        if strcmp(name,"yd2") == 0 { c[0] = 1.1959900463010804; return 1 }
+        if strcmp(name,"yd^2") == 0 { c[0] = 1.1959900463010804; return 1 }
+        if strcmp(name,"Picapt2") == 0 { c[0] = 8035216.0704321424; return 1 }
+        if strcmp(name,"Picapt^2") == 0 { c[0] = 8035216.0704321424; return 1 }
+        if strcmp(name,"Pica2") == 0 { c[0] = 8035216.0704321424; return 1 }
+        if strcmp(name,"Pica^2") == 0 { c[0] = 8035216.0704321424; return 1 }
+        if strcmp(name,"Morgen") == 0 { c[0] = 0.00040000000000000002; return 1 }
+        return 0
+    }
+    return 0
+}
+
+ConvPrefix :: (binp: int, name: const char *, prefix: double *, plen: int *) -> int {
+    if binp != 0 {
+        if strncmp(name,"Yi",2) == 0 { prefix[0] = 1.2089258196146292e+24; plen[0] = 2; return 1 }
+        if strncmp(name,"Zi",2) == 0 { prefix[0] = 1.1805916207174113e+21; plen[0] = 2; return 1 }
+        if strncmp(name,"Ei",2) == 0 { prefix[0] = 1.152921504606847e+18; plen[0] = 2; return 1 }
+        if strncmp(name,"Pi",2) == 0 { prefix[0] = 1125899906842624; plen[0] = 2; return 1 }
+        if strncmp(name,"Ti",2) == 0 { prefix[0] = 1099511627776; plen[0] = 2; return 1 }
+        if strncmp(name,"Gi",2) == 0 { prefix[0] = 1073741824; plen[0] = 2; return 1 }
+        if strncmp(name,"Mi",2) == 0 { prefix[0] = 1048576; plen[0] = 2; return 1 }
+        if strncmp(name,"ki",2) == 0 { prefix[0] = 1024; plen[0] = 2; return 1 }
+        return 0
+    }
+    if strncmp(name,"Y",1) == 0 { prefix[0] = 9.9999999999999998e+23; plen[0] = 1; return 1 }
+    if strncmp(name,"Z",1) == 0 { prefix[0] = 1e+21; plen[0] = 1; return 1 }
+    if strncmp(name,"E",1) == 0 { prefix[0] = 1e+18; plen[0] = 1; return 1 }
+    if strncmp(name,"P",1) == 0 { prefix[0] = 1000000000000000; plen[0] = 1; return 1 }
+    if strncmp(name,"T",1) == 0 { prefix[0] = 1000000000000; plen[0] = 1; return 1 }
+    if strncmp(name,"G",1) == 0 { prefix[0] = 1000000000; plen[0] = 1; return 1 }
+    if strncmp(name,"M",1) == 0 { prefix[0] = 1000000; plen[0] = 1; return 1 }
+    if strncmp(name,"k",1) == 0 { prefix[0] = 1000; plen[0] = 1; return 1 }
+    if strncmp(name,"h",1) == 0 { prefix[0] = 100; plen[0] = 1; return 1 }
+    if strncmp(name,"e",1) == 0 { prefix[0] = 10; plen[0] = 1; return 1 }
+    if strncmp(name,"d",1) == 0 { prefix[0] = 0.10000000000000001; plen[0] = 1; return 1 }
+    if strncmp(name,"c",1) == 0 { prefix[0] = 0.01; plen[0] = 1; return 1 }
+    if strncmp(name,"m",1) == 0 { prefix[0] = 0.001; plen[0] = 1; return 1 }
+    if strncmp(name,"u",1) == 0 { prefix[0] = 9.9999999999999995e-07; plen[0] = 1; return 1 }
+    if strncmp(name,"n",1) == 0 { prefix[0] = 1.0000000000000001e-09; plen[0] = 1; return 1 }
+    if strncmp(name,"p",1) == 0 { prefix[0] = 9.9999999999999998e-13; plen[0] = 1; return 1 }
+    if strncmp(name,"f",1) == 0 { prefix[0] = 1.0000000000000001e-15; plen[0] = 1; return 1 }
+    if strncmp(name,"a",1) == 0 { prefix[0] = 1.0000000000000001e-18; plen[0] = 1; return 1 }
+    if strncmp(name,"z",1) == 0 { prefix[0] = 9.9999999999999991e-22; plen[0] = 1; return 1 }
+    if strncmp(name,"y",1) == 0 { prefix[0] = 9.9999999999999992e-25; plen[0] = 1; return 1 }
+    return 0
+}
+
+ConvGetConstant :: (cat: int, binp: int, use_prefixes: int, name: const char *, c: double *, prefix: double *) -> int {
+    plen: int = 0
+    prefix[0] = 1
+    if ConvUnit(cat,name,c) != 0 { return 1 }
+    if use_prefixes != 0 {
+        if ConvPrefix(binp,name,prefix,&plen) != 0 {
+            return ConvUnit(cat,name + plen,c)
+        }
+    }
+    return 0
+}
+
+ConvertOne :: (cat: int, binp: int, use_prefixes: int, from_unit: const char *, to_unit: const char *, n: double, handled: int *, result: double *) -> int {
+    from_c: double = 0
+    from_prefix: double = 1
+    to_c: double = 0
+    to_prefix: double = 1
+    if ConvGetConstant(cat,binp,use_prefixes,from_unit,&from_c,&from_prefix) != 0 {
+        handled[0] = 1
+        if ConvGetConstant(cat,binp,use_prefixes,to_unit,&to_c,&to_prefix) == 0 {
+            return 0
+        }
+        if (from_c == 0 || to_prefix == 0) { return 0 }
+        result[0] = ((n * from_prefix) / from_c) * to_c / to_prefix
+        return 1
+    }
+    handled[0] = 0
+    return 0
+}
+
+ConvTempUnit :: (unit: const char *) -> int {
+    if strcmp(unit,"K") == 0 { return 1 }
+    if strcmp(unit,"C") == 0 { return 2 }
+    if strcmp(unit,"F") == 0 { return 3 }
+    if strcmp(unit,"Reau") == 0 { return 5 }
+    if strcmp(unit,"Rank") == 0 { return 4 }
+    return 0
+}
+
+ConvertTemp :: (from_unit: const char *, to_unit: const char *, n_in: double, handled: int *, result: double *) -> int {
+    n: double = n_in
+    nO: double = n_in
+    ck: double = 273.15
+    ft: int = ConvTempUnit(from_unit)
+    tt: int = ConvTempUnit(to_unit)
+    if (ft == 0 || tt == 0) {
+        handled[0] = 0
+        return 0
+    }
+    handled[0] = 1
+    if ft == 2 {
+        n += ck
+    }
+    if ft == 3 {
+        n = (n - 32) * 5 / 9 + ck
+    }
+    if ft == 4 {
+        n = n * 5 / 9
+    }
+    if ft == 5 {
+        n = n * 5 / 4 + ck
+    }
+    if n < 0 { return 0 }
+    if ft == tt {
+        result[0] = nO
+        return 1
+    }
+    if tt == 2 {
+        n -= ck
+    }
+    if tt == 3 {
+        n = (n - ck) * 9 / 5 + 32
+    }
+    if tt == 4 {
+        n = n * 9 / 5
+    }
+    if tt == 5 {
+        n = (n - ck) * 4 / 5
+    }
+    result[0] = n
+    return 1
+}
+
+FnConvert :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: double = 0
+    from_u: [32] char = ""
+    to_u: [32] char = ""
+    handled: int = 0
+    result: double = 0
+    ok: int = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    n = CoerceNumber(&args[0])
+    if TextArg(args,count,1,from_u,sizeof(from_u)) < 0 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,2,to_u,sizeof(to_u)) < 0 { return ValError(ERR_VALUE) }
+    ok = ConvertTemp(from_u,to_u,n,&handled,&result)
+    if handled != 0 {
+        if ok == 0 { return ValError(ERR_NUM) }
+        return ValNumber(result)
+    }
+    if ConvertOne(0,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(1,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(2,0,0,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(3,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(4,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(5,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(6,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(7,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(8,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(9,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(9,1,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(10,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    if ConvertOne(11,0,1,from_u,to_u,n,&handled,&result) != 0 { return ValNumber(result) }
+    if handled != 0 { return ValError(ERR_NUM) }
+    return ValError(ERR_NA)
+}
+V2BGeneral :: (v: Val *, out: double *) -> int {
+    txt: const char * = ""
+    if v->kind != VAL_STRING { return 0 }
+    txt = v->text
+    if DbParseNumber(txt,out) == 0 { return 0 }
+    return 1
+}
+
+V2BIsAlnum :: (c: int) -> int {
+    if (c >= 48 && c <= 57) { return 1 }
+    if (c >= 65 && c <= 90) { return 1 }
+    if (c >= 97 && c <= 122) { return 1 }
+    return 0
+}
+
+V2BDigitChar :: (d: int) -> int {
+    if d < 10 { return 48 + d }
+    return 65 + d - 10
+}
+
+ValToBase :: (value: Val *, places_v: Val *, src_base: int, dest_base: int, min_value: double, max_value: double, flags: int) -> Val {
+    v_float: double = 0
+    err: char * = NULL
+    txt: const char * = ""
+    hsuffix: int = 0
+    len: int = 0
+    min_d: int = 1
+    max_d: int = 10
+    places: int = 1
+    out: [24] char = ""
+    v_u: unsigned long long = 0
+    digit: int = 0
+    buf: [64] char = ""
+    val: double = 0
+    fplaces: double = 0
+    float_path: int = 0
+    did_parse: int = 0
+    if value->kind == VAL_BOOL { return ValError(ERR_VALUE) }
+    if places_v != NULL && places_v->kind == VAL_BOOL { return ValError(ERR_VALUE) }
+    if (flags & 1) != 0 {
+        if value->kind == VAL_STRING {
+            if V2BGeneral(value,&v_float) == 0 { return ValError(ERR_VALUE) }
+            float_path = 1
+        }
+else if value->kind == VAL_FLOAT {
+            v_float = value->number
+            float_path = 1
+        }
+else {
+            return ValError(ERR_NUM)
+        }
+    }
+else if value->kind == VAL_STRING {
+        txt = value->text
+        hsuffix = 0
+        if (flags & 8) != 0 && txt[0] == 0 { txt = "0" }
+        if V2BIsAlnum(txt[0]) == 0 { return ValError(ERR_NUM) }
+        len = (int)strlen(txt)
+        if (flags & 4) != 0 && len > 10 { return ValError(ERR_NUM) }
+        if (flags & 2) != 0 {
+            if (txt[0] == 48 && (txt[1] == 120 || txt[1] == 88)) {
+                txt = txt + 2
+            }
+else if (txt[len - 1] == 104 || txt[len - 1] == 72) {
+                hsuffix = 1
+            }
+        }
+        v_float = (double)strtoll(txt,&err,src_base)
+        if (err == txt || err[hsuffix] != 0) { return ValError(ERR_NUM) }
+        if (v_float < min_value || v_float > max_value) { return ValError(ERR_NUM) }
+        did_parse = 1
+    }
+else if value->kind == VAL_FLOAT {
+        v_float = value->number
+        float_path = 1
+    }
+else {
+        return ValError(ERR_NUM)
+    }
+    if float_path != 0 {
+        val = trunc(v_float)
+        if (val < min_value || val > max_value) { return ValError(ERR_NUM) }
+        snprintf(buf,sizeof(buf),"%.0f",val)
+        v_float = (double)strtoll(buf,&err,src_base)
+        if err[0] != 0 { return ValError(ERR_NUM) }
+    }
+    if src_base != 10 {
+        b10: double = pow((double)src_base,10)
+        if v_float >= b10 / 2 { v_float = v_float - b10 }
+    }
+    if (flags & 16) != 0 { return ValNumber(v_float) }
+    if v_float < 0 {
+        min_d = 1
+        max_d = 10
+        v_float += pow((double)dest_base,10)
+    }
+else {
+        if v_float == 0 {
+            min_d = 1
+            max_d = 1
+        }
+else {
+            min_d = (int)(log(v_float + 0.5) / log((double)dest_base)) + 1
+            max_d = min_d
+        }
+    }
+    if places_v != NULL {
+        fplaces = CoerceNumber(places_v)
+        if (fplaces < (double)min_d || fplaces > 10) { return ValError(ERR_NUM) }
+        places = (int)fplaces
+        if (v_float >= 0 && places > max_d) { max_d = places }
+    }
+    v_u = (unsigned long long)(v_float + 0.5)
+    digit = max_d - 1
+    while digit >= 0 {
+        out[digit] = (char)V2BDigitChar((int)(v_u % (unsigned long long)dest_base))
+        v_u /= (unsigned long long)dest_base
+        digit -= 1
+    }
+    out[max_d] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnBase :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    base_v: double = 0
+    max_v: double = 1 / 2.2204460492503131e-16
+    if count < 2 { return ValError(ERR_VALUE) }
+    base_v = CoerceNumber(&args[1])
+    if (base_v < 2 || base_v >= 37) { return ValError(ERR_NUM) }
+    return ValToBase(&args[0],count >= 3 ? &args[2] : NULL,10,(int)base_v,-max_v,max_v,1 | 2)
+}
+
+FnDecimal :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    base_v: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    base_v = CoerceNumber(&args[1])
+    if (base_v < 2 || base_v >= 37) { return ValError(ERR_NUM) }
+    return ValToBase(&args[0],NULL,(int)base_v,10,0,1099511627776.0 - 1,4 | 8 | 16)
+}
+
+FnBin2Oct :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValToBase(&args[0],count >= 2 ? &args[1] : NULL,2,8,0,1111111111.0,4 | 8)
+}
+
+FnBin2Hex :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValToBase(&args[0],count >= 2 ? &args[1] : NULL,2,16,0,1111111111.0,4 | 8)
+}
+
+FnOct2Bin :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValToBase(&args[0],count >= 2 ? &args[1] : NULL,8,2,0,7777777777.0,4 | 8)
+}
+
+FnOct2Hex :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValToBase(&args[0],count >= 2 ? &args[1] : NULL,8,16,0,7777777777.0,4 | 8)
+}
+
+FnHex2Bin :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValToBase(&args[0],count >= 2 ? &args[1] : NULL,16,2,0,9999999999.0,4 | 8)
+}
+
+FnHex2Oct :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValToBase(&args[0],count >= 2 ? &args[1] : NULL,16,8,0,9999999999.0,4 | 8)
+}
+
+FnDelta :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    y: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    y = count >= 2 ? CoerceNumber(&args[1]) : 0
+    if x == y { return ValNumber(1) }
+    return ValNumber(0)
+}
+
+FnGestep :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    y: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    y = count >= 2 ? CoerceNumber(&args[1]) : 0
+    if x >= y { return ValNumber(1) }
+    return ValNumber(0)
+}
+
+FnErfc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    if count < 1 { return ValError(ERR_VALUE) }
+    return ValNumber(erfc(CoerceNumber(&args[0])))
+}
+
+FnHexrep :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    out: [20] char = ""
+    data: [8] unsigned char = {0}
+    hexd: CString = "0123456789abcdef"
+    v: double = 0
+    i: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    v = CoerceNumber(&args[0])
+    memcpy(data,&v,8)
+    while i < 8 {
+        out[i * 2] = hexd[data[i] >> 4]
+        out[i * 2 + 1] = hexd[data[i] & 15]
+        i += 1
+    }
+    out[16] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnInvsuminv :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    CollectNumbers(args,count,&list)
+    suminv: double = 0
+    zerop: int = 0
+    i: int = 0
+    x: double = 0
+    while i < list.count {
+        x = list.data[i]
+        if x < 0 { return ValError(ERR_VALUE) }
+        if x == 0 {
+            zerop = 1
+        }
+else {
+            suminv += 1 / x
+        }
+        i += 1
+    }
+    if list.count <= 0 { return ValError(ERR_VALUE) }
+    if zerop != 0 { return ValNumber(0) }
+    return ValNumber(1 / suminv)
+}
+
+BIT_MAX :: () -> double {
+    v: double = 2 / 2.2204460492503131e-16
+    if (v > 18446744073709551615.0) { return 18446744073709551615.0 }
+    return v
+}
+
+FnBitAgg :: (args: Val *, count: int, op: int) -> Val {
+    list: NumList = {0}
+    CollectNumbers(args,count,&list)
+    acc: unsigned long long = 0
+    if op == 0 { acc = 18446744073709551615ULL }
+    i: int = 0
+    xf: double = 0
+    bmax: double = BIT_MAX()
+    while i < list.count {
+        xf = floor(list.data[i])
+        if (xf < 0 || xf > bmax) { return ValError(ERR_VALUE) }
+        if op == 0 {
+            acc = acc & (unsigned long long)xf
+        }
+else if op == 1 {
+            acc = acc | (unsigned long long)xf
+        }
+else {
+            acc = acc ^ (unsigned long long)xf
+        }
+        i += 1
+    }
+    if list.count == 0 { return ValError(ERR_VALUE) }
+    return ValNumber((double)acc)
+}
+
+FnBitand :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return FnBitAgg(args,count,0)
+}
+
+FnBitor :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return FnBitAgg(args,count,1)
+}
+
+FnBitxor :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return FnBitAgg(args,count,2)
+}
+
+FnBitshift :: (args: Val *, count: int, left: int) -> Val {
+    l: double = 0
+    r: double = 0
+    bmax: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    l = CoerceNumber(&args[0])
+    r = floor(CoerceNumber(&args[1]))
+    bmax = BIT_MAX()
+    if (l < 0 || l > bmax) { return ValError(ERR_NUM) }
+    if (r >= 64 || r <= -64) { return ValNumber(0) }
+    if r < 0 {
+        if left != 0 {
+            return ValNumber((double)((unsigned long long)l >> (unsigned long long)(-r)))
+        }
+        return ValNumber((double)((unsigned long long)l << (unsigned long long)(-r)))
+    }
+    if left != 0 {
+        return ValNumber((double)((unsigned long long)l << (unsigned long long)r))
+    }
+    return ValNumber((double)((unsigned long long)l >> (unsigned long long)r))
+}
+
+FnBitlshift :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return FnBitshift(args,count,1)
+}
+
+FnBitrshift :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return FnBitshift(args,count,0)
+}
+
 DbCond :: struct {
     op: int
     is_num: int
@@ -5964,6 +7370,29 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"tbillyield") == 0 { return FnTbillyield(st,args,count,marks) }
     if strcmp(name,"effect") == 0 { return FnEffect(st,args,count,marks) }
     if strcmp(name,"nominal") == 0 { return FnNominal(st,args,count,marks) }
+    if strcmp(name,"base") == 0 { return FnBase(st,args,count,marks) }
+    if strcmp(name,"decimal") == 0 { return FnDecimal(st,args,count,marks) }
+    if strcmp(name,"bin2hex") == 0 { return FnBin2Hex(st,args,count,marks) }
+    if strcmp(name,"bin2oct") == 0 { return FnBin2Oct(st,args,count,marks) }
+    if strcmp(name,"oct2bin") == 0 { return FnOct2Bin(st,args,count,marks) }
+    if strcmp(name,"oct2hex") == 0 { return FnOct2Hex(st,args,count,marks) }
+    if strcmp(name,"hex2bin") == 0 { return FnHex2Bin(st,args,count,marks) }
+    if strcmp(name,"hex2oct") == 0 { return FnHex2Oct(st,args,count,marks) }
+    if strcmp(name,"delta") == 0 { return FnDelta(st,args,count,marks) }
+    if strcmp(name,"gestep") == 0 { return FnGestep(st,args,count,marks) }
+    if strcmp(name,"erfc") == 0 { return FnErfc(st,args,count,marks) }
+    if strcmp(name,"hexrep") == 0 { return FnHexrep(st,args,count,marks) }
+    if strcmp(name,"invsuminv") == 0 { return FnInvsuminv(st,args,count,marks) }
+    if strcmp(name,"bitand") == 0 { return FnBitand(st,args,count,marks) }
+    if strcmp(name,"bitor") == 0 { return FnBitor(st,args,count,marks) }
+    if strcmp(name,"bitxor") == 0 { return FnBitxor(st,args,count,marks) }
+    if strcmp(name,"bitlshift") == 0 { return FnBitlshift(st,args,count,marks) }
+    if strcmp(name,"bitrshift") == 0 { return FnBitrshift(st,args,count,marks) }
+    if strcmp(name,"besseli") == 0 { return FnBesseli(st,args,count,marks) }
+    if strcmp(name,"besselk") == 0 { return FnBesselk(st,args,count,marks) }
+    if strcmp(name,"besselj") == 0 { return FnBesselj(st,args,count,marks) }
+    if strcmp(name,"bessely") == 0 { return FnBessely(st,args,count,marks) }
+    if strcmp(name,"convert") == 0 { return FnConvert(st,args,count,marks) }
     if strcmp(name,"daverage") == 0 { return FnDaverage(st,args,count,marks) }
     if strcmp(name,"dcounta") == 0 { return FnDcounta(st,args,count,marks) }
     if strcmp(name,"dcount") == 0 { return FnDcount(st,args,count,marks) }
