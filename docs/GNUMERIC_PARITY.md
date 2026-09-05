@@ -87,9 +87,12 @@ math 63, stat 103, string 29, financial 40, complex 49, random 34, lookup 20,
 info 21, date 13, database 13, eng 12, numtheory 9, logical 5, flt 4,
 christian-date 6, tsa 4, hebrew-date 1, derivatives 1.
 
-Workbook implements them in priority order (math, logical, text, date,
-lookup, info, stat, financial, database first) with 1:1 value tests via
-`ssconvert`. Full inventory: `tests/functions/manifest.txt`.
+Workbook implements 131 functions today (arithmetic, aggregation,
+statistics, text, logical, date/time, lookup, information, radix
+conversions) — every one pinned 1:1 to Gnumeric's output by the fixture
+suite. The full inventory of what Gnumeric provides is tracked in
+`tests/functions-manifest.txt`; each addition follows the same recipe:
+implement, add fixture rows, verify against `ssconvert` cell by cell.
 
 ## 1:1 test methodology
 
