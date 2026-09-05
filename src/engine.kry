@@ -11,6 +11,7 @@
 #import "time.h"
 
 state {
+    RNG_NEXT: unsigned long = 1
     NT_PRIMES: [10000] int
     NT_COUNT: int = 0
     QFACT_MANT_H: [10000] double
@@ -13558,6 +13559,45 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
         }
         return ValNumber(dbeta((bx - lo) / (hi - lo),alpha2,beta2,0) / (hi - lo))
     }
+    if strcmp(name,"rand") == 0 { return FnRandGen(st,args,count,marks,0) }
+    if strcmp(name,"randuniform") == 0 { return FnRandGen(st,args,count,marks,1) }
+    if strcmp(name,"randbetween") == 0 { return FnRandGen(st,args,count,marks,2) }
+    if strcmp(name,"randnorm") == 0 { return FnRandGen(st,args,count,marks,3) }
+    if strcmp(name,"randexp") == 0 { return FnRandGen(st,args,count,marks,4) }
+    if strcmp(name,"randrayleigh") == 0 { return FnRandGen(st,args,count,marks,5) }
+    if strcmp(name,"randchisq") == 0 { return FnRandGen(st,args,count,marks,6) }
+    if strcmp(name,"randtdist") == 0 { return FnRandGen(st,args,count,marks,7) }
+    if strcmp(name,"randfdist") == 0 { return FnRandGen(st,args,count,marks,8) }
+    if strcmp(name,"randgamma") == 0 { return FnRandGen(st,args,count,marks,9) }
+    if strcmp(name,"randbeta") == 0 { return FnRandGen(st,args,count,marks,10) }
+    if strcmp(name,"randbinom") == 0 { return FnRandGen(st,args,count,marks,11) }
+    if strcmp(name,"randlognorm") == 0 { return FnRandGen(st,args,count,marks,12) }
+    if strcmp(name,"randcauchy") == 0 { return FnRandGen(st,args,count,marks,13) }
+    if strcmp(name,"randlog") == 0 { return FnRandGen(st,args,count,marks,14) }
+    if strcmp(name,"randweibull") == 0 { return FnRandGen(st,args,count,marks,15) }
+    if strcmp(name,"randnormtail") == 0 { return FnRandGen(st,args,count,marks,16) }
+    if strcmp(name,"randlandau") == 0 { return FnRandGen(st,args,count,marks,17) }
+    if strcmp(name,"randbernoulli") == 0 { return ValNumber(Random01() < CoerceNumber(&args[1]) ? 1 : 0) }
+    if strcmp(name,"randlaplace") == 0 { return FnRandGen(st,args,count,marks,18) }
+    if strcmp(name,"randsnorm") == 0 { return FnRandGen(st,args,count,marks,18) }
+    if strcmp(name,"randgeom") == 0 { return FnRandGen(st,args,count,marks,20) }
+    if strcmp(name,"randpoisson") == 0 { return FnRandGen(st,args,count,marks,21) }
+    if strcmp(name,"randgumbel") == 0 { return FnRandGen(st,args,count,marks,22) }
+    if strcmp(name,"randstdist") == 0 { return FnRandGen(st,args,count,marks,24) }
+    if strcmp(name,"randlevy") == 0 { return FnRandGen(st,args,count,marks,27) }
+    if strcmp(name,"randexppow") == 0 { return FnRandGen(st,args,count,marks,29) }
+    if strcmp(name,"randlogistic") == 0 { return FnRandGen(st,args,count,marks,30) }
+    if strcmp(name,"randpareto") == 0 { return FnRandGen(st,args,count,marks,31) }
+    if strcmp(name,"randrayleightail") == 0 { return FnRandGen(st,args,count,marks,32) }
+    if strcmp(name,"randnegbinom") == 0 { return FnRandGen(st,args,count,marks,33) }
+    if strcmp(name,"randhyperg") == 0 { return FnRandGen(st,args,count,marks,34) }
+    if strcmp(name,"randdiscrete") == 0 { return FnRandGen(st,args,count,marks,35) }
+    if strcmp(name,"simtable") == 0 {
+        if count < 1 { return ValError(ERR_VALUE) }
+        n5: int = RandomUniformInt(0,count - 1)
+        if args[n5].kind == VAL_ERROR { return ValError(args[n5].err) }
+        return ValNumber(CoerceNumber(&args[n5]))
+    }
     if strcmp(name,"snorm.dist.range") == 0 {
         if count < 2 { return ValError(ERR_VALUE) }
         if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
@@ -17141,6 +17181,122 @@ PcauchyGo :: (x_in: double, location: double, scale: double, lower_tail: int, lo
     }
     v2: double = 0.5 + GoAtanPi(x)
     return log_p != 0 ? log(v2) : v2
+}
+
+Random01 :: () -> double {
+    RNG_NEXT = RNG_NEXT * 6364136223846793005 + 1442695040888963407
+    v: unsigned long = (RNG_NEXT >> 11) & 0x1fffffffffffff
+    return (double)v / 9007199254740992.0
+}
+
+RandomUniformInt :: (lo: int, hi: int) -> int {
+    if hi <= lo { return lo }
+    r: double = Random01()
+    return lo + (int)(r * (hi - lo + 1))
+}
+
+FnRandGen :: (st: EvalState *, args: Val *, count: int, marks: int *, which: int) -> Val {
+    a: double = 0
+    b: double = 0
+    u: double = 0
+    i: int = 0
+    if which == 0 { return ValNumber(Random01()) }
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    a = CoerceNumber(&args[0])
+    if which == 1 {
+        if count < 2 { return ValError(ERR_VALUE) }
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        b = CoerceNumber(&args[1])
+        if a > b { return ValError(ERR_NUM) }
+        return ValNumber(a + Random01() * (b - a))
+    }
+    if which == 2 {
+        if count < 2 { return ValError(ERR_VALUE) }
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        b = CoerceNumber(&args[1])
+        if a > b { return ValError(ERR_NUM) }
+        lo2: int = (int)ceil(a)
+        hi2: int = (int)floor(b)
+        return ValNumber(RandomUniformInt(lo2,hi2))
+    }
+    u = Random01()
+    if which == 3 { return ValNumber(qnorm(u,0,1,1,0)) }
+    if which == 4 { return ValNumber(a + (0 - log1p(0 - u))) }
+    if which == 5 { return ValNumber(a + sqrt(0 - 2 * log1p(0 - u))) }
+    if which == 6 { return ValNumber(qchisq(u,a,1,0)) }
+    if which == 7 { return ValNumber(qt(u,a,1,0)) }
+    if which == 8 { return ValNumber(qf(u,a,b < 1 ? 1 : b,1,0)) }
+    if which == 9 { return ValNumber(qgamma(u,a,1,1,0)) }
+    if which == 10 { return ValNumber(qbeta(u,a,b < 1 ? 1 : b,1,0)) }
+    if which == 11 { return ValNumber(qbinom(u,a,b < 0 ? 0 : b,1,0)) }
+    if which == 12 {
+        v2: double = Random01()
+        z2: double = sqrt(0 - 2 * log1p(0 - u))
+        z2 = z2 * cos(6.283185307179586 * v2) + log(a)
+        return ValNumber(z2)
+    }
+    if which == 13 {
+        v3: double = 0 - log1p(0 - u) / a
+        return ValNumber(v3 <= 1 ? v3 : 1 / v3)
+    }
+    if which == 14 { return ValNumber(0 - a * log1p(0 - u)) }
+    if which == 15 { return ValNumber(pow(0 - log1p(0 - u),1 / a)) }
+    if which == 16 { return ValNumber(qnorm(u,0,1,1,0) + b * fabs(qnorm(Random01(),0,1,1,0))) }
+    if which == 17 { return ValNumber(a - RandomLandauPdf(0) > 0 ? a + u : a) }
+    if which == 18 { return ValNumber(a + b * qnorm(u,0,1,1,0)) }
+    if which == 19 { return ValNumber(a - b * log1p(0 - u) * (u < 0.5 ? 1 : -1)) }
+    if which == 20 {
+        k3: int = 0
+        cum3: double = 0
+        while k3 < 10000 {
+            if cum3 + a * pow(1 - a,(double)k3) > u { break }
+            cum3 += a * pow(1 - a,(double)k3)
+            k3 += 1
+        }
+        return ValNumber(k3)
+    }
+    if which == 21 {
+        k4: int = 0
+        cum4: double = 0
+        term4: double = exp(0 - a)
+        while k4 < 10000 {
+            if cum4 + term4 > u { break }
+            cum4 += term4
+            k4 += 1
+            term4 *= a / k4
+        }
+        return ValNumber(k4)
+    }
+    if which == 22 {
+        v4: double = Random01()
+        return ValNumber(a + pow(0 - log1p(0 - u),1 / b) * cos(3.14159265358979323846 * v4))
+    }
+    if which == 23 { return ValNumber(qnorm(u,0,1,1,0) / (1 - 0.2 * 0)) }
+    if which == 24 {
+        z3: double = qnorm(u,0,1,1,0)
+        return ValNumber(z3 / sqrt(qchisq(Random01(),b < 1 ? 1 : b,1,0) / (b < 1 ? 1 : b)))
+    }
+    if which == 26 {
+        v5: double = a + sqrt(0 - 2 * log1p(0 - u)) * cos(6.283185307179586 * Random01())
+        return ValNumber(v5)
+    }
+    if which == 27 { return ValNumber(a * pow(1 / u - 1, 1 / (b < 1 ? 1 : b))) }
+    if which == 28 { return ValNumber(0 - log1p(0 - u) / a) }
+    if which == 29 { return ValNumber(a * pow(0 - log1p(0 - u * (1 - exp(0 - 1 / a))) * a, b)) }
+    if which == 30 { return ValNumber(0 - a * log1p(0 - u) * (u < 0.5 ? 1 : -1)) }
+    if which == 31 { return ValNumber(a / (pow(u,1 / (b < 1 ? 1 : b)) ) - 1) }
+    if which == 32 {
+        u2x: double = sqrt(0 - 2 * log1p(0 - u))
+        return ValNumber(a + u2x)
+    }
+    if which == 33 { return ValNumber(qbinom(u,b < 1 ? 1 : b,a,1,0)) }
+    if which == 34 {
+        uu: double = Random01()
+        if uu < a { return ValNumber(0) }
+        return ValNumber(1)
+    }
+    return ValNumber(u)
 }
 
 RandomBernoulliPdf :: (k: double, p: double) -> double {
