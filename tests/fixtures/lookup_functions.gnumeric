@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName>Lookup</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Lookup</gnm:Name><gnm:MaxCol>3</gnm:MaxCol><gnm:MaxRow>29</gnm:MaxRow>
+  <gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="60">apple</gnm:Cell>
+<gnm:Cell Row="0" Col="1" ValueType="40">10</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="60">banana</gnm:Cell>
+<gnm:Cell Row="1" Col="1" ValueType="40">20</gnm:Cell>
+<gnm:Cell Row="2" Col="0" ValueType="60">cherry</gnm:Cell>
+<gnm:Cell Row="2" Col="1" ValueType="40">30</gnm:Cell>
+<gnm:Cell Row="0" Col="2" ValueType="40">1</gnm:Cell>
+<gnm:Cell Row="1" Col="2" ValueType="40">2</gnm:Cell>
+<gnm:Cell Row="2" Col="2" ValueType="40">3</gnm:Cell>
+<gnm:Cell Row="0" Col="3">=VLOOKUP("banana",A1:B3,2)</gnm:Cell>
+<gnm:Cell Row="1" Col="3">=VLOOKUP("cherry",A1:B3,2)</gnm:Cell>
+<gnm:Cell Row="2" Col="3">=VLOOKUP("zzz",A1:B3,2)</gnm:Cell>
+<gnm:Cell Row="3" Col="3">=MATCH("apple",A1:A3)</gnm:Cell>
+<gnm:Cell Row="4" Col="3">=MATCH(30,B1:B3)</gnm:Cell>
+<gnm:Cell Row="5" Col="3">=INDEX(A1:B3,2,2)</gnm:Cell>
+<gnm:Cell Row="6" Col="3">=INDEX(C1:C3,3)</gnm:Cell>
+<gnm:Cell Row="7" Col="3">=SUMPRODUCT(A1:A3,C1:C3)</gnm:Cell>
+<gnm:Cell Row="8" Col="3">=SUMPRODUCT(B1:B3,C1:C3)</gnm:Cell>
+<gnm:Cell Row="9" Col="3">=ROW()</gnm:Cell>
+<gnm:Cell Row="10" Col="3">=COLUMN()</gnm:Cell>
+<gnm:Cell Row="11" Col="3">=ROWS(A1:A3)</gnm:Cell>
+<gnm:Cell Row="12" Col="3">=COLUMNS(A1:B3)</gnm:Cell>
+<gnm:Cell Row="13" Col="3">=GEOMEAN(1,4,16)</gnm:Cell>
+<gnm:Cell Row="14" Col="3">=HARMEAN(1,2,4)</gnm:Cell>
+<gnm:Cell Row="15" Col="3">=AVEDEV(1,2,3,4)</gnm:Cell>
+<gnm:Cell Row="16" Col="3">=MODE(1,2,2,3)</gnm:Cell>
+<gnm:Cell Row="17" Col="3">=TRUNC(3.7)</gnm:Cell>
+<gnm:Cell Row="18" Col="3">=TRUNC(-3.7)</gnm:Cell>
+<gnm:Cell Row="19" Col="3">=EVEN(3)</gnm:Cell>
+<gnm:Cell Row="20" Col="3">=ODD(2)</gnm:Cell>
+<gnm:Cell Row="21" Col="3">=QUOTIENT(7,2)</gnm:Cell>
+<gnm:Cell Row="22" Col="3">=PROPER("hello wORLD")</gnm:Cell>
+<gnm:Cell Row="23" Col="3">=REPLACE("abcdef",2,3,"XY")</gnm:Cell>
+<gnm:Cell Row="24" Col="3">=DEC2BIN(10)</gnm:Cell>
+<gnm:Cell Row="25" Col="3">=DEC2HEX(255)</gnm:Cell>
+<gnm:Cell Row="26" Col="3">=BIN2DEC("1010")</gnm:Cell>
+<gnm:Cell Row="27" Col="3">=HEX2DEC("FF")</gnm:Cell>
+<gnm:Cell Row="28" Col="3">=OCT2DEC("17")</gnm:Cell>
+<gnm:Cell Row="29" Col="3">=DEC2OCT(15)</gnm:Cell>
+  </gnm:Cells><gnm:SheetLayout TopLeft="A1"/></gnm:Sheet></gnm:Sheets>
+  <gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>

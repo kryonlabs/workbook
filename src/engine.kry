@@ -88,9 +88,14 @@ EvalState :: struct {
     depth: int
     args: Val*
     marks: int*
+    group_cols: int*
     arg_count: int
     args_overflow: int
     hint: int
+    this_row: int
+    this_col: int
+    last_cols: int
+    call_group_cols: int*
 }
 
 ErrText :: (code: int) -> CString {
@@ -513,6 +518,7 @@ EvalPush :: (st: EvalState *, v: Val) {
     if st->arg_count >= WB_ARGS_MAX { st->args_overflow = 1; ValFree(&v); return }
     st->args[st->arg_count] = v
     st->marks[st->arg_count] = 0
+    st->group_cols[st->arg_count] = 0
     st->arg_count += 1
 }
 
@@ -686,7 +692,7 @@ EvaluateCell :: (st: EvalState *, sheet: Sheet *, row: int, col: int) -> Val {
     if st->depth >= WB_DEPTH_MAX { return ValError(ERR_CYCLE) }
     cell->evaluating = 1
     pos: int = 0
-    inner: EvalState = {st->wb,sheet,st->depth + 1,st->args,st->marks,st->arg_count,st->args_overflow,0}
+    inner: EvalState = {st->wb,sheet,st->depth + 1,st->args,st->marks,st->group_cols,st->arg_count,st->args_overflow,0,st->this_row,st->this_col,st->last_cols}
     result: Val = EvalExpression(&inner,cell->text + 1,&pos)
     SkipFormulaSpace(cell->text + 1,&pos)
     if cell->text[1 + pos] != 0 { result = ValError(ERR_VALUE) }
@@ -718,6 +724,7 @@ RangeToValues :: (st: EvalState *, sheet: Sheet *, row: int, col: int, row2: int
     v: Val = {VAL_RANGE,0.0,NULL,0,1}
     if row2 < row { swap: int = row; row = row2; row2 = swap }
     if col2 < col { swap: int = col; col = col2; col2 = swap }
+    st->last_cols = col2 - col + 1
     if row2 < -1 + 0 { return v }
     r: int = row
     while r <= row2 {
@@ -760,6 +767,9 @@ EvalFunction :: (st: EvalState *, text: const char *, pos: int *, name: const ch
             one: Val = EvalExpression(st,text,&arg_pos)
             if one.kind == VAL_RANGE {
                 ValFree(&one)
+                if arg_slot < WB_ARGS_MAX {
+                    st->group_cols[arg_slot] = st->last_cols
+                }
             }
 else {
                 st->arg_count = arg_slot
@@ -776,6 +786,7 @@ else {
     }
     if text[pos[0]] != ')' { return ValError(ERR_VALUE) }
     pos[0] += 1
+    st->call_group_cols = st->group_cols + base
     result: Val = CallFunction(st,lower,st->args + base,st->arg_count - base,st->marks + base)
     i2: int = base
     while i2 < st->arg_count {
@@ -1048,8 +1059,8 @@ CellDisplayText :: (cell: Cell *, out: char *, cap: int) {
     WbCellValueText(&v,out,cap)
 }
 
-EvaluateOne :: (wb: Workbook *, sheet: Sheet *, cell: Cell *, args: Val *, marks: int *) {
-    st: EvalState = {wb,sheet,0,args,marks,0,0,0}
+EvaluateOne :: (wb: Workbook *, sheet: Sheet *, cell: Cell *, args: Val *, marks: int *, group_cols: int *) {
+    st: EvalState = {wb,sheet,0,args,marks,group_cols,0,0,0,CellKeyRow(cell->key),CellKeyCol(cell->key),0}
     pos: int = 0
     if cell->computed { return }
     result: Val = EvalExpression(&st,cell->text + 1,&pos)
@@ -1077,7 +1088,8 @@ EvaluateSheet :: (wb: Workbook *, sheet: Sheet *) {
     changed: int = 1
     args: Val * = malloc(sizeof(Val) * WB_ARGS_MAX)
     marks: int * = malloc(sizeof(int) * WB_ARGS_MAX)
-    if args == NULL || marks == NULL { free(args); free(marks); return }
+    group_cols: int * = malloc(sizeof(int) * WB_ARGS_MAX)
+    if args == NULL || marks == NULL || group_cols == NULL { free(args); free(marks); free(group_cols); return }
     while changed && pass < 100 {
         i: int = 0
         changed = 0
@@ -1089,7 +1101,7 @@ EvaluateSheet :: (wb: Workbook *, sheet: Sheet *) {
                 v_before: Val = {cell->cached_kind,cell->cached_number,cell->cached_text,cell->cached_err,0}
                 WbCellValueText(&v_before,before,sizeof(before))
                 cell->computed = 0
-                EvaluateOne(wb,sheet,cell,args,marks)
+                EvaluateOne(wb,sheet,cell,args,marks,group_cols)
                 v_after: Val = {cell->cached_kind,cell->cached_number,cell->cached_text,cell->cached_err,0}
                 WbCellValueText(&v_after,after,sizeof(after))
                 if strcmp(before,after) != 0 { changed = 1 }
@@ -1249,6 +1261,468 @@ ArgNumberAt :: (args: Val *, count: int, index: int) -> double {
     if args[index].kind == VAL_ERROR { return 1e308 }
     return CoerceNumber(&args[index])
 }
+
+
+FnRowColumn :: (st: EvalState *, args: Val *, count: int, marks: int *, want_row: int) -> Val {
+    if count == 0 {
+        if want_row { return ValNumber(st->this_row + 1) }
+        return ValNumber(st->this_col + 1)
+    }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if want_row { return ValNumber(st->this_row + 1) }
+    return ValNumber(st->this_col + 1)
+}
+
+FnRowsColumns :: (st: EvalState *, args: Val *, count: int, marks: int *, want_rows: int) -> Val {
+    if count < 1 { return ValError(ERR_VALUE) }
+    if want_rows { return ValNumber(count) }
+    ncols: int = st->call_group_cols[0]
+    if ncols < 1 { ncols = 1 }
+    return ValNumber(ncols)
+}
+
+FnSumProduct :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    start: int = 0
+    len: int = 0
+    total: double = 0
+    i: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&start,&len)
+    i = 0
+    while i < len {
+        product: double = 1
+        g: int = 0
+        while g < groups {
+            gstart: int = 0
+            glen: int = 0
+            v: Val * = NULL
+            GroupBounds(marks,count,g,&gstart,&glen)
+            v = &args[gstart + (i < glen ? i : 0)]
+            if v->kind == VAL_ERROR { return ValError(v->err) }
+            if v->kind == VAL_FLOAT {
+                product *= v->number
+            }
+else {
+                product *= 0
+            }
+            g += 1
+        }
+        total += product
+        i += 1
+    }
+    return ValNumber(total)
+}
+
+ValTextEquals :: (a: Val *, b: Val *) -> int {
+    ta: [WB_TEXT_MAX] char = ""
+    tb: [WB_TEXT_MAX] char = ""
+    if a->kind == VAL_ERROR || b->kind == VAL_ERROR { return 0 }
+    CoerceText(a,ta,sizeof(ta))
+    CoerceText(b,tb,sizeof(tb))
+    return strcasecmp(ta,tb) == 0
+}
+
+FnVlookupHlookup :: (st: EvalState *, args: Val *, count: int, marks: int *, vertical: int) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    needle: Val * = NULL
+    table_start: int = 0
+    table_len: int = 0
+    index: double = 0
+    lookup_col: int = 0
+    i: int = 0
+    if groups < 3 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    needle = &args[0]
+    GroupBounds(marks,count,1,&table_start,&table_len)
+    index = CoerceNumber(&args[table_start + table_len])
+    if index < 1 { return ValError(ERR_VALUE) }
+    lookup_col = (int)index - 1
+    if table_len == 0 { return ValError(ERR_REF) }
+    ncols: int = st->call_group_cols[table_start]
+    if ncols < 1 { ncols = 1 }
+    if vertical {
+        stride: int = ncols
+        table_rows: int = table_len / stride
+        i = 0
+        while i < table_rows {
+            first: Val * = &args[table_start + i * stride]
+            if first->kind == VAL_ERROR { return ValError(first->err) }
+            hit: int = 0
+            if needle->kind == VAL_STRING && first->kind == VAL_STRING {
+                hit = strcasecmp(needle->text,first->text) == 0
+            }
+else if needle->kind == VAL_FLOAT && first->kind == VAL_FLOAT {
+                hit = needle->number == first->number
+            }
+else if needle->kind == VAL_BOOL && first->kind == VAL_BOOL {
+                hit = needle->number == first->number
+            }
+            if hit {
+                target: int = table_start + i * stride + lookup_col
+                if target < table_start + table_len {
+                    return ValCopy(&args[target])
+                }
+                return ValError(ERR_REF)
+            }
+            i += 1
+        }
+        approximate: int = 1
+        if groups >= 4 {
+            flagarg: int = 0
+            flen: int = 0
+            GroupBounds(marks,count,3,&flagarg,&flen)
+            if flen == 1 {
+                approximate = CoerceBool(&args[flagarg]) != 0
+            }
+        }
+        if approximate {
+            best: int = -1
+            i = 0
+            while i < table_rows {
+                first: Val * = &args[table_start + i * stride]
+                below: int = 0
+                if first->kind == VAL_STRING && needle->kind == VAL_STRING {
+                    below = strcasecmp(first->text,needle->text) <= 0
+                }
+else if first->kind == VAL_FLOAT && needle->kind == VAL_FLOAT {
+                    below = first->number <= needle->number
+                }
+                if below { best = i }
+                i += 1
+            }
+            if best >= 0 {
+                target: int = table_start + best * stride + lookup_col
+                if target < table_start + table_len {
+                    return ValCopy(&args[target])
+                }
+            }
+        }
+        return ValError(ERR_NA)
+    }
+    return ValError(ERR_NA)
+}
+
+FnMatch :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    needle: Val * = NULL
+    start: int = 0
+    len: int = 0
+    i: int = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    needle = &args[0]
+    GroupBounds(marks,count,1,&start,&len)
+    i = 0
+    while i < len {
+        v: Val * = &args[start + i]
+        if v->kind == VAL_ERROR { return ValError(v->err) }
+        hit: int = 0
+        if needle->kind == VAL_STRING && v->kind == VAL_STRING {
+            hit = strcasecmp(needle->text,v->text) == 0
+        }
+else if needle->kind == VAL_FLOAT && v->kind == VAL_FLOAT {
+            hit = needle->number == v->number
+        }
+else if needle->kind == VAL_BOOL && v->kind == VAL_BOOL {
+            hit = needle->number == v->number
+        }
+        if hit { return ValNumber(i + 1) }
+        i += 1
+    }
+    return ValError(ERR_NA)
+}
+
+FnIndex :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    start: int = 0
+    len: int = 0
+    row: double = 0
+    col: double = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    GroupBounds(marks,count,0,&start,&len)
+    row = CoerceNumber(&args[count - 2])
+    if count >= 3 {
+        col = CoerceNumber(&args[count - 1])
+    }
+else {
+        col = 1
+    }
+    if row < 1 || col < 1 { return ValError(ERR_VALUE) }
+    if groups >= 3 {
+        ncols: int = st->call_group_cols[start]
+        if ncols < 1 { ncols = 1 }
+        idx: int = (int)((row - 1) * ncols + (col - 1))
+        if idx >= len { return ValError(ERR_REF) }
+        return ValCopy(&args[start + idx])
+    }
+    if (int)row > len { return ValError(ERR_REF) }
+    return ValCopy(&args[start + (int)row - 1])
+}
+
+FnGeomean :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    total: double = 0
+    i: int = 0
+    CollectNumbers(args,count,&list)
+    if list.saw_error { return FirstError(args,count) }
+    if list.count == 0 { return ValError(ERR_NUM) }
+    i = 0
+    while i < list.count {
+        if list.data[i] <= 0 { return ValError(ERR_NUM) }
+        total += log(list.data[i])
+        i += 1
+    }
+    return ValNumber(exp(total / list.count))
+}
+
+FnHarmean :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    total: double = 0
+    i: int = 0
+    CollectNumbers(args,count,&list)
+    if list.saw_error { return FirstError(args,count) }
+    if list.count == 0 { return ValError(ERR_NUM) }
+    i = 0
+    while i < list.count {
+        if list.data[i] == 0 { return ValError(ERR_NUM) }
+        total += 1.0 / list.data[i]
+        i += 1
+    }
+    return ValNumber(list.count / total)
+}
+
+FnAvedev :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    total: double = 0
+    mean: double = 0
+    dev: double = 0
+    i: int = 0
+    CollectNumbers(args,count,&list)
+    if list.saw_error { return FirstError(args,count) }
+    if list.count == 0 { return ValError(ERR_NUM) }
+    i = 0
+    while i < list.count {
+        total += list.data[i]
+        i += 1
+    }
+    mean = total / list.count
+    i = 0
+    while i < list.count {
+        dev += fabs(list.data[i] - mean)
+        i += 1
+    }
+    return ValNumber(dev / list.count)
+}
+
+FnMode :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    best: double = 0
+    best_count: int = 0
+    i: int = 0
+    CollectNumbers(args,count,&list)
+    if list.saw_error { return FirstError(args,count) }
+    i = 0
+    while i < list.count {
+        same: int = 0
+        j: int = 0
+        while j < list.count {
+            if list.data[j] == list.data[i] { same += 1 }
+            j += 1
+        }
+        if same > best_count {
+            best_count = same
+            best = list.data[i]
+        }
+        i += 1
+    }
+    if best_count < 2 { return ValError(ERR_NA) }
+    return ValNumber(best)
+}
+
+FnTruncEvenOdd :: (st: EvalState *, args: Val *, count: int, marks: int *, code: int) -> Val {
+    v: double = 0
+    digits: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    v = CoerceNumber(&args[0])
+    if v >= 1e307 { return ValError(ERR_VALUE) }
+    if code == 0 {
+        if count >= 2 {
+            if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+            digits = CoerceNumber(&args[1])
+        }
+        scale: double = pow(10.0,digits)
+        return ValNumber(trunc(v * scale) / scale)
+    }
+    {
+        away: double = v < 0 ? -v : v
+        n: double = ceil(away)
+        target: int = code == 1 ? 0 : 1
+        if ((int)n) % 2 == target { return ValNumber(v < 0 ? -n : n) }
+        n += 1
+        return ValNumber(v < 0 ? -n : n)
+    }
+}
+
+FnQuotient :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    a: double = 0
+    b: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    a = CoerceNumber(&args[0])
+    b = CoerceNumber(&args[1])
+    if b == 0 { return ValError(ERR_DIV0) }
+    return ValNumber(trunc(a / b))
+}
+
+FnProper :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [WB_TEXT_MAX * 2] char = ""
+    out: [WB_TEXT_MAX * 2] char = ""
+    i: int = 0
+    word_start: int = 1
+    if TextArg(args,count,0,text,sizeof(text)) < 0 { return ValError(ERR_VALUE) }
+    while text[i] != 0 {
+        is_alpha: int = isalpha((unsigned char)text[i]) != 0
+        if is_alpha && word_start {
+            out[i] = (char)toupper((unsigned char)text[i])
+        }
+else if is_alpha {
+            out[i] = (char)tolower((unsigned char)text[i])
+        }
+else {
+            out[i] = text[i]
+        }
+        word_start = !isalpha((unsigned char)text[i]) && text[i] != 39
+        i += 1
+    }
+    out[i] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnReplace :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [WB_TEXT_MAX] char = ""
+    new: [WB_TEXT_MAX] char = ""
+    out: [WB_TEXT_MAX * 2] char = ""
+    start: double = 0
+    n: double = 0
+    len: int = 0
+    if count < 4 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,text,sizeof(text)) < 0 { return ValError(ERR_VALUE) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+    if TextArg(args,count,3,new,sizeof(new)) < 0 { return ValError(ERR_VALUE) }
+    start = CoerceNumber(&args[1])
+    n = CoerceNumber(&args[2])
+    len = (int)strlen(text)
+    if start < 1 || n < 0 { return ValError(ERR_VALUE) }
+    memcpy(out,text,(int)start - 1 < len ? (int)start - 1 : len)
+    out[(int)start - 1 < len ? (int)start - 1 : len] = 0
+    strcat(out,new)
+    if (int)start - 1 + (int)n < len {
+        strcat(out,text + (int)start - 1 + (int)n)
+    }
+    return ValString(wb_strdup(out))
+}
+
+FnFixed :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    decimals: double = 2
+    commas: double = 1
+    v: double = 0
+    out: [WB_TEXT_MAX] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    v = CoerceNumber(&args[0])
+    if count >= 2 {
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        decimals = CoerceNumber(&args[1])
+    }
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        commas = CoerceNumber(&args[2])
+    }
+    if decimals < 0 { decimals = 0 }
+    if decimals > 30 { decimals = 30 }
+    FormatWithPattern(v,commas != 0 ? "#,##0.000000" : "0.000000",out,sizeof(out))
+    return ValString(wb_strdup(out))
+}
+
+ConvertRadix :: (value: long, from_base: int, to_base: int, out: char *, cap: int) -> int {
+    digits: CString = "0123456789ABCDEF"
+    buf: [80] char = ""
+    n: int = 0
+    negative: int = value < 0
+    uv: unsigned long = 0
+    if negative { uv = (unsigned long)(-value) }
+else { uv = (unsigned long)value }
+    if value == 0 {
+        snprintf(out,cap,"0")
+        return 1
+    }
+    while uv != 0 && n < 70 {
+        buf[n] = digits[uv % (unsigned long)to_base]
+        uv /= (unsigned long)to_base
+        n += 1
+    }
+    if negative && n < 70 {
+        buf[n] = '-'
+        n += 1
+    }
+    i: int = n - 1
+    w: int = 0
+    while i >= 0 && w + 1 < cap {
+        out[w] = buf[i]
+        w += 1
+        i -= 1
+    }
+    out[w] = 0
+    return 1
+}
+
+CharToDigit :: (ch: int) -> int {
+    if ch >= '0' && ch <= '9' { return ch - '0' }
+    if ch >= 'a' && ch <= 'f' { return ch - 'a' + 10 }
+    if ch >= 'A' && ch <= 'F' { return ch - 'A' + 10 }
+    return -1
+}
+
+ParseRadix :: (text: const char *, base: int) -> double {
+    value: long = 0
+    i: int = 0
+    if text[0] == 0 { return 1e308 }
+    while text[i] != 0 {
+        d: int = CharToDigit((unsigned char)text[i])
+        if d < 0 || d >= base { return 1e308 }
+        value = value * base + d
+        i += 1
+    }
+    return (double)value
+}
+
+FnRadixConvert :: (st: EvalState *, args: Val *, count: int, marks: int *, to_base: int) -> Val {
+    text: [WB_TEXT_MAX] char = ""
+    out: [80] char = ""
+    v: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,text,sizeof(text)) < 0 { return ValError(ERR_VALUE) }
+    v = ParseRadix(text,10)
+    if v >= 1e307 { return ValError(ERR_NUM) }
+    ConvertRadix((long)v,10,to_base,out,sizeof(out))
+    return ValString(wb_strdup(out))
+}
+
+FnRadixParse :: (st: EvalState *, args: Val *, count: int, marks: int *, from_base: int) -> Val {
+    text: [WB_TEXT_MAX] char = ""
+    v: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,0,text,sizeof(text)) < 0 { return ValError(ERR_VALUE) }
+    v = ParseRadix(text,from_base)
+    if v >= 1e307 { return ValError(ERR_NUM) }
+    return ValNumber(v)
+}
+
 
 FnSum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     list: NumList = {0}
@@ -2399,6 +2873,33 @@ else {
 
 CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, marks: int *) -> Val {
     st->hint = 0
+
+    if strcmp(name,"row") == 0 { return FnRowColumn(st,args,count,marks,1) }
+    if strcmp(name,"column") == 0 { return FnRowColumn(st,args,count,marks,0) }
+    if strcmp(name,"rows") == 0 { return FnRowsColumns(st,args,count,marks,1) }
+    if strcmp(name,"columns") == 0 { return FnRowsColumns(st,args,count,marks,0) }
+    if strcmp(name,"sumproduct") == 0 { return FnSumProduct(st,args,count,marks) }
+    if strcmp(name,"vlookup") == 0 { return FnVlookupHlookup(st,args,count,marks,1) }
+    if strcmp(name,"hlookup") == 0 { return FnVlookupHlookup(st,args,count,marks,0) }
+    if strcmp(name,"match") == 0 { return FnMatch(st,args,count,marks) }
+    if strcmp(name,"index") == 0 { return FnIndex(st,args,count,marks) }
+    if strcmp(name,"geomean") == 0 { return FnGeomean(st,args,count,marks) }
+    if strcmp(name,"harmean") == 0 { return FnHarmean(st,args,count,marks) }
+    if strcmp(name,"avedev") == 0 { return FnAvedev(st,args,count,marks) }
+    if strcmp(name,"mode") == 0 { return FnMode(st,args,count,marks) }
+    if strcmp(name,"trunc") == 0 { return FnTruncEvenOdd(st,args,count,marks,0) }
+    if strcmp(name,"even") == 0 { return FnTruncEvenOdd(st,args,count,marks,1) }
+    if strcmp(name,"odd") == 0 { return FnTruncEvenOdd(st,args,count,marks,2) }
+    if strcmp(name,"quotient") == 0 { return FnQuotient(st,args,count,marks) }
+    if strcmp(name,"proper") == 0 { return FnProper(st,args,count,marks) }
+    if strcmp(name,"replace") == 0 { return FnReplace(st,args,count,marks) }
+    if strcmp(name,"fixed") == 0 { return FnFixed(st,args,count,marks) }
+    if strcmp(name,"dec2bin") == 0 { return FnRadixConvert(st,args,count,marks,2) }
+    if strcmp(name,"dec2oct") == 0 { return FnRadixConvert(st,args,count,marks,8) }
+    if strcmp(name,"dec2hex") == 0 { return FnRadixConvert(st,args,count,marks,16) }
+    if strcmp(name,"bin2dec") == 0 { return FnRadixParse(st,args,count,marks,2) }
+    if strcmp(name,"oct2dec") == 0 { return FnRadixParse(st,args,count,marks,8) }
+    if strcmp(name,"hex2dec") == 0 { return FnRadixParse(st,args,count,marks,16) }
     if strcmp(name,"sum") == 0 { return FnSum(st,args,count,marks) }
     if strcmp(name,"average") == 0 || strcmp(name,"mean") == 0 { return FnAverage(st,args,count,marks) }
     if strcmp(name,"count") == 0 { return FnCount(st,args,count,marks) }
