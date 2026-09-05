@@ -91,8 +91,10 @@ datedif
 datevalue
 daverage
 days360
+db
 dcount
 dcounta
+ddb
 dec2bin
 dec2hex
 dec2oct
@@ -101,6 +103,7 @@ delta
 devsq
 dget
 digamma
+disc
 dmax
 dmin
 dollar
@@ -110,6 +113,7 @@ dproduct
 dstdev
 dstdevp
 dsum
+duration
 dvar
 dvarp
 eastersunday
@@ -147,6 +151,7 @@ flt.radix
 forecast
 fourier
 frequency
+fv
 fvschedule
 gammadist
 gammainv
@@ -223,6 +228,8 @@ intercept
 interpolation
 intrate
 invsuminv
+ipmt
+irr
 isblank
 iserr
 iserror
@@ -287,6 +294,7 @@ norminv
 normsdist
 normsinv
 nper
+npv
 numbervalue
 oct2bin
 oct2dec
@@ -310,14 +318,17 @@ periodogram
 permut
 permutationa
 pfactor
+pmt
 pochhammer
 poisson
 power
 ppmt
+price
 pricedisc
 pricemat
 prob
 proper
+pv
 quartile
 quartile.exc
 quotient
@@ -355,6 +366,7 @@ randtdist
 randuniform
 randweibull
 rank.avg
+rate
 rayleigh
 rayleightail
 received
@@ -380,6 +392,7 @@ simtable
 sinpi
 skew
 skewp
+sln
 slope
 small
 snorm.dist.range
@@ -403,6 +416,7 @@ sumx2my2
 sumx2py2
 sumxmy2
 switch
+syd
 tanpi
 tbilleq
 tbillprice
@@ -428,6 +442,7 @@ upper
 vara
 varp
 varpa
+vdb
 vlookup
 weekday
 weibull
@@ -435,6 +450,7 @@ workday
 xirr
 xnpv
 yearfrac
+yield
 yielddisc
 yieldmat
 ztest

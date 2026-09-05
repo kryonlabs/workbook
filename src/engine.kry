@@ -9,6 +9,27 @@
 #import "strings.h"
 #import "time.h"
 
+state {
+    BD0_CH: [129] CString = {0}
+    BD0_V: [516] double
+    BD0_READY: int = 0
+    GS_R_NPER: double = 0
+    GS_R_PMT: double = 0
+    GS_R_PV: double = 0
+    GS_R_FV: double = 0
+    GS_R_TYPE: int = 0
+    GSV_A: [512] double
+    GSD_A: [512] double
+    GS_CASH_N: int = 0
+    GS_Y_SETTLE: int = 0
+    GS_Y_MAT: int = 0
+    GS_Y_RATE: double = 0
+    GS_Y_RED: double = 0
+    GS_Y_PAR: double = 0
+    GS_Y_FREQ: int = 0
+    GS_Y_BASIS: int = 0
+}
+
 #enum {
     WB_MAX_SHEETS = 64
     WB_MAX_COLS = 256
@@ -1724,6 +1745,2405 @@ FnRadixParse :: (st: EvalState *, args: Val *, count: int, marks: int *, from_ba
 }
 
 
+
+IsLeapYear :: (y: int) -> int {
+    return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+DaysInYear :: (y: int) -> int {
+    if IsLeapYear(y) { return 366 }
+    return 365
+}
+
+SerialToYmd :: (serial: int, y: int *, m: int *, d: int *) {
+    CivilFromDays(serial + SerialEpoch(),y,m,d)
+}
+
+YmdToSerial :: (y: int, m: int, d: int) -> int {
+    return DaysFromCivil(y,m,d) - SerialEpoch()
+}
+
+MonthAdd :: (y: int, m: int, months: int, out_y: int *, out_m: int *) {
+    total: int = y * 12 + (m - 1) + months
+    out_y[0] = total / 12
+    out_m[0] = total % 12 + 1
+}
+
+DaysInMonthGo :: (y: int, m: int) -> int {
+    if m == 4 || m == 6 || m == 9 || m == 11 { return 30 }
+    if m == 2 {
+        if IsLeapYear(y) { return 29 }
+        return 28
+    }
+    return 31
+}
+
+IsLastOfMonth :: (y: int, m: int, d: int) -> int {
+    if d == DaysInMonthGo(y,m) { return 1 }
+    return 0
+}
+
+Days30_360 :: (s1: int, s2: int) -> int {
+    y1: int = 0
+    m1: int = 0
+    d1: int = 0
+    y2: int = 0
+    m2: int = 0
+    d2: int = 0
+    SerialToYmd(s1,&y1,&m1,&d1)
+    SerialToYmd(s2,&y2,&m2,&d2)
+    if (d1 == d2 && m1 == m2 && y1 == y2) { return 0 }
+    if d1 == 31 { d1 = 30 }
+    if (d2 == 31 && d1 == 30) { d2 = 30 }
+    if (m1 == 2 && IsLastOfMonth(y1,m1,d1) != 0) {
+        if (m2 == 2 && IsLastOfMonth(y2,m2,d2) != 0) { d2 = 30 }
+        d1 = 30
+    }
+    return (y2 - y1) * 360 + (m2 - m1) * 30 + (d2 - d1)
+}
+
+Days30E :: (s1: int, s2: int) -> int {
+    y1: int = 0
+    m1: int = 0
+    d1: int = 0
+    y2: int = 0
+    m2: int = 0
+    d2: int = 0
+    SerialToYmd(s1,&y1,&m1,&d1)
+    SerialToYmd(s2,&y2,&m2,&d2)
+    if d1 == 31 { d1 = 30 }
+    if d2 == 31 { d2 = 30 }
+    return (y2 - y1) * 360 + (m2 - m1) * 30 + (d2 - d1)
+}
+
+BasisDaysBetween :: (s1: int, s2: int, basis: int) -> int {
+    sign: int = 1
+    f: int = s1
+    t: int = s2
+    if f > t {
+        sign = -1
+        f = s2
+        t = s1
+    }
+    if (basis == 1 || basis == 2 || basis == 3) { return sign * (t - f) }
+    if basis == 4 { return sign * Days30E(f,t) }
+    return sign * Days30_360(f,t)
+}
+
+AddMonthsSerial :: (serial: int, n: int) -> int {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    ny: int = 0
+    nm: int = 0
+    SerialToYmd(serial,&y,&m,&d)
+    MonthAdd(y,m,n,&ny,&nm)
+    nd: int = d
+    if (nd > DaysInMonthGo(ny,nm)) { nd = DaysInMonthGo(ny,nm) }
+    return YmdToSerial(ny,nm,nd)
+}
+
+AddYearsSerial :: (serial: int, n: int) -> int {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    SerialToYmd(serial,&y,&m,&d)
+    nd: int = d
+    if (m == 2 && nd == 29 && IsLeapYear(y + n) == 0) { nd = 28 }
+    return YmdToSerial(y + n,m,nd)
+}
+
+YearFracBasis :: (s1: int, s2: int, basis: int) -> double {
+    from_s: int = s1
+    to_s: int = s2
+    days: int = BasisDaysBetween(from_s,to_s,basis)
+    if days < 0 {
+        from_s = s2
+        to_s = s1
+        days = -days
+    }
+    if basis == 1 {
+        y1: int = 0
+        m1: int = 0
+        d1: int = 0
+        y2: int = 0
+        m2: int = 0
+        d2: int = 0
+        SerialToYmd(from_s,&y1,&m1,&d1)
+        SerialToYmd(to_s,&y2,&m2,&d2)
+        plus1: int = AddYearsSerial(from_s,1)
+        feb29s: int = 0
+        years: int = 1
+        if to_s > plus1 {
+            years = y2 + 1 - y1
+            j1: int = YmdToSerial(y1,1,1)
+            j2: int = YmdToSerial(y2 + 1,1,1)
+            feb29s = j2 - j1 - 365 * years
+        }
+else {
+            if ((IsLeapYear(y1) != 0 && m1 < 3) || (IsLeapYear(y2) != 0 && (m2 * 256 + d2 >= 2 * 256 + 29))) {
+                feb29s = 1
+            }
+else {
+                feb29s = 0
+            }
+        }
+        peryear: double = 365 + (double)feb29s / (double)years
+        return (double)days / peryear
+    }
+    if basis == 3 { return (double)days / 365.0 }
+    return (double)days / 360.0
+}
+
+ArgAt :: (args: Val *, count: int, index: int, fallback: double) -> double {
+    if index >= count { return fallback }
+    if args[index].kind == VAL_ERROR { return 1e308 }
+    n: double = CoerceNumber(&args[index])
+    return n
+}
+
+ArgAtInt :: (args: Val *, count: int, index: int, fallback: int) -> int {
+    v: double = ArgAt(args,count,index,(double)fallback)
+    if v >= 1e307 { return fallback }
+    return (int)v
+}
+
+ArgDate :: (args: Val *, count: int, index: int, fallback: int) -> int {
+    v: double = ArgAt(args,count,index,(double)fallback)
+    if v >= 1e307 { return fallback }
+    return (int)v
+}
+
+ArgBasis :: (args: Val *, count: int, index: int) -> int {
+    b: int = ArgAtInt(args,count,index,0)
+    if b < 0 || b > 4 { return -1 }
+    return b
+}
+
+FinPower :: (base: double, e: double) -> double {
+    return pow(base,e)
+}
+
+
+Bd0Init :: () -> int {
+    i: int = 0
+    k: int = 0
+    p: CString = ""
+        BD0_CH[0] = "0.69314718246459961 -1.9046542121259336e-09 -8.7831837385893394e-17 3.0618407385293692e-24"
+        BD0_CH[1] = "0.68530404567718506 -4.2578264469739224e-08 -1.1723105396588968e-15 6.2033926372016101e-23"
+        BD0_CH[2] = "0.67739880084991455 2.2741890148836319e-08 1.4411920431605914e-15 7.0463845466501636e-23"
+        BD0_CH[3] = "0.66993057727813721 -4.8293856025338755e-08 -8.6647955317383819e-16 7.0495576607553246e-24"
+        BD0_CH[4] = "0.66240608692169189 -4.7916024925598322e-08 -2.161508226230938e-15 7.0929683608252748e-23"
+        BD0_CH[5] = "0.65482449531555176 6.2377152332260266e-09 1.1806699607549086e-16 6.6603235335351226e-25"
+        BD0_CH[6] = "0.64718508720397949 -4.2208668560306251e-08 -1.3817589176253094e-15 -1.1159932395766606e-23"
+        BD0_CH[7] = "0.64000189304351807 -4.9791701428603119e-08 4.8870137639076255e-16 1.6847465694533583e-23"
+        BD0_CH[8] = "0.6327667236328125 -5.4061771947999659e-08 -2.7224545250006775e-15 -2.9070780223955397e-23"
+        BD0_CH[9] = "0.62495613098144531 3.285935434860221e-08 1.2016729367754671e-16 -8.668233185091897e-24"
+        BD0_CH[10] = "0.61813735961914062 -6.4061894677891473e-11 3.5505809623358779e-18 -3.6236794067489652e-25"
+        BD0_CH[11] = "0.61074161529541016 4.2298538005525188e-08 1.5481432935203661e-15 -5.4463531187197656e-23"
+        BD0_CH[12] = "0.60329079627990723 5.5158174916414282e-08 2.1193636784238266e-15 1.2471098264106631e-22"
+        BD0_CH[13] = "0.59632217884063721 3.2813538553000399e-09 -1.4033469816541837e-16 5.5440619826430738e-24"
+        BD0_CH[14] = "0.58930456638336182 4.3079985800886789e-08 -3.2446651600595306e-15 -2.569782398567476e-23"
+        BD0_CH[15] = "0.58223748207092285 -3.983067387025585e-08 2.9387905513776885e-15 1.6124430498687833e-22"
+        BD0_CH[16] = "0.57511997222900391 2.2423840562169062e-09 -2.2045164035371139e-17 4.0785437537513542e-25"
+        BD0_CH[17] = "0.5685046911239624 4.4228706030935427e-08 2.7879957109977287e-16 -9.7417087940294081e-24"
+        BD0_CH[18] = "0.56184542179107666 2.1471613820267521e-08 1.3374919170106156e-15 -2.3269222603365059e-23"
+        BD0_CH[19] = "0.55458080768585205 4.5778349999636703e-09 2.6331459121410258e-16 2.0709959033879981e-23"
+        BD0_CH[20] = "0.54782783985137939 -7.6679995686390612e-09 6.1990953277753225e-16 6.3419790110560228e-24"
+        BD0_CH[21] = "0.54102897644042969 -3.7302321231891256e-08 -3.3801781496424835e-15 1.4469198371142414e-22"
+        BD0_CH[22] = "0.53475570678710938 4.3828919160660007e-08 -8.6018207496923928e-16 -8.7759505639780158e-24"
+        BD0_CH[23] = "0.52786707878112793 1.0839714903454478e-08 -4.4802812481303193e-16 3.8840996084516777e-23"
+        BD0_CH[24] = "0.52151048183441162 4.2031594205127476e-08 1.211009992711288e-15 -2.3206744819671555e-23"
+        BD0_CH[25] = "0.51452970504760742 -1.2322940889930578e-08 2.8200844954132738e-16 1.880026562185923e-23"
+        BD0_CH[26] = "0.50808751583099365 -1.2297126872340414e-08 -4.2958355887009591e-16 -1.8036626177499945e-23"
+        BD0_CH[27] = "0.50160348415374756 5.9145378372704727e-08 1.2728561033550608e-15 -5.8240944300194158e-23"
+        BD0_CH[28] = "0.49507725238800049 1.4409851090135817e-08 -6.3819101840834221e-17 -3.5005093767171181e-25"
+        BD0_CH[29] = "0.48910707235336304 2.7457986107037868e-08 -1.4470418644525664e-15 4.2118668969499388e-23"
+        BD0_CH[30] = "0.48249846696853638 1.7622454606680549e-08 4.128675224747099e-16 2.6082691866392177e-23"
+        BD0_CH[31] = "0.4764525294303894 -1.2470243504481004e-08 -9.1621939247941964e-17 3.7657825422403758e-24"
+        BD0_CH[32] = "0.46975946426391602 -5.4503539459460626e-09 -4.3048469604685608e-16 2.0747103437070831e-25"
+        BD0_CH[33] = "0.46363574266433716 -1.7013046527125653e-09 7.6016227388785886e-18 -2.0415879231895994e-25"
+        BD0_CH[34] = "0.45747429132461548 6.9436845162584859e-10 -2.5461310777374286e-17 5.5412533419976475e-25"
+        BD0_CH[35] = "0.45127463340759277 1.0731865174307131e-08 6.374000219845047e-16 3.9015473184089939e-23"
+        BD0_CH[36] = "0.44503629207611084 2.8650656958006948e-08 -9.1553525455583418e-16 -4.7365878254772817e-23"
+        BD0_CH[37] = "0.43938833475112915 2.6186132373595683e-08 1.3619601577579505e-15 -5.2672794844240613e-23"
+        BD0_CH[38] = "0.4330751895904541 1.9065733880552216e-08 1.0143192014799461e-15 1.0145670737413337e-22"
+        BD0_CH[39] = "0.42735910415649414 -1.141359362577532e-08 1.3242044582274781e-16 -1.0240055893684678e-23"
+        BD0_CH[40] = "0.42096930742263794 -1.2778508917676845e-08 6.1435257312707041e-16 1.419242178938019e-23"
+        BD0_CH[41] = "0.41518336534500122 -7.7679160881416465e-09 5.9554431241240708e-16 2.732668133771502e-23"
+        BD0_CH[42] = "0.40936374664306641 1.8807551072086426e-09 1.9153331349462894e-16 -5.6208063158074999e-24"
+        BD0_CH[43] = "0.40351009368896484 -2.0416603518924603e-08 -2.9340501314883798e-16 1.8943469119705811e-24"
+        BD0_CH[44] = "0.39762192964553833 1.0016001361634608e-09 2.2863242352463633e-17 9.4581336117707638e-25"
+        BD0_CH[45] = "0.39169889688491821 1.5459097113534881e-08 1.0962823446210085e-15 3.1083022398211258e-23"
+        BD0_CH[46] = "0.38640439510345459 -2.076412375373593e-09 1.5073464810114547e-16 7.4124494543750944e-24"
+        BD0_CH[47] = "0.38041436672210693 -8.2443953886013333e-09 1.4866224964678982e-16 -3.9272927406839679e-24"
+        BD0_CH[48] = "0.37438821792602539 9.1585299344387749e-09 5.6569190673585014e-16 3.4213474905617904e-23"
+        BD0_CH[49] = "0.36900103092193604 -2.2253590969967263e-08 6.2314053995483377e-16 -2.1564751355837555e-23"
+        BD0_CH[50] = "0.36358463764190674 -2.6778728567933285e-08 -9.9439084557165734e-16 -4.7049297329454952e-24"
+        BD0_CH[51] = "0.35745590925216675 -2.0330361394371721e-08 -1.5794492077344114e-15 6.3186780320680572e-23"
+        BD0_CH[52] = "0.35197639465332031 2.8503858828798911e-08 -9.5664345755197989e-16 -6.409595040255684e-24"
+        BD0_CH[53] = "0.3464667797088623 -1.236265312343221e-08 -6.0033682482797191e-16 -2.8609014971057941e-24"
+        BD0_CH[54] = "0.34092658758163452 -6.1104132864642224e-10 1.7467136243918857e-17 1.9962587429804357e-25"
+        BD0_CH[55] = "0.33535552024841309 2.167272583619706e-08 -1.0918773497788125e-15 -3.0475747807041261e-23"
+        BD0_CH[56] = "0.33045530319213867 -1.6088840482098021e-08 -3.8334350088389162e-16 -7.6837418751242213e-24"
+        BD0_CH[57] = "0.32482540607452393 2.8016703623734429e-08 -2.0725720961098414e-16 1.3160777896524739e-23"
+        BD0_CH[58] = "0.31916368007659912 2.6222629401218001e-08 -1.3995222573204161e-15 8.5998839096808329e-23"
+        BD0_CH[59] = "0.31418323516845703 2.6826626253750874e-08 -9.7925563735364388e-16 2.2954960929108544e-23"
+        BD0_CH[60] = "0.3084607720375061 1.3683509436646091e-08 5.5919950507426434e-16 -1.1938701403427125e-23"
+        BD0_CH[61] = "0.30342662334442139 -8.6290423695345453e-09 -5.2225542192593918e-16 3.228770766379237e-23"
+        BD0_CH[62] = "0.2983669638633728 8.6884242023188563e-09 2.7641167934234459e-16 -1.0171858868428321e-23"
+        BD0_CH[63] = "0.29255300760269165 -4.9163144666408698e-09 2.5622847239605072e-16 -2.6341575505102177e-23"
+        BD0_CH[64] = "0.28743791580200195 -1.3782395669181824e-08 7.2903935187764498e-16 -4.4319779432822359e-24"
+        BD0_CH[65] = "0.28229647874832153 2.3770866164340987e-08 6.4492283922642536e-16 3.4175369768452108e-23"
+        BD0_CH[66] = "0.27712851762771606 1.4733029018998423e-08 6.793364114448283e-16 3.5938980340322221e-24"
+        BD0_CH[67] = "0.27193373441696167 -1.8933320689029642e-08 7.7793941095558299e-16 2.5919724247426189e-23"
+        BD0_CH[68] = "0.2667117714881897 1.4300387263244119e-11 -7.458876800955772e-19 4.247418782257993e-26"
+        BD0_CH[69] = "0.26221400499343872 7.8022193150673047e-09 5.0224310387675386e-16 -2.4063174816868367e-23"
+        BD0_CH[70] = "0.25694090127944946 2.9618050234603288e-08 7.2795282036455453e-16 2.638556081145549e-23"
+        BD0_CH[71] = "0.25163990259170532 -6.4478777872523096e-09 4.1220281336935209e-16 7.4275592961536977e-24"
+        BD0_CH[72] = "0.24707368016242981 -1.9981829524340355e-09 -1.0909757890855787e-16 6.2365520898082133e-24"
+        BD0_CH[73] = "0.24171993136405945 5.5230859885568862e-09 -2.6865476336962652e-16 -2.7644959891700921e-24"
+        BD0_CH[74] = "0.23710808157920837 1.0085374313462125e-08 -4.7756268137613168e-16 2.3306205980323631e-23"
+        BD0_CH[75] = "0.231700599193573 -1.3946383603524737e-08 1.0970921279709183e-17 3.229909378627549e-25"
+        BD0_CH[76] = "0.22704219818115234 -6.4512848396702793e-09 -4.2529947798112047e-16 -1.0260254677162862e-23"
+        BD0_CH[77] = "0.2223619818687439 1.4110645096820917e-08 6.0255689818272543e-16 1.9385180739531644e-23"
+        BD0_CH[78] = "0.21765980124473572 -8.286782815503102e-09 5.2323639195797807e-16 5.0784435386540659e-23"
+        BD0_CH[79] = "0.21214580535888672 -8.2542186419232166e-09 3.2555531333217742e-16 1.5714300136341619e-23"
+        BD0_CH[80] = "0.20739519596099854 -1.6149279691290985e-09 2.1131592679643073e-17 1.4275617427027514e-24"
+        BD0_CH[81] = "0.20262190699577332 8.5976399333276277e-09 -3.3804619056798137e-16 2.5623235609364303e-24"
+        BD0_CH[82] = "0.19782572984695435 1.348296585490516e-08 -3.2024568730231384e-16 -2.5712252251631252e-23"
+        BD0_CH[83] = "0.19300645589828491 9.9568597811128257e-10 9.0016745638446061e-17 -3.7547976541351732e-24"
+        BD0_CH[84] = "0.18897256255149841 4.2415360113068346e-09 3.8086815297465933e-16 -2.1147402916208568e-23"
+        BD0_CH[85] = "0.18411031365394592 6.9310548411749551e-09 -3.4784858522920016e-16 2.4665943434547742e-23"
+        BD0_CH[86] = "0.17922431230545044 5.0739235035734964e-09 3.2221329189922637e-16 -1.0379009008973928e-23"
+        BD0_CH[87] = "0.17431432008743286 3.7943852504440656e-09 3.1900668985871761e-16 2.0292714723890484e-23"
+        BD0_CH[88] = "0.17020416259765625 3.4223344158590407e-09 -1.8846416901959178e-16 1.1415315069779235e-23"
+        BD0_CH[89] = "0.16524958610534668 -1.3210039284672348e-08 -2.3213954359040806e-16 3.0430542132867571e-24"
+        BD0_CH[90] = "0.16027030348777771 6.0079221597675314e-09 -7.5210477371542882e-17 -1.2649106048711768e-25"
+        BD0_CH[91] = "0.15610191226005554 -1.2301535790015805e-08 3.0175617567361414e-16 -8.6338065063271469e-24"
+        BD0_CH[92] = "0.15191605687141418 -1.4845571882915465e-08 -3.265830289949929e-16 -1.5268151962784823e-23"
+        BD0_CH[93] = "0.14686977863311768 -4.6748995785605985e-09 -4.2942913417589961e-16 1.328295982896899e-23"
+        BD0_CH[94] = "0.14264500141143799 9.1864720275225409e-09 -8.0493731559989293e-16 1.437998766909278e-23"
+        BD0_CH[95] = "0.1384023129940033 9.8651167235175308e-09 -8.837306496940929e-16 7.2953249091942152e-24"
+        BD0_CH[96] = "0.1332872211933136 9.9903507688736681e-10 3.3169466107343579e-17 2.7351440526086287e-24"
+        BD0_CH[97] = "0.12900456786155701 -7.4612085398939598e-09 -6.212113165383437e-16 1.8551872649897312e-24"
+        BD0_CH[98] = "0.12470348179340363 -3.2924463155836747e-09 -7.4041201327417524e-17 1.3246955625609024e-24"
+        BD0_CH[99] = "0.12038381397724152 3.3791991427278845e-09 1.6214981996371606e-16 -6.00070673940474e-24"
+        BD0_CH[100] = "0.11604541540145874 3.5638392237302696e-10 -7.3542196351088785e-18 7.794312440645008e-26"
+        BD0_CH[101] = "0.11168810725212097 3.1367659580894269e-09 -8.9944062932382251e-19 -7.9209375581822066e-26"
+        BD0_CH[102] = "0.10731174051761627 -4.728527791542092e-09 -4.2976339455270984e-16 5.3511432872581071e-24"
+        BD0_CH[103] = "0.10291612148284912 2.8332007850906393e-09 4.9257427572340523e-17 2.794436810397303e-24"
+        BD0_CH[104] = "0.098501101136207581 4.9707251648101192e-09 4.1305127568470488e-16 6.3134495605958654e-25"
+        BD0_CH[105] = "0.094066515564918518 -6.5258509707177836e-09 -1.3492816627243298e-16 -9.079650179574527e-24"
+        BD0_CH[106] = "0.08961215615272522 2.5369617517867482e-09 1.6110664594961319e-16 -5.1895045044869639e-24"
+        BD0_CH[107] = "0.086034342646598816 -5.3047957138119273e-09 5.127575488441481e-17 1.4636155456921331e-24"
+        BD0_CH[108] = "0.081543982028961182 2.0112156384755053e-09 8.0657693315776084e-17 -3.0150319017810437e-24"
+        BD0_CH[109] = "0.077033370733261108 5.7495661565098999e-09 -2.5038510973029852e-16 -1.8461430930405081e-23"
+        BD0_CH[110] = "0.07250232994556427 1.177662634077592e-09 -3.5254768579255061e-17 1.3164077898906505e-24"
+        BD0_CH[111] = "0.068862661719322205 -7.043545302565235e-09 2.4971240675150099e-16 1.0686882487619963e-23"
+        BD0_CH[112] = "0.064294353127479553 -2.4220820904474749e-09 -2.0555896149129847e-16 8.602907613530545e-24"
+        BD0_CH[113] = "0.0606246218085289 7.9059432611661151e-12 -8.2704433454710956e-19 -2.3533820836754142e-26"
+        BD0_CH[114] = "0.056018441915512085 -5.1397452960344481e-10 -3.8116515713668017e-17 1.9072195442219776e-24"
+        BD0_CH[115] = "0.052318163216114044 -3.5574325707443677e-09 9.1911558341453931e-17 -5.3214639734209769e-24"
+        BD0_CH[116] = "0.04767347127199173 -1.8026349302147082e-09 1.0329634289704177e-16 -2.2283569301283993e-24"
+        BD0_CH[117] = "0.043942123651504517 -1.7950056996340891e-09 -5.3817402974104447e-17 -1.3996196977941442e-24"
+        BD0_CH[118] = "0.040196798741817474 3.8451930528538014e-10 -2.4485452721520977e-17 -7.3867690243779494e-26"
+        BD0_CH[119] = "0.0354953333735466 -3.5901653872016936e-10 -2.0732077678669761e-17 -2.4120972165551679e-26"
+        BD0_CH[120] = "0.0317181795835495 6.8723504664802704e-10 -6.4304780937494731e-18 1.3508692031871337e-25"
+        BD0_CH[121] = "0.027926705777645111 7.5687733858131878e-10 -4.2203158516594398e-17 2.5347605636927818e-24"
+        BD0_CH[122] = "0.02412080392241478 -1.1255707477175747e-09 4.89700584100947e-17 1.4172214525647275e-24"
+        BD0_CH[123] = "0.019342962652444839 1.9068610579431322e-10 -1.0635946218849709e-17 -5.3004895424577344e-25"
+        BD0_CH[124] = "0.015504186972975731 -4.3701048335620385e-10 6.6110615476371497e-18 2.5398086818405174e-25"
+        BD0_CH[125] = "0.011650616303086281 9.1688900916153671e-10 -1.5848697818454755e-17 -1.350491609984469e-24"
+        BD0_CH[126] = "0.0077821407467126846 -3.0465774347732122e-10 7.7934359967622851e-18 4.6601001482083692e-25"
+        BD0_CH[127] = "0.0038986406289041042 -2.1324678134426733e-10 1.2541658163801307e-19 8.7450354317401229e-27"
+        BD0_CH[128] = "0 0 0 0"
+    while i < 129 {
+        p = BD0_CH[i]
+        k = 0
+        while k < 4 {
+            BD0_V[i * 4 + k] = strtod(p,NULL)
+            while p[0] != 0 && p[0] != 32 { p += 1 }
+            if p[0] == 32 { p += 1 }
+            k += 1
+        }
+        i += 1
+    }
+    BD0_READY = 1
+    return BD0_READY
+}
+
+PairAdd :: (d: double, h: double *, l: double *) {
+    dh: double = round(d * 65536) / 65536
+    dl: double = d - dh
+    l[0] += dl
+    h[0] += dh
+}
+
+GoLogcf :: (x: double, iv: double, dv: double, eps: double) -> double {
+    c1: double = 2 * dv
+    c2: double = iv + dv
+    c4: double = c2 + dv
+    a1: double = c2
+    b1: double = iv * (c2 - iv * x)
+    b2: double = dv * dv * x
+    a2: double = c4 * c2 - b2
+    scalefactor: double = 1.157920892373162e+77
+    b2 = c4 * b1 - iv * b2
+    while (fabs(a2 * b1 - a1 * b2) > fabs(eps * b1 * b2)) {
+        c3: double = c2 * c2 * x
+        c2 += dv
+        c4 += dv
+        a1 = c4 * a2 - c3 * a1
+        b1 = c4 * b2 - c3 * b1
+        c3 = c1 * c1 * x
+        c1 += dv
+        c4 += dv
+        a2 = c4 * a1 - c3 * a2
+        b2 = c4 * b1 - c3 * b2
+        if (fabs(b2) > scalefactor) {
+            a1 /= scalefactor
+            b1 /= scalefactor
+            a2 /= scalefactor
+            b2 /= scalefactor
+        }
+else if (fabs(b2) < 1 / scalefactor) {
+            a1 *= scalefactor
+            b1 *= scalefactor
+            a2 *= scalefactor
+            b2 *= scalefactor
+        }
+    }
+    return a2 / b2
+}
+
+Log1pmx :: (x: double) -> double {
+    if (x > 1 || x < -0.79149064) { return log1p(x) - x }
+    r: double = x / (2 + x)
+    y: double = r * r
+    if (fabs(x) < 1e-2) {
+        return r * ((((2.0 / 9 * y + 2.0 / 7) * y + 2.0 / 5) * y + 2.0 / 3) * y - x)
+    }
+    return r * (2 * y * GoLogcf(y,3,2,1e-14) - x)
+}
+
+FrexpM :: (x: double, e: int *) -> double {
+    ee: int = ilogb(x)
+    e[0] = ee + 1
+    return scalbn(x,-ee - 1)
+}
+
+Ebd0 :: (x: double, m: double, yh: double *, yl: double *) {
+    if BD0_READY == 0 { Bd0Init() }
+    yh[0] = 0
+    yl[0] = 0
+    if x == m { return }
+    e4: double = 2.2204460492503131e-16 * 2.2204460492503131e-16 * 2.2204460492503131e-16 * 2.2204460492503131e-16
+    if (x < m * e4) { PairAdd(m,yh,yl); return }
+    if m == 0 { yh[0] = 1.0 / 0.0; return }
+    if (m < x * e4) {
+        PairAdd(x * (log(x) - 1),yh,yl)
+        PairAdd(-x * log(m),yh,yl)
+        return
+    }
+    e: int = 0
+    r: double = FrexpM(m / x,&e)
+    i: int = (int)round((r - 0.5) * 256)
+    f: double = round(1024 / (0.5 + (double)i / 256))
+    fg: double = scalbn(f,-e - 10)
+    j: int = 3
+    while j >= 0 {
+        PairAdd(x * BD0_V[i * 4 + j],yh,yl)
+        PairAdd(-x * (double)e * BD0_V[j],yh,yl)
+        j -= 1
+    }
+    PairAdd(m,yh,yl)
+    m1: double = round(m)
+    PairAdd(-m1 * fg,yh,yl)
+    PairAdd(-(m - m1) * fg,yh,yl)
+    PairAdd(-x * Log1pmx((m * fg - x) / x),yh,yl)
+}
+
+Pow1p :: (x: double, y: double) -> double {
+    if ((x + 1) - 1 == x || x > 0.5 || x < -0.5 || x != x || y != y) { return pow(1 + x,y) }
+    if (y < 0) { return 1 / Pow1p(x,-y) }
+    x1: double = round(x * 65536) / 65536
+    x2: double = x - x1
+    h: double = 0
+    l: double = 0
+    Ebd0(y,y * (x + 1),&h,&l)
+    PairAdd(-y * x1,&h,&l)
+    PairAdd(-y * x2,&h,&l)
+    return exp(-l) * exp(-h)
+}
+
+Pow1pm1 :: (x: double, y: double) -> double {
+    if (x <= -1) { return pow(1 + x,y) - 1 }
+    return expm1(y * log1p(x))
+}
+
+CalcPvif :: (rate: double, nper: double) -> double {
+    return Pow1p(rate,nper)
+}
+
+CalcFvifa :: (rate: double, nper: double) -> double {
+    if rate == 0 { return nper }
+    return Pow1pm1(rate,nper) / rate
+}
+
+CalcPmt :: (rate: double, nper: double, pv: double, fv: double, ptype: int) -> double {
+    pvif: double = CalcPvif(rate,nper)
+    fvifa: double = CalcFvifa(rate,nper)
+    return (-pv * pvif - fv) / ((1 + rate * (double)ptype) * fvifa)
+}
+
+CalcIpmtGo :: (rate: double, per: double, nper: double, pv: double, fv: double, ptype: int) -> double {
+    pmt: double = CalcPmt(rate,nper,pv,fv,0)
+    ipmt: double = -(pv * Pow1p(rate,per - 1) * rate + pmt * Pow1pm1(rate,per - 1))
+    if ptype == 0 { return ipmt }
+    return ipmt / (1 + rate)
+}
+
+GetRmz :: (r: double, n: double, pv: double, fv: double, ptype: int) -> double {
+    rmz: double = 0
+    term: double = 0
+    if r == 0 {
+        rmz = (pv + fv) / n
+        return -rmz
+    }
+    term = Pow1p(r,n)
+    if ptype > 0 {
+        rmz = (fv * r / (term - 1) + pv * r / (1 - 1 / term)) / (1 + r)
+    }
+else {
+        rmz = fv * r / (term - 1) + pv * r / (1 - 1 / term)
+    }
+    return -rmz
+}
+
+GetZw :: (r: double, n: double, pmt: double, pv: double, ptype: int) -> double {
+    zw: double = 0
+    term: double = 0
+    if r == 0 {
+        zw = pv + pmt * n
+        return -zw
+    }
+    term = Pow1p(r,n)
+    if ptype > 0 {
+        zw = pv * term + pmt * (1 + r) * (term - 1) / r
+    }
+else {
+        zw = pv * term + pmt * (term - 1) / r
+    }
+    return -zw
+}
+
+AnnualBasis :: (serial: int, basis: int) -> int {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    if basis == 0 || basis == 2 || basis == 4 { return 360 }
+    if basis == 3 { return 365 }
+    SerialToYmd(serial,&y,&m,&d)
+    if IsLeapYear(y) { return 366 }
+    return 365
+}
+
+DaysMonthlyBasis :: (s1: int, s2: int, basis: int) -> int {
+    iy: int = 0
+    im: int = 0
+    id: int = 0
+    my: int = 0
+    mm: int = 0
+    md: int = 0
+    SerialToYmd(s1,&iy,&im,&id)
+    SerialToYmd(s2,&my,&mm,&md)
+    years: int = my - iy
+    months: int = mm - im
+    days: int = md - id
+    months = years * 12 + months
+    if basis == 0 {
+        if (im == 2 && mm != 2 && iy == my) {
+            if IsLeapYear(iy) { return months * 30 + days - 1 }
+            return months * 30 + days - 2
+        }
+        return months * 30 + days
+    }
+    if (basis == 1 || basis == 2 || basis == 3) { return s2 - s1 }
+    if basis == 4 { return months * 30 + days }
+    return -1
+}
+
+FnPmt :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    n: double
+    pv: double
+    fv: double
+    ptype: int
+    if count < 3 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    n = ArgAt(args,count,1,0)
+    pv = ArgAt(args,count,2,0)
+    fv = ArgAt(args,count,3,0)
+    ptype = ArgAtInt(args,count,4,0)
+    return ValNumber(CalcPmt(r,n,pv,fv,ptype))
+}
+
+FnFv :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    n: double
+    pmt: double
+    pv: double
+    ptype: int
+    if count < 3 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    n = ArgAt(args,count,1,0)
+    pmt = ArgAt(args,count,2,0)
+    pv = ArgAt(args,count,3,0)
+    ptype = ArgAtInt(args,count,4,0)
+    pvif: double = CalcPvif(r,n)
+    fvifa: double = CalcFvifa(r,n)
+    return ValNumber(-((pv * pvif) + pmt * (1 + r * (double)ptype) * fvifa))
+}
+
+FnPv :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    n: double
+    pmt: double
+    fv: double
+    ptype: int
+    if count < 3 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    n = ArgAt(args,count,1,0)
+    pmt = ArgAt(args,count,2,0)
+    fv = ArgAt(args,count,3,0)
+    ptype = ArgAtInt(args,count,4,0)
+    pvif: double = CalcPvif(r,n)
+    fvifa: double = CalcFvifa(r,n)
+    if pvif == 0 { return ValError(ERR_DIV0) }
+    return ValNumber((-fv - pmt * (1 + r * (double)ptype) * fvifa) / pvif)
+}
+
+FnNper :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    pmt: double
+    pv: double
+    fv: double
+    ptype: int
+    if count < 3 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    pmt = ArgAt(args,count,1,0)
+    pv = ArgAt(args,count,2,0)
+    fv = ArgAt(args,count,3,0)
+    ptype = ArgAtInt(args,count,4,0)
+    if r == 0 {
+        if pmt == 0 { return ValError(ERR_DIV0) }
+        return ValNumber(-(pv + fv) / pmt)
+    }
+    if r <= -1 { return ValError(ERR_NUM) }
+    adj: double = pmt * (1 + r * (double)ptype)
+    num: double = adj - fv * r
+    den: double = pv * r + adj
+    if num <= 0 { return ValError(ERR_VALUE) }
+    return ValNumber(log(num / den) / log1p(r))
+}
+
+FnIpmt :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    per: double
+    n: double
+    pv: double
+    fv: double
+    ptype: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    per = ArgAt(args,count,1,0)
+    n = ArgAt(args,count,2,0)
+    pv = ArgAt(args,count,3,0)
+    fv = ArgAt(args,count,4,0)
+    ptype = ArgAtInt(args,count,5,0)
+    if per < 1 || per >= n + 1 { return ValError(ERR_NUM) }
+    return ValNumber(CalcIpmtGo(r,per,n,pv,fv,ptype))
+}
+
+FnPpmt :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    n: double
+    ptype: int
+    pmt: double
+    ipmt: Val
+    v: double
+    if count < 4 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    n = ArgAt(args,count,2,0)
+    ptype = ArgAtInt(args,count,5,0)
+    pv: double = ArgAt(args,count,3,0)
+    fv: double = ArgAt(args,count,4,0)
+    per: double = ArgAt(args,count,1,0)
+    if per < 1 || per >= n + 1 { return ValError(ERR_NUM) }
+    pmt = CalcPmt(r,n,pv,fv,ptype)
+    ipmt_v: double = CalcIpmtGo(r,per,n,pv,fv,ptype)
+    v = pmt - ipmt_v
+    return ValNumber(v)
+}
+
+FnIspmt :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    per: double
+    n: double
+    pv: double
+    if count < 4 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    per = ArgAt(args,count,1,0)
+    n = ArgAt(args,count,2,0)
+    pv = ArgAt(args,count,3,0)
+    if n == 0 { return ValError(ERR_DIV0) }
+    tmp: double = -pv * r
+    return ValNumber(tmp - (tmp / n * per))
+}
+
+CumulativeLoanPart :: (st: EvalState *, args: Val *, count: int, marks: int *, want_interest: int) -> Val {
+    r: double
+    n: int
+    pv: double
+    start: int
+    endi: int
+    ptype: int
+    if count < 6 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    n = ArgAtInt(args,count,1,0)
+    pv = ArgAt(args,count,2,0)
+    start = ArgAtInt(args,count,3,1)
+    endi = ArgAtInt(args,count,4,1)
+    ptype = ArgAtInt(args,count,5,0)
+    if start < 1 || endi < start || endi > n || n < 1 || pv <= 0 { return ValError(ERR_NUM) }
+    rmz: double = GetRmz(r,(double)n,pv,0,ptype)
+    total: double = 0
+    i: int = 0
+    if start == 1 {
+        if want_interest {
+            if ptype <= 0 {
+                total = -pv
+            }
+        }
+else {
+            if ptype <= 0 {
+                total = rmz + pv * r
+            }
+else {
+                total = rmz
+            }
+        }
+        start += 1
+    }
+    i = start
+    while i <= endi {
+        if want_interest {
+            if ptype > 0 {
+                total += GetZw(r,(double)(i - 2),rmz,pv,1) - rmz
+            }
+else {
+                total += GetZw(r,(double)(i - 1),rmz,pv,0)
+            }
+        }
+else {
+            if ptype > 0 {
+                total += rmz - (GetZw(r,(double)(i - 2),rmz,pv,1) - rmz) * r
+            }
+else {
+                total += rmz - GetZw(r,(double)(i - 1),rmz,pv,0) * r
+            }
+        }
+        i += 1
+    }
+    if want_interest { total *= r }
+    return ValNumber(total)
+}
+
+FnNpv :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    total: double
+    i: int
+    if count < 1 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    if r == -1 { return ValError(ERR_DIV0) }
+    total = 0
+    f: double = 1
+    ff: double = 1 / (1 + r)
+    i = 1
+    while i < count {
+        if args[i].kind == VAL_ERROR { return ValError(args[i].err) }
+        if args[i].kind == VAL_FLOAT {
+            f *= ff
+            total += args[i].number * f
+        }
+        i += 1
+    }
+    return ValNumber(total)
+}
+
+CashList :: (args: Val *, count: int, out: double *) -> int {
+    n: int = 0
+    i: int = 0
+    while i < count {
+        if args[i].kind == VAL_ERROR { return -1 }
+        if args[i].kind == VAL_FLOAT {
+            if n < 4096 {
+                out[n] = args[i].number
+                n += 1
+            }
+        }
+        i += 1
+    }
+    return n
+}
+
+FnSln :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    s: double
+    life: double
+    if count < 3 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    s = ArgAt(args,count,1,0)
+    life = ArgAt(args,count,2,0)
+    if life == 0 { return ValError(ERR_DIV0) }
+    return ValNumber((c - s) / life)
+}
+
+FnSyd :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    s: double
+    life: double
+    per: double
+    if count < 4 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    s = ArgAt(args,count,1,0)
+    life = ArgAt(args,count,2,0)
+    per = ArgAt(args,count,3,0)
+    if life <= 0 { return ValError(ERR_NUM) }
+    return ValNumber((c - s) * (life - per + 1) * 2 / (life * (life + 1)))
+}
+
+FnDdb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    s: double
+    life: double
+    per: double
+    factor: double
+    if count < 4 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    s = ArgAt(args,count,1,0)
+    life = ArgAt(args,count,2,0)
+    per = ArgAt(args,count,3,0)
+    factor = ArgAt(args,count,4,2)
+    if life <= 0 || per < 1 || per > life { return ValError(ERR_NUM) }
+    total: double = 0
+    p: int = 1
+    while p <= (int)per {
+        dep: double = (c - total) * factor / life
+        if c - total - dep < s { dep = c - total - s }
+        if p == (int)per { return ValNumber(dep) }
+        total += dep
+        p += 1
+    }
+    return ValNumber(0)
+}
+
+FnDb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    s: double
+    life: double
+    per: double
+    month: double
+    rate: double
+    if count < 4 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    s = ArgAt(args,count,1,0)
+    life = ArgAt(args,count,2,0)
+    per = ArgAt(args,count,3,0)
+    month = ArgAt(args,count,4,12)
+    if c <= 0 || life <= 0 { return ValError(ERR_NUM) }
+    rate = 1.0 - FinPower(s / c,1.0 / life)
+    rate = (double)((long)(rate * 1000.0 + 0.5)) / 1000.0
+    first: double = c * rate * month / 12.0
+    if per == 1 { return ValNumber(first) }
+    total: double = first
+    p: int = 2
+    while p <= (int)per {
+        dep: double = (c - total) * rate
+        if p == (int)life + 1 { dep = (c - total) * rate * (12.0 - month) / 12.0 }
+        if p == (int)per { return ValNumber(dep) }
+        total += dep
+        p += 1
+    }
+    return ValNumber(0)
+}
+
+FnVdb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    s: double
+    life: double
+    start: double
+    endi: double
+    factor: double
+    no_switch: int
+    if count < 5 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    s = ArgAt(args,count,1,0)
+    life = ArgAt(args,count,2,0)
+    start = ArgAt(args,count,3,0)
+    endi = ArgAt(args,count,4,0)
+    factor = ArgAt(args,count,5,2)
+    no_switch = ArgAtInt(args,count,6,0)
+    if life <= 0 { return ValError(ERR_NUM) }
+    if no_switch {
+        dep: double = c * factor / life
+        if start > 0 { dep = 0 }
+        if endi <= 1 { dep = c * factor / life }
+        return ValNumber(dep)
+    }
+    total_before: double = 0
+    p: int = 0
+    while (double)p < start {
+        dep2: double = (c - total_before) * factor / life
+        if c - total_before - dep2 < s { dep2 = c - total_before - s }
+        total_before += dep2
+        p += 1
+    }
+    total: double = total_before
+    while (double)p < endi {
+        dep3: double = (c - total) * factor / life
+        straight: double = (c - total - s) / (life - p)
+        if straight > dep3 { dep3 = straight }
+        if c - total - dep3 < s { dep3 = c - total - s }
+        total += dep3
+        p += 1
+    }
+    return ValNumber(total - total_before)
+}
+
+FnYearfrac :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    s1: int
+    s2: int
+    basis: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    s1 = ArgDate(args,count,0,-1)
+    s2 = ArgDate(args,count,1,-1)
+    basis = ArgBasis(args,count,2)
+    if s1 < 0 || s2 < 0 || basis < 0 { return ValError(ERR_NUM) }
+    return ValNumber(YearFracBasis(s1,s2,basis))
+}
+
+CouponDate :: (settle: int, mature: int, freq: int, eom: int, want_next: int) -> int {
+    sy: int = 0
+    sm: int = 0
+    sd: int = 0
+    my: int = 0
+    mm: int = 0
+    md: int = 0
+    SerialToYmd(settle,&sy,&sm,&sd)
+    SerialToYmd(mature,&my,&mm,&md)
+    eom_special: int = 0
+    if (eom != 0 && IsLastOfMonth(my,mm,md) != 0) { eom_special = 1 }
+    months: int = 12 / freq
+    periods: int = my - sy
+    if periods > 0 { periods = (periods - 1) * freq }
+    result: int = mature
+    while 1 {
+        result = mature
+        periods += 1
+        result = AddMonthsSerial(result,-periods * months)
+        if eom_special != 0 {
+            ry: int = 0
+            rm: int = 0
+            rd: int = 0
+            SerialToYmd(result,&ry,&rm,&rd)
+            result = YmdToSerial(ry,rm,DaysInMonthGo(ry,rm))
+        }
+        if settle >= result { break }
+    }
+    if want_next != 0 {
+        result = mature
+        periods -= 1
+        result = AddMonthsSerial(result,-periods * months)
+        if eom_special != 0 {
+            ry: int = 0
+            rm: int = 0
+            rd: int = 0
+            SerialToYmd(result,&ry,&rm,&rd)
+            result = YmdToSerial(ry,rm,DaysInMonthGo(ry,rm))
+        }
+    }
+    return result
+}
+
+CouponNext :: (settle: int, mature: int, freq: int) -> int {
+    return CouponDate(settle,mature,freq,1,1)
+}
+
+CouponPrev :: (settle: int, mature: int, freq: int) -> int {
+    return CouponDate(settle,mature,freq,1,0)
+}
+
+CouponCount :: (settle: int, mature: int, freq: int) -> int {
+    sy: int = 0
+    sm: int = 0
+    sd: int = 0
+    my: int = 0
+    mm: int = 0
+    md: int = 0
+    SerialToYmd(settle,&sy,&sm,&sd)
+    SerialToYmd(mature,&my,&mm,&md)
+    months: int = mm - sm + 12 * (my - sy)
+    this_coupon: int = AddMonthsSerial(mature,-months)
+    if IsLastOfMonth(my,mm,md) != 0 {
+        while 1 {
+            cy: int = 0
+            cm: int = 0
+            cd: int = 0
+            SerialToYmd(this_coupon,&cy,&cm,&cd)
+            if cd == DaysInMonthGo(cy,cm) { break }
+            this_coupon += 1
+        }
+    }
+    cy2: int = 0
+    cm2: int = 0
+    cd2: int = 0
+    SerialToYmd(this_coupon,&cy2,&cm2,&cd2)
+    if sd >= cd2 { months -= 1 }
+    return 1 + months / (12 / freq)
+}
+
+CoupDaysBs :: (settle: int, mature: int, freq: int, basis: int) -> double {
+    return (double)BasisDaysBetween(CouponPrev(settle,mature,freq),settle,basis)
+}
+
+CoupDaysNc :: (settle: int, mature: int, freq: int, basis: int) -> double {
+    return (double)BasisDaysBetween(settle,CouponNext(settle,mature,freq),basis)
+}
+
+CoupDaysGo :: (settle: int, mature: int, freq: int, basis: int) -> double {
+    if basis == 1 {
+        return (double)BasisDaysBetween(CouponPrev(settle,mature,freq),CouponNext(settle,mature,freq),1)
+    }
+    if basis == 3 { return 365.0 / (double)freq }
+    return 360.0 / (double)freq
+}
+
+FnCoupncd :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    freq: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    freq = ArgAtInt(args,count,2,1)
+    basis: int = ArgBasis(args,count,3)
+    if settle < 0 || mature < 0 || freq == 0 || basis < 0 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(CouponNext(settle,mature,freq))
+}
+
+FnCouppcd :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    freq: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    freq = ArgAtInt(args,count,2,1)
+    basis: int = ArgBasis(args,count,3)
+    if settle < 0 || mature < 0 || freq == 0 || basis < 0 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(CouponPrev(settle,mature,freq))
+}
+
+FnCoupnum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    freq: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    freq = ArgAtInt(args,count,2,1)
+    basis: int = ArgBasis(args,count,3)
+    if settle < 0 || mature < 0 || freq == 0 || basis < 0 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(CouponCount(settle,mature,freq))
+}
+
+FnCoupdaybs :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    freq: int
+    basis: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    freq = ArgAtInt(args,count,2,1)
+    basis = ArgBasis(args,count,3)
+    if settle < 0 || mature < 0 || basis < 0 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(CoupDaysBs(settle,mature,freq,basis))
+}
+
+FnCoupdays :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    freq: int
+    basis: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    freq = ArgAtInt(args,count,2,1)
+    basis = ArgBasis(args,count,3)
+    if settle < 0 || mature < 0 || basis < 0 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(CoupDaysGo(settle,mature,freq,basis))
+}
+
+FnCoupdaysnc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    freq: int
+    basis: int
+    if count < 2 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    freq = ArgAtInt(args,count,2,1)
+    basis = ArgBasis(args,count,3)
+    if settle < 0 || mature < 0 || basis < 0 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(CoupDaysNc(settle,mature,freq,basis))
+}
+
+FnAccrint :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    issue: int
+    first: int
+    settle: int
+    rate: double
+    par: double
+    freq: int
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    issue = ArgDate(args,count,0,-1)
+    first = ArgDate(args,count,1,-1)
+    settle = ArgDate(args,count,2,-1)
+    rate = ArgAt(args,count,3,0)
+    par = ArgAt(args,count,4,1000)
+    freq = ArgAtInt(args,count,5,1)
+    basis = ArgBasis(args,count,6)
+    if issue < 0 || settle < 0 || basis < 0 { return ValError(ERR_NUM) }
+    return ValNumber(par * rate * YearFracBasis(issue,settle,basis))
+}
+
+FnAccrintm :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    issue: int
+    settle: int
+    rate: double
+    par: double
+    basis: int
+    if count < 3 { return ValError(ERR_VALUE) }
+    issue = ArgDate(args,count,0,-1)
+    settle = ArgDate(args,count,1,-1)
+    rate = ArgAt(args,count,2,0)
+    par = ArgAt(args,count,3,1000)
+    basis = ArgBasis(args,count,4)
+    if issue < 0 || settle < 0 || basis < 0 { return ValError(ERR_NUM) }
+    a: double = (double)DaysMonthlyBasis(issue,settle,basis)
+    d: double = (double)AnnualBasis(issue,basis)
+    if a < 0 || d <= 0 || par <= 0 || rate <= 0 { return ValError(ERR_NUM) }
+    return ValNumber(par * rate * a / d)
+}
+
+FnIntrate :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    invest: double
+    red: double
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    invest = ArgAt(args,count,2,0)
+    red = ArgAt(args,count,3,0)
+    basis = ArgBasis(args,count,4)
+    if settle < 0 || mature < 0 || basis < 0 || invest == 0 { return ValError(ERR_NUM) }
+    a: double = (double)DaysMonthlyBasis(settle,mature,basis)
+    d: double = (double)AnnualBasis(settle,basis)
+    if a <= 0 || d <= 0 { return ValError(ERR_NUM) }
+    return ValNumber((red - invest) / invest * (d / a))
+}
+
+FnReceived :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    invest: double
+    disc: double
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    invest = ArgAt(args,count,2,0)
+    disc = ArgAt(args,count,3,0)
+    basis = ArgBasis(args,count,4)
+    if settle < 0 || mature < 0 || basis < 0 { return ValError(ERR_NUM) }
+    a: double = (double)DaysMonthlyBasis(settle,mature,basis)
+    d: double = (double)AnnualBasis(settle,basis)
+    if a <= 0 || d <= 0 { return ValError(ERR_NUM) }
+    n: double = 1 - (disc * a / d)
+    if n == 0 { return ValError(ERR_NUM) }
+    return ValNumber(invest / n)
+}
+
+FnDisc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    par: double
+    red: double
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    par = ArgAt(args,count,2,0)
+    red = ArgAt(args,count,3,0)
+    basis = ArgBasis(args,count,4)
+    if settle < 0 || mature < 0 || basis < 0 { return ValError(ERR_NUM) }
+    b: double = (double)AnnualBasis(settle,basis)
+    dsm: double = (double)DaysMonthlyBasis(settle,mature,basis)
+    if (dsm <= 0 || b <= 0 || red == 0) { return ValError(ERR_NUM) }
+    return ValNumber((red - par) / red * (b / dsm))
+}
+
+FnPricedisc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    disc: double
+    red: double
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    disc = ArgAt(args,count,2,0)
+    red = ArgAt(args,count,3,0)
+    basis = ArgBasis(args,count,4)
+    if settle < 0 || mature < 0 || basis < 0 { return ValError(ERR_NUM) }
+    a: double = (double)DaysMonthlyBasis(settle,mature,basis)
+    d: double = (double)AnnualBasis(settle,basis)
+    if a <= 0 || d <= 0 { return ValError(ERR_NUM) }
+    return ValNumber(red - disc * red * a / d)
+}
+
+FnTbilleq :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    disc: double
+    if count < 3 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    disc = ArgAt(args,count,2,0)
+    if settle < 0 || mature < 0 { return ValError(ERR_NUM) }
+    dsm: double = (double)(mature - settle)
+    if (settle > mature || disc < 0 || dsm > 365) { return ValError(ERR_NUM) }
+    divisor: double = 360 - disc * dsm
+    if divisor == 0 { return ValError(ERR_DIV0) }
+    return ValNumber((365 * disc) / divisor)
+}
+
+FnTbillprice :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    disc: double
+    if count < 3 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    disc = ArgAt(args,count,2,0)
+    if settle < 0 || mature < 0 || disc <= 0 || disc >= 1 { return ValError(ERR_NUM) }
+    dsm: double = (double)(mature - settle)
+    if dsm <= 0 { return ValError(ERR_NUM) }
+    return ValNumber(100 * (1 - disc * dsm / 360))
+}
+
+FnTbillyield :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    price: double
+    if count < 3 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    price = ArgAt(args,count,2,0)
+    if settle < 0 || mature < 0 || price <= 0 { return ValError(ERR_NUM) }
+    dsm: double = (double)(mature - settle)
+    if dsm <= 0 { return ValError(ERR_NUM) }
+    return ValNumber((100 - price) / price * 360 / dsm)
+}
+
+FnEffect :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    r: double
+    m: double
+    if count < 2 { return ValError(ERR_VALUE) }
+    r = ArgAt(args,count,0,0)
+    m = floor(ArgAt(args,count,1,0))
+    if r <= 0 || m < 1 { return ValError(ERR_NUM) }
+    return ValNumber(Pow1pm1(r / m,m))
+}
+
+FnNominal :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    e: double
+    m: double
+    if count < 2 { return ValError(ERR_VALUE) }
+    e = ArgAt(args,count,0,0)
+    m = floor(ArgAt(args,count,1,0))
+    if e <= 0 || m < 1 { return ValError(ERR_NUM) }
+    return ValNumber(m * Pow1pm1(e,1 / m))
+}
+
+FnDollarde :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    v: double
+    frac: double
+    if count < 2 { return ValError(ERR_VALUE) }
+    v = ArgAt(args,count,0,0)
+    frac = ArgAt(args,count,1,0)
+    if frac < 0 { return ValError(ERR_NUM) }
+    whole: double = (double)(long long)v
+    rest: double = fabs(v - whole)
+    digits: int = 1
+    fdigits: double = frac
+    while fdigits >= 10 {
+        fdigits /= 10
+        digits += 1
+    }
+    return ValNumber(whole + rest * FinPower(10.0,(double)digits) / frac)
+}
+
+FnDollarfr :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    v: double
+    frac: double
+    if count < 2 { return ValError(ERR_VALUE) }
+    v = ArgAt(args,count,0,0)
+    frac = ArgAt(args,count,1,0)
+    if frac < 0 { return ValError(ERR_NUM) }
+    whole: double = (double)(long long)v
+    rest: double = fabs(v - whole)
+    digits: int = 1
+    fdigits: double = frac
+    while fdigits >= 10 {
+        fdigits /= 10
+        digits += 1
+    }
+    numerator: double = rest * frac
+    return ValNumber(whole + numerator / FinPower(10.0,(double)digits))
+}
+
+FnFvschedule :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    principal: double
+    total: double
+    i: int
+    if count < 1 { return ValError(ERR_VALUE) }
+    principal = ArgAt(args,count,0,0)
+    total = principal
+    i = 1
+    while i < count {
+        if args[i].kind == VAL_ERROR { return ValError(args[i].err) }
+        if args[i].from_range == 0 { return ValError(ERR_NA) }
+        if args[i].kind == VAL_FLOAT {
+            total *= 1 + args[i].number
+        }
+        i += 1
+    }
+    return ValNumber(total)
+}
+
+PriceGo :: (settle: int, mature: int, rate: double, yld: double, red: double, freq: int, basis: int) -> double {
+    a: double = CoupDaysBs(settle,mature,freq,basis)
+    d: double = CoupDaysNc(settle,mature,freq,basis)
+    e: double = CoupDaysGo(settle,mature,freq,basis)
+    n: int = CouponCount(settle,mature,freq)
+    den: double = 100 * rate / (double)freq
+    basem1: double = yld / (double)freq
+    exponent: double = d / e
+    if n == 1 {
+        return (red + den) / (1 + exponent * basem1) - a / e * den
+    }
+    nd: double = (double)n
+    sum: double = den * Pow1p(basem1,1 - nd - exponent) * Pow1pm1(basem1,nd) / basem1
+    first_term: double = red / Pow1p(basem1,nd - 1 + d / e)
+    last_term: double = a / e * den
+    return first_term + sum - last_term
+}
+
+FnPrice :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    rate: double
+    yld: double
+    red: double
+    freq: int
+    basis: int
+    if count < 5 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    rate = ArgAt(args,count,2,0)
+    yld = ArgAt(args,count,3,0)
+    red = ArgAt(args,count,4,100)
+    freq = ArgAtInt(args,count,5,1)
+    basis = ArgBasis(args,count,6)
+    if settle < 0 || mature < 0 || basis < 0 || freq < 1 { return ValError(ERR_NUM) }
+    if settle > mature { return ValError(ERR_NUM) }
+    if (rate < 0 || yld < 0 || red <= 0) { return ValError(ERR_NUM) }
+    return ValNumber(PriceGo(settle,mature,rate,yld,red,freq,basis))
+}
+GS :: struct {
+    havexpos: int
+    havexneg: int
+    have_root: int
+    xpos: double
+    ypos: double
+    xneg: double
+    yneg: double
+    root: double
+    xmin: double
+    xmax: double
+    precision: double
+}
+
+GsEvalF :: (kind: int, x: double, y: double *) -> int {
+    sum: double = 0
+    f: double = 1
+    ff: double = 1
+    i: int = 0
+    n: int = 0
+    dd: double = 0
+    if kind == 0 {
+        if (x > -1 && x != 0) {
+            y[0] = GS_R_PV * CalcPvif(x,GS_R_NPER) + GS_R_PMT * (1 + x * (double)GS_R_TYPE) * CalcFvifa(x,GS_R_NPER) + GS_R_FV
+            return 1
+        }
+        return 0
+    }
+    if kind == 1 {
+        ff = 1 / (x + 1)
+        n = GS_CASH_N
+        while i < n {
+            sum += GSV_A[i] * f
+            f *= ff
+            i += 1
+        }
+        y[0] = sum
+        if (sum != sum || sum - sum != 0) { return 0 }
+        return 1
+    }
+    if kind == 2 {
+        n = GS_CASH_N
+        while i < n {
+            dd = GSD_A[i] - GSD_A[0]
+            if dd < 0 { return 0 }
+            sum += GSV_A[i] / Pow1p(x,dd / 365)
+            i += 1
+        }
+        y[0] = sum
+        return 1
+    }
+    y[0] = PriceGo(GS_Y_SETTLE,GS_Y_MAT,GS_Y_RATE,x,GS_Y_RED,GS_Y_FREQ,GS_Y_BASIS) - GS_Y_PAR
+    return 1
+}
+
+GsEvalDf :: (kind: int, x: double, y: double *) -> int {
+    sum: double = 0
+    f: double = 1
+    ff: double = 1
+    i: int = 1
+    n: int = 0
+    if kind == 0 {
+        if (x > -1 && x != 0) {
+            y[0] = -GS_R_PMT * CalcFvifa(x,GS_R_NPER) / x + CalcPvif(x,GS_R_NPER - 1) * GS_R_NPER * (GS_R_PV + GS_R_PMT * ((double)GS_R_TYPE + 1 / x))
+            return 1
+        }
+        return 0
+    }
+    if kind == 1 {
+        ff = 1 / (x + 1)
+        n = GS_CASH_N
+        while i < n {
+            sum += GSV_A[i] * (double)(-i) * f
+            f *= ff
+            i += 1
+        }
+        y[0] = sum
+        if (sum != sum || sum - sum != 0) { return 0 }
+        return 1
+    }
+    return 0
+}
+
+GsUpdateData :: (x: double, y: double, data: GS *) -> int {
+    if (y != y || y - y != 0) { return 0 }
+    if y > 0 {
+        if data->havexpos != 0 {
+            if data->havexneg != 0 {
+                if (fabs(x - data->xneg) < fabs(data->xpos - data->xneg)) {
+                    data->xpos = x
+                    data->ypos = y
+                }
+            }
+else if (y < data->ypos) {
+                data->xpos = x
+                data->ypos = y
+            }
+        }
+else {
+            data->xpos = x
+            data->ypos = y
+            data->havexpos = 1
+        }
+        return 0
+    }
+else if y < 0 {
+        if data->havexneg != 0 {
+            if data->havexpos != 0 {
+                if (fabs(x - data->xpos) < fabs(data->xpos - data->xneg)) {
+                    data->xneg = x
+                    data->yneg = y
+                }
+            }
+else if (-y < -data->yneg) {
+                data->xneg = x
+                data->yneg = y
+            }
+        }
+else {
+            data->xneg = x
+            data->yneg = y
+            data->havexneg = 1
+        }
+        return 0
+    }
+    data->have_root = 1
+    data->root = x
+    return 1
+}
+
+GsFakeDf :: (kind: int, x: double, dfx: double *, xstep: double, data: GS *) -> int {
+    xl: double = x - xstep
+    xr: double = x + xstep
+    yl: double = 0
+    yr: double = 0
+    status: int = 0
+    if xl < data->xmin { xl = x }
+    if xr > data->xmax { xr = x }
+    if xl == xr { return 0 }
+    status = GsEvalF(kind,xl,&yl)
+    if status != 1 { return status }
+    status = GsEvalF(kind,xr,&yr)
+    if status != 1 { return status }
+    dfx[0] = (yr - yl) / (xr - xl)
+    if (dfx[0] != dfx[0] || dfx[0] - dfx[0] != 0) { return 0 }
+    return 1
+}
+
+GsInit :: (data: GS *) {
+    data->havexpos = 0
+    data->havexneg = 0
+    data->have_root = 0
+    data->xpos = 0.0 / 0.0
+    data->xneg = 0.0 / 0.0
+    data->root = 0.0 / 0.0
+    data->ypos = 0.0 / 0.0
+    data->yneg = 0.0 / 0.0
+    data->xmin = -1e10
+    data->xmax = 1e10
+    data->precision = 1e-10
+}
+
+GsPoint :: (kind: int, data: GS *, x0: double) -> int {
+    y0: double = 0
+    status: int = 0
+    if data->have_root != 0 { return 1 }
+    if (x0 < data->xmin || x0 > data->xmax) { return 0 }
+    status = GsEvalF(kind,x0,&y0)
+    if status != 1 { return status }
+    if GsUpdateData(x0,y0,data) != 0 { return 1 }
+    return 0
+}
+
+GsBisection :: (kind: int, data: GS *) -> int {
+    iterations: int = 0
+    newton_submethod: int = 0
+    stepsize: double = 0
+    xmid: double = 0
+    ymid: double = 0
+    det: double = 0
+    x0: double = 0
+    y0: double = 0
+    xstep: double = 0
+    df0: double = 0
+    method: int = 0
+    fail: int = 0
+    status: int = 0
+    if data->have_root != 0 { return 1 }
+    if (data->havexpos == 0 || data->havexneg == 0) { return 0 }
+    stepsize = fabs(data->xpos - data->xneg) / (fabs(data->xpos) + fabs(data->xneg))
+    while iterations < 160 {
+        fail = 0
+        if iterations % 4 == 0 {
+            method = 3
+        }
+else if iterations % 4 == 2 {
+            method = 1
+        }
+else {
+            method = 2
+        }
+        if method == 1 {
+            if (stepsize > 0.1) { method = 2 }
+        }
+        if method == 3 {
+            xmid = (data->xpos + data->xneg) / 2
+            status = GsEvalF(kind,xmid,&ymid)
+            if status != 1 {
+                fail = 1
+            }
+else {
+                if ymid == 0 {
+                    GsUpdateData(xmid,ymid,data)
+                    return 1
+                }
+                det = sqrt(ymid * ymid - data->ypos * data->yneg)
+                if det == 0 {
+                    fail = 1
+                }
+else {
+                    xmid += (xmid - data->xpos) * ymid / det
+                }
+            }
+        }
+else if method == 1 {
+            x0 = 0
+            y0 = 0
+            fail = 0
+            if newton_submethod % 4 == 0 {
+                x0 = data->xpos
+                y0 = data->ypos
+            }
+else if newton_submethod % 4 == 2 {
+                x0 = data->xneg
+                y0 = data->yneg
+            }
+else {
+                x0 = (data->xpos + data->xneg) / 2
+                status = GsEvalF(kind,x0,&y0)
+                if status != 1 { fail = 1 }
+            }
+            newton_submethod += 1
+            if fail == 0 {
+                xstep = fabs(data->xpos - data->xneg) / 1000000
+                status = GsFakeDf(kind,x0,&df0,xstep,data)
+                if status != 1 { fail = 1 }
+            }
+            if fail == 0 {
+                if df0 == 0 { fail = 1 }
+            }
+            if fail == 0 {
+                xmid = x0 - 1.01 * y0 / df0
+            }
+        }
+else {
+            xmid = (data->xpos + data->xneg) / 2
+        }
+        if fail == 0 {
+            if ((xmid < data->xpos && xmid < data->xneg) || (xmid > data->xpos && xmid > data->xneg)) {
+                xmid = (data->xpos + data->xneg) / 2
+                method = 2
+            }
+            status = GsEvalF(kind,xmid,&ymid)
+            if status != 1 { fail = 1 }
+        }
+        if fail == 0 {
+            if GsUpdateData(xmid,ymid,data) != 0 { return 1 }
+            stepsize = fabs(data->xpos - data->xneg) / (fabs(data->xpos) + fabs(data->xneg))
+            if stepsize < 2.2204460492503131e-16 {
+                if (data->yneg < ymid) {
+                    ymid = data->yneg
+                    xmid = data->xneg
+                }
+                if (data->ypos < ymid) {
+                    ymid = data->ypos
+                    xmid = data->xpos
+                }
+                data->have_root = 1
+                data->root = xmid
+                return 1
+            }
+        }
+        iterations += 1
+    }
+    return 0
+}
+
+GsNewtonPolish :: (kind: int, data: GS *, use_df: int, x0: double, y0: double) -> int {
+    iterations: int = 0
+    last_df0: double = 1
+    try_newton: int = 1
+    try_square: int = 0
+    x1: double = 0
+    y1: double = 0
+    r: double = 0
+    df0: double = 0
+    status: int = 0
+    if (x0 != 0 && fabs(x0) < 1e10) { try_square = 1 }
+    while iterations < 20 {
+        if try_square != 0 {
+            x1 = x0 * fabs(x0)
+            status = GsEvalF(kind,x1,&y1)
+            if status == 1 {
+                if GsUpdateData(x1,y1,data) != 0 { return 1 }
+                r = fabs(y1 / y0)
+                if r < 1 {
+                    x0 = x1
+                    if (r <= 0.5) { try_square = 0 }
+                }
+else {
+                    try_square = 0
+                }
+            }
+else {
+                try_square = 0
+            }
+        }
+        if try_newton != 0 {
+            if use_df != 0 {
+                status = GsEvalDf(kind,x0,&df0)
+            }
+else {
+                status = GsFakeDf(kind,x0,&df0,fabs(x0) / 1000000,data)
+            }
+            if (status != 1 || df0 == 0) {
+                df0 = last_df0
+            }
+else {
+                last_df0 = df0
+            }
+            x1 = x0 - y0 / df0
+            if (x1 >= data->xmin && x1 <= data->xmax) {
+                status = GsEvalF(kind,x1,&y1)
+                if status == 1 {
+                    if GsUpdateData(x1,y1,data) != 0 { return 1 }
+                    r = fabs(y1 / y0)
+                    if r < 1 {
+                        x0 = x1
+                        if (r > 0.5) { try_newton = 0 }
+                    }
+else {
+                        try_newton = 0
+                    }
+                }
+else {
+                    try_newton = 0
+                }
+            }
+else {
+                try_newton = 0
+            }
+        }
+        if (try_square == 0 && try_newton == 0) { break }
+        iterations += 1
+    }
+    if GsBisection(kind,data) == 1 { return 1 }
+    data->root = x0
+    data->have_root = 1
+    return 1
+}
+
+GsNewton :: (kind: int, data: GS *, use_df: int, x0_in: double) -> int {
+    iterations: int = 0
+    x0: double = x0_in
+    precision: double = data->precision / 2
+    last_df0: double = 1
+    step_factor: double = 1e-6
+    x1: double = 0
+    y0: double = 0
+    y1: double = 0
+    df0: double = 0
+    stepsize: double = 0
+    xstep: double = 0
+    status: int = 0
+    flat: int = 0
+    if data->have_root != 0 { return 1 }
+    while iterations < 100 {
+        if (x0 < data->xmin || x0 > data->xmax) { return 0 }
+        status = GsEvalF(kind,x0,&y0)
+        if status != 1 { return 0 }
+        if GsUpdateData(x0,y0,data) != 0 { return 1 }
+        if use_df != 0 {
+            status = GsEvalDf(kind,x0,&df0)
+        }
+else {
+            if fabs(x0) < 1e-10 {
+                if (data->havexneg != 0 && data->havexpos != 0) {
+                    xstep = fabs(data->xpos - data->xneg) / 1000000
+                }
+else {
+                    xstep = (data->xmax - data->xmin) / 1000000
+                }
+            }
+else {
+                xstep = step_factor * fabs(x0)
+            }
+            status = GsFakeDf(kind,x0,&df0,xstep,data)
+        }
+        if status != 1 { return 0 }
+        flat = 0
+        if df0 == 0 { flat = 1 }
+        if flat != 0 {
+            last_df0 /= 2
+            if fabs(last_df0) <= 2.2250738585072014e-308 { return 0 }
+            df0 = last_df0
+        }
+else {
+            last_df0 = df0
+        }
+        if (data->havexpos != 0 && data->havexneg != 0) {
+            x1 = x0 - y0 / df0
+        }
+else {
+            x1 = x0 - 1.000001 * y0 / df0
+        }
+        stepsize = fabs(x1 - x0) / (fabs(x0) + fabs(x1))
+        if stepsize < precision {
+            GsNewtonPolish(kind,data,use_df,x0,y0)
+            return 1
+        }
+        if (flat != 0 && iterations > 0) {
+            if (x1 < data->xmin || x1 > data->xmax) { return 0 }
+            status = GsEvalF(kind,x1,&y1)
+            if status != 1 { return 0 }
+            if (fabs(y1) >= 0.9 * fabs(y0)) { return 0 }
+        }
+        if stepsize < step_factor { step_factor = stepsize }
+        x0 = x1
+        iterations += 1
+    }
+    return 0
+}
+
+RateGo :: (nper: int, pmt: double, pv: double, fv: double, ptype: int, rate0: double, ok: int *) -> double {
+    data: GS = {0}
+    status: int = 0
+    factor: int = 0
+    px: double = 0
+    GS_R_NPER = (double)nper
+    GS_R_PMT = pmt
+    GS_R_PV = pv
+    GS_R_FV = fv
+    GS_R_TYPE = ptype
+    GsInit(&data)
+    px = pow(1.7976931348623157e308 / 1e10,1.0 / (double)nper)
+    if (-px + 1 > data.xmin) { data.xmin = -px + 1 }
+    if (px - 1 < data.xmax) { data.xmax = px - 1 }
+    status = GsNewton(0,&data,1,rate0)
+    if status != 1 {
+        factor = 2
+        while (data.havexneg == 0 || data.havexpos == 0) && factor < 100 {
+            GsPoint(0,&data,rate0 * (double)factor)
+            GsPoint(0,&data,rate0 / (double)factor)
+            factor *= 2
+        }
+        status = GsBisection(0,&data)
+    }
+    if status != 1 {
+        ok[0] = 0
+        return 0
+    }
+    ok[0] = 1
+    return data.root
+}
+
+IrrGo :: (rate0: double, ok: int *) -> double {
+    data: GS = {0}
+    status: int = 0
+    i: int = 0
+    s: double = 0
+    xmax_v: double = 0
+    GsInit(&data)
+    data.xmin = -1
+    xmax_v = pow(1.7976931348623157e308 / 1e10,1.0 / (double)GS_CASH_N)
+    if (xmax_v - 1 < data.xmax) { data.xmax = xmax_v - 1 }
+    status = GsNewton(1,&data,1,rate0)
+    if status != 1 {
+        i = 0
+        s = 2
+        while (data.havexneg == 0 || data.havexpos == 0) && i < 10 {
+            GsPoint(1,&data,rate0 * s)
+            GsPoint(1,&data,rate0 / s)
+            i += 1
+            s *= 2
+        }
+        if (data.havexneg == 0 || data.havexpos == 0) {
+            status = GsNewton(1,&data,1,-0.99)
+        }
+        if (data.havexneg == 0 || data.havexpos == 0) {
+            GsPoint(1,&data,1 - 2.2204460492503131e-16)
+        }
+        status = GsBisection(1,&data)
+    }
+    if status != 1 {
+        ok[0] = 0
+        return 0
+    }
+    ok[0] = 1
+    return data.root
+}
+
+XirrGo :: (rate0: double, ok: int *) -> double {
+    data: GS = {0}
+    status: int = 0
+    i: int = 0
+    GsInit(&data)
+    data.xmin = -1
+    if (1000 < data.xmax) { data.xmax = 1000 }
+    status = GsNewton(2,&data,0,rate0)
+    if status != 1 {
+        GsPoint(2,&data,-1)
+        i = 1
+        while i <= 1024 {
+            GsPoint(2,&data,-1 + 10.0 / (double)(i + 9))
+            GsPoint(2,&data,(double)i)
+            status = GsBisection(2,&data)
+            if status == 1 { break }
+            i += i
+        }
+    }
+    if status != 1 {
+        ok[0] = 0
+        return 0
+    }
+    ok[0] = 1
+    return data.root
+}
+
+YieldGo :: (settle: int, mature: int, rate: double, par: double, red: double, freq: int, basis: int, ok: int *) -> double {
+    data: GS = {0}
+    status: int = 0
+    yield0: double = 0
+    n: int = 0
+    GS_Y_SETTLE = settle
+    GS_Y_MAT = mature
+    GS_Y_RATE = rate
+    GS_Y_PAR = par
+    GS_Y_RED = red
+    GS_Y_FREQ = freq
+    GS_Y_BASIS = basis
+    n = CouponCount(settle,mature,freq)
+    if n <= 1 {
+        a: double = CoupDaysBs(settle,mature,freq,basis)
+        d: double = CoupDaysNc(settle,mature,freq,basis)
+        e: double = CoupDaysGo(settle,mature,freq,basis)
+        coeff: double = (double)freq * e / d
+        num: double = (red / 100 + rate / (double)freq) - (par / 100 + (a / e * rate / (double)freq))
+        den: double = par / 100 + (a / e * rate / (double)freq)
+        ok[0] = 1
+        return num / den * coeff
+    }
+    GsInit(&data)
+    if (0 > data.xmin) { data.xmin = 0 }
+    if (1000 < data.xmax) { data.xmax = 1000 }
+    yield0 = 0.1
+    status = GsNewton(3,&data,0,yield0)
+    if status != 1 {
+        yield0 = 1e-10
+        while yield0 < data.xmax {
+            GsPoint(3,&data,yield0)
+            yield0 *= 2
+        }
+        status = GsBisection(3,&data)
+    }
+    if status != 1 {
+        ok[0] = 0
+        return 0
+    }
+    ok[0] = 1
+    return data.root
+}
+
+FnRate :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: int
+    pmt: double
+    pv: double
+    fv: double
+    ptype: int
+    guess: double
+    ok: int = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    n = ArgAtInt(args,count,0,0)
+    pmt = ArgAt(args,count,1,0)
+    pv = ArgAt(args,count,2,0)
+    fv = ArgAt(args,count,3,0)
+    ptype = ArgAtInt(args,count,4,0)
+    guess = ArgAt(args,count,5,0.1)
+    if n <= 0 { return ValError(ERR_NUM) }
+    r: double = RateGo(n,pmt,pv,fv,ptype,guess,&ok)
+    if ok == 0 { return ValError(ERR_NUM) }
+    return ValNumber(r)
+}
+
+FnIrr :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    values: [512] double = {0}
+    gs: int = 0
+    gl: int = 0
+    n: int = 0
+    guess: double = 0.1
+    ok: int = 0
+    i: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&gs,&gl)
+    n = CashList(args + gs,gl,values)
+    if n < 1 { return ValError(ERR_VALUE) }
+    if count >= 2 && args[count - 1].from_range == 0 { guess = CoerceNumber(&args[count - 1]) }
+    GS_CASH_N = n
+    while i < n {
+        GSV_A[i] = values[i]
+        i += 1
+    }
+    r: double = IrrGo(guess,&ok)
+    if ok == 0 { return ValError(ERR_NUM) }
+    return ValNumber(r)
+}
+
+FnMirr :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    values: [512] double = {0}
+    gs: int = 0
+    gl: int = 0
+    n: int = 0
+    fr: double = 0
+    rr: double = 0
+    npv_neg: double = 0
+    npv_pos: double = 0
+    i: int = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&gs,&gl)
+    n = CashList(args + gs,gl,values)
+    if n < 2 { return ValError(ERR_VALUE) }
+    fr = ArgAt(args,count,count - 2,0)
+    rr = ArgAt(args,count,count - 1,0)
+    while i < n {
+        if values[i] >= 0 {
+            npv_pos += values[i] / Pow1p(rr,(double)i)
+        }
+else {
+            npv_neg += values[i] / Pow1p(fr,(double)i)
+        }
+        i += 1
+    }
+    if (npv_neg == 0 || npv_pos == 0 || rr <= -1) { return ValError(ERR_DIV0) }
+    res: double = pow((-npv_pos * Pow1p(rr,(double)n)) / (npv_neg * (1 + rr)),1.0 / (double)(n - 1)) - 1
+    return ValNumber(res)
+}
+
+
+FnYield :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    rate: double
+    price: double
+    red: double
+    freq: int
+    basis: int
+    if count < 5 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    rate = ArgAt(args,count,2,0)
+    price = ArgAt(args,count,3,0)
+    red = ArgAt(args,count,4,100)
+    freq = ArgAtInt(args,count,5,1)
+    basis = ArgBasis(args,count,6)
+    if settle < 0 || mature < 0 || basis < 0 || freq < 1 { return ValError(ERR_NUM) }
+    if settle > mature { return ValError(ERR_NUM) }
+    if (rate < 0 || price < 0 || red <= 0) { return ValError(ERR_NUM) }
+    ok: int = 0
+    y: double = YieldGo(settle,mature,rate,price,red,freq,basis,&ok)
+    if ok == 0 { return ValError(ERR_NUM) }
+    return ValNumber(y)
+}
+
+DurationGo :: (settle: int, mature: int, rate: double, yld: double, freq: int, basis: int) -> double {
+    numcoups: double = (double)CouponCount(settle,mature,freq)
+    fDur: double = 0
+    p: double = 0
+    t: double = 0
+    fcoup: double = rate * 100 / (double)freq
+    fyld: double = yld / (double)freq
+    fyld += 1
+    t = 1
+    while t < numcoups {
+        fDur += t * fcoup / pow(fyld,t)
+        t += 1
+    }
+    fDur += numcoups * (fcoup + 100) / pow(fyld,numcoups)
+    t = 1
+    while t < numcoups {
+        p += fcoup / pow(fyld,t)
+        t += 1
+    }
+    p += (fcoup + 100) / pow(fyld,numcoups)
+    fDur /= p
+    fDur /= (double)freq
+    return fDur
+}
+
+FnDuration :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    rate: double
+    yld: double
+    freq: int
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    rate = ArgAt(args,count,2,0)
+    yld = ArgAt(args,count,3,0)
+    freq = ArgAtInt(args,count,4,1)
+    basis = ArgBasis(args,count,5)
+    if settle < 0 || mature < 0 || basis < 0 || freq < 1 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    return ValNumber(DurationGo(settle,mature,rate,yld,freq,basis))
+}
+
+FnMduration :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    rate: double
+    yld: double
+    freq: int
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    rate = ArgAt(args,count,2,0)
+    yld = ArgAt(args,count,3,0)
+    freq = ArgAtInt(args,count,4,1)
+    basis = ArgBasis(args,count,5)
+    if settle < 0 || mature < 0 || basis < 0 || freq < 1 { return ValError(ERR_NUM) }
+    if settle >= mature { return ValError(ERR_NUM) }
+    d: double = DurationGo(settle,mature,rate,yld,freq,basis)
+    d /= 1 + (yld / (double)freq)
+    return ValNumber(d)
+}
+
+Price_Mat_Impl :: (settle: int, mature: int, issue: int, rate: double, yld: double, basis: int) -> double {
+    dsm: double = (double)DaysMonthlyBasis(settle,mature,basis)
+    dim: double = (double)DaysMonthlyBasis(issue,mature,basis)
+    a: double = (double)DaysMonthlyBasis(issue,settle,basis)
+    b: double = (double)AnnualBasis(settle,basis)
+    n: double = 1 + (dsm / b * yld)
+    return ((100 + (dim / b * rate * 100)) / n) - (a / b * rate * 100)
+}
+
+FnPricemat :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    issue: int
+    rate: double
+    yld: double
+    basis: int
+    if count < 5 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    issue = ArgDate(args,count,2,-1)
+    rate = ArgAt(args,count,3,0)
+    yld = ArgAt(args,count,4,0)
+    basis = ArgBasis(args,count,5)
+    if settle < 0 || mature < 0 || issue < 0 || basis < 0 { return ValError(ERR_NUM) }
+    return ValNumber(Price_Mat_Impl(settle,mature,issue,rate,yld,basis))
+}
+
+YieldMatAt :: (settle: int, mature: int, issue: int, rate: double, price: double, basis: int) -> double {
+    issmat: double = YearFracBasis(issue,mature,basis)
+    issset: double = YearFracBasis(issue,settle,basis)
+    setmat: double = YearFracBasis(settle,mature,basis)
+    y: double = 1 + issmat * rate
+    y /= price / 100 + issset * rate
+    y -= 1
+    y /= setmat
+    return y
+}
+
+FnYieldmat :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    issue: int
+    rate: double
+    price: double
+    basis: int
+    if count < 5 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    issue = ArgDate(args,count,2,-1)
+    rate = ArgAt(args,count,3,0)
+    price = ArgAt(args,count,4,0)
+    basis = ArgBasis(args,count,5)
+    if settle < 0 || mature < 0 || issue < 0 || basis < 0 || price <= 0 { return ValError(ERR_NUM) }
+    return ValNumber(YieldMatAt(settle,mature,issue,rate,price,basis))
+}
+
+FnYielddisc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    settle: int
+    mature: int
+    price: double
+    red: double
+    basis: int
+    if count < 4 { return ValError(ERR_VALUE) }
+    settle = ArgDate(args,count,0,-1)
+    mature = ArgDate(args,count,1,-1)
+    price = ArgAt(args,count,2,0)
+    red = ArgAt(args,count,3,0)
+    basis = ArgBasis(args,count,4)
+    if settle < 0 || mature < 0 || basis < 0 || price <= 0 { return ValError(ERR_NUM) }
+    yf: double = YearFracBasis(settle,mature,basis)
+    if yf == 0 || price == 0 { return ValError(ERR_DIV0) }
+    return ValNumber((red / price - 1) / yf)
+}
+
+OddPriceStub :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValError(ERR_VALUE)
+}
+
+FnAmorlinc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    settle: int
+    first: int
+    salvage: double
+    per: int
+    rate: double
+    basis: int
+    if count < 6 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    settle = ArgDate(args,count,1,-1)
+    first = ArgDate(args,count,2,-1)
+    salvage = ArgAt(args,count,3,0)
+    per = ArgAtInt(args,count,4,0)
+    rate = ArgAt(args,count,5,0)
+    basis = ArgBasis(args,count,6)
+    if settle < 0 || first < 0 || basis < 0 || rate < 0 { return ValError(ERR_NUM) }
+    one_rate: double = c * rate
+    cost_delta: double = c - salvage
+    f0rate: double = YearFracBasis(settle,first,basis) * rate * c
+    full_periods: int = (int)((cost_delta - f0rate) / one_rate)
+    result: double = 0
+    if per == 0 {
+        result = f0rate
+    }
+else if per <= full_periods {
+        result = one_rate
+    }
+else if per == full_periods + 1 {
+        result = cost_delta - one_rate * (double)full_periods - f0rate
+    }
+else {
+        result = 0
+    }
+    return ValNumber(result)
+}
+
+FnAmordegrc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    c: double
+    settle: int
+    first: int
+    salvage: double
+    per: int
+    rate: double
+    basis: int
+    if count < 6 { return ValError(ERR_VALUE) }
+    c = ArgAt(args,count,0,0)
+    settle = ArgDate(args,count,1,-1)
+    first = ArgDate(args,count,2,-1)
+    salvage = ArgAt(args,count,3,0)
+    per = ArgAtInt(args,count,4,0)
+    rate = ArgAt(args,count,5,0)
+    basis = ArgBasis(args,count,6)
+    if settle < 0 || first < 0 || basis < 0 || rate < 0 { return ValError(ERR_NUM) }
+    use_per: double = 1 / rate
+    coeff: double = 0
+    if use_per < 3 {
+        coeff = 1
+    }
+else if use_per < 5 {
+        coeff = 1.5
+    }
+else if use_per <= 6 {
+        coeff = 2
+    }
+else {
+        coeff = 2.5
+    }
+    frate: double = rate * coeff
+    cost: double = c
+    nrate: double = rint(YearFracBasis(settle,first,basis) * frate * cost)
+    cost -= nrate
+    rest: double = cost - salvage
+    n: int = 0
+    while n < per {
+        nrate = rint(frate * cost)
+        rest -= nrate
+        if rest < 0 {
+            if per - n <= 1 {
+                return ValNumber(rint(cost / 2))
+            }
+            return ValNumber(0)
+        }
+        cost -= nrate
+        n += 1
+    }
+    return ValNumber(nrate)
+}
+
+EuroRate :: (code: const char *) -> double {
+    if strcmp(code,"ATS") == 0 { return 13.7603 }
+    if strcmp(code,"BEF") == 0 { return 40.3399 }
+    if strcmp(code,"DEM") == 0 { return 1.95583 }
+    if strcmp(code,"ESP") == 0 { return 166.386 }
+    if strcmp(code,"FIM") == 0 { return 5.94573 }
+    if strcmp(code,"FRF") == 0 { return 6.55957 }
+    if strcmp(code,"IEP") == 0 { return 0.787564 }
+    if strcmp(code,"ITL") == 0 { return 1936.27 }
+    if strcmp(code,"LUF") == 0 { return 40.3399 }
+    if strcmp(code,"NLG") == 0 { return 2.20371 }
+    if strcmp(code,"PTE") == 0 { return 200.482 }
+    if strcmp(code,"EUR") == 0 { return 1.0 }
+    return -1
+}
+
+FnEuroconvert :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    value: double
+    from: [16] char = ""
+    to: [16] char = ""
+    full: int
+    triang: int
+    from_rate: double
+    to_rate: double
+    if count < 3 { return ValError(ERR_VALUE) }
+    value = ArgAt(args,count,0,0)
+    if TextArg(args,count,1,from,sizeof(from)) < 0 { return ValError(ERR_VALUE) }
+    if TextArg(args,count,2,to,sizeof(to)) < 0 { return ValError(ERR_VALUE) }
+    full = ArgAtInt(args,count,3,0)
+    triang = ArgAtInt(args,count,4,1)
+    from_rate = EuroRate(from)
+    to_rate = EuroRate(to)
+    if from_rate < 0 || to_rate < 0 { return ValError(ERR_VALUE) }
+    in_eur: double = value / from_rate
+    out: double = in_eur * to_rate
+    return ValNumber(out)
+}
+
+FnEuro :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    return ValError(ERR_NA)
+}
+
+FnXnpv :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int
+    rate: double
+    v_start: int = 0
+    v_len: int = 0
+    d_start: int = 0
+    d_len: int = 0
+    total: double = 0
+    i: int
+    if count < 3 { return ValError(ERR_VALUE) }
+    groups = ArgGroupCount(args,marks,count)
+    rate = ArgAt(args,count,0,0)
+    if groups < 2 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,1,&v_start,&v_len)
+    GroupBounds(marks,count,2,&d_start,&d_len)
+    if v_len != d_len { return ValError(ERR_NUM) }
+    d0: double = CoerceNumber(&args[d_start])
+    i = 0
+    while i < v_len {
+        if args[v_start + i].kind != VAL_FLOAT { return ValError(ERR_VALUE) }
+        di: double = CoerceNumber(&args[d_start + i])
+        total += args[v_start + i].number / Pow1p(rate,(di - d0) / 365)
+        i += 1
+    }
+    return ValNumber(total)
+}
+
+FnXirr :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int
+    v_start: int = 0
+    v_len: int = 0
+    d_start: int = 0
+    d_len: int = 0
+    guess: double = 0.1
+    ok: int = 0
+    i: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    groups = ArgGroupCount(args,marks,count)
+    if groups < 2 { return ValError(ERR_VALUE) }
+    GroupBounds(marks,count,0,&v_start,&v_len)
+    GroupBounds(marks,count,1,&d_start,&d_len)
+    if v_len != d_len { return ValError(ERR_NUM) }
+    if v_len > 512 { return ValError(ERR_NUM) }
+    if args[count - 1].from_range == 0 { guess = CoerceNumber(&args[count - 1]) }
+    GS_CASH_N = v_len
+    while i < v_len {
+        GSV_A[i] = args[v_start + i].number
+        GSD_A[i] = CoerceNumber(&args[d_start + i])
+        i += 1
+    }
+    r: double = XirrGo(guess,&ok)
+    if ok == 0 { return ValError(ERR_NUM) }
+    return ValNumber(r)
+}
+
+FnDollarText :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    v: double
+    decimals: double = 2
+    out: [128] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    v = ArgAt(args,count,0,0)
+    decimals = ArgAt(args,count,1,2)
+    scaleleft: double = 1
+    if decimals < 0 {
+        scaleleft = FinPower(10.0,-decimals)
+        v = (double)(long long)(v / scaleleft + (v < 0 ? -0.5 : 0.5)) * scaleleft
+        decimals = 0
+    }
+    if decimals > 10 { decimals = 10 }
+    tmp: [64] char = ""
+    body: [96] char = ""
+    snprintf(tmp,sizeof(tmp),"%.*f",(int)decimals,fabs(v))
+    FormatWithPattern2(tmp,body,sizeof(body))
+    if v < 0 {
+        snprintf(out,sizeof(out),"(%s)",body)
+    }
+else {
+        snprintf(out,sizeof(out),"%s",body)
+    }
+    return ValString(wb_strdup(out))
+}
+
+FormatWithPattern2 :: (digits: const char *, out: char *, cap: int) {
+    dot: CString = strchr(digits,'.')
+    int_len: int = dot != NULL ? (int)(dot - digits) : (int)strlen(digits)
+    n: int = 0
+    i: int = 0
+    out[0] = '$'
+    n = 1
+    while i < int_len {
+        if (int_len - i) % 3 == 0 && i > 0 && n + 1 < cap {
+            out[n] = ','
+            n += 1
+        }
+        if n + 1 < cap { out[n] = digits[i]; n += 1 }
+        i += 1
+    }
+    if dot != NULL {
+        i = 0
+        while dot[i] != 0 && n + 1 < cap { out[n] = dot[i]; n += 1; i += 1 }
+    }
+    out[n] = 0
+}
+
+
 FnSum :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     list: NumList = {0}
     CollectNumbers(args,count,&list)
@@ -2900,6 +5320,63 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"bin2dec") == 0 { return FnRadixParse(st,args,count,marks,2) }
     if strcmp(name,"oct2dec") == 0 { return FnRadixParse(st,args,count,marks,8) }
     if strcmp(name,"hex2dec") == 0 { return FnRadixParse(st,args,count,marks,16) }
+    if strcmp(name,"pmt") == 0 { return FnPmt(st,args,count,marks) }
+    if strcmp(name,"fv") == 0 { return FnFv(st,args,count,marks) }
+    if strcmp(name,"pv") == 0 { return FnPv(st,args,count,marks) }
+    if strcmp(name,"nper") == 0 { return FnNper(st,args,count,marks) }
+    if strcmp(name,"rate") == 0 { return FnRate(st,args,count,marks) }
+    if strcmp(name,"ipmt") == 0 { return FnIpmt(st,args,count,marks) }
+    if strcmp(name,"ppmt") == 0 { return FnPpmt(st,args,count,marks) }
+    if strcmp(name,"ispmt") == 0 { return FnIspmt(st,args,count,marks) }
+    if strcmp(name,"cumipmt") == 0 { return CumulativeLoanPart(st,args,count,marks,1) }
+    if strcmp(name,"cumprinc") == 0 { return CumulativeLoanPart(st,args,count,marks,0) }
+    if strcmp(name,"npv") == 0 { return FnNpv(st,args,count,marks) }
+    if strcmp(name,"irr") == 0 { return FnIrr(st,args,count,marks) }
+    if strcmp(name,"mirr") == 0 { return FnMirr(st,args,count,marks) }
+    if strcmp(name,"sln") == 0 { return FnSln(st,args,count,marks) }
+    if strcmp(name,"syd") == 0 { return FnSyd(st,args,count,marks) }
+    if strcmp(name,"ddb") == 0 { return FnDdb(st,args,count,marks) }
+    if strcmp(name,"db") == 0 { return FnDb(st,args,count,marks) }
+    if strcmp(name,"vdb") == 0 { return FnVdb(st,args,count,marks) }
+    if strcmp(name,"yearfrac") == 0 { return FnYearfrac(st,args,count,marks) }
+    if strcmp(name,"coupncd") == 0 { return HintWrap(st,1,FnCoupncd(st,args,count,marks)) }
+    if strcmp(name,"couppcd") == 0 { return HintWrap(st,1,FnCouppcd(st,args,count,marks)) }
+    if strcmp(name,"coupnum") == 0 { return FnCoupnum(st,args,count,marks) }
+    if strcmp(name,"coupdaybs") == 0 { return FnCoupdaybs(st,args,count,marks) }
+    if strcmp(name,"coupdays") == 0 { return FnCoupdays(st,args,count,marks) }
+    if strcmp(name,"coupdaysnc") == 0 { return FnCoupdaysnc(st,args,count,marks) }
+    if strcmp(name,"accrint") == 0 { return FnAccrint(st,args,count,marks) }
+    if strcmp(name,"accrintm") == 0 { return FnAccrintm(st,args,count,marks) }
+    if strcmp(name,"intrate") == 0 { return FnIntrate(st,args,count,marks) }
+    if strcmp(name,"received") == 0 { return FnReceived(st,args,count,marks) }
+    if strcmp(name,"disc") == 0 { return FnDisc(st,args,count,marks) }
+    if strcmp(name,"pricedisc") == 0 { return FnPricedisc(st,args,count,marks) }
+    if strcmp(name,"tbilleq") == 0 { return FnTbilleq(st,args,count,marks) }
+    if strcmp(name,"tbillprice") == 0 { return FnTbillprice(st,args,count,marks) }
+    if strcmp(name,"tbillyield") == 0 { return FnTbillyield(st,args,count,marks) }
+    if strcmp(name,"effect") == 0 { return FnEffect(st,args,count,marks) }
+    if strcmp(name,"nominal") == 0 { return FnNominal(st,args,count,marks) }
+    if strcmp(name,"dollarde") == 0 { return FnDollarde(st,args,count,marks) }
+    if strcmp(name,"dollarfr") == 0 { return FnDollarfr(st,args,count,marks) }
+    if strcmp(name,"fvschedule") == 0 { return FnFvschedule(st,args,count,marks) }
+    if strcmp(name,"duration") == 0 { return FnDuration(st,args,count,marks) }
+    if strcmp(name,"mduration") == 0 { return FnMduration(st,args,count,marks) }
+    if strcmp(name,"price") == 0 { return FnPrice(st,args,count,marks) }
+    if strcmp(name,"yield") == 0 { return FnYield(st,args,count,marks) }
+    if strcmp(name,"yielddisc") == 0 { return FnYielddisc(st,args,count,marks) }
+    if strcmp(name,"pricemat") == 0 { return FnPricemat(st,args,count,marks) }
+    if strcmp(name,"yieldmat") == 0 { return FnYieldmat(st,args,count,marks) }
+    if strcmp(name,"oddfprice") == 0 { return OddPriceStub(st,args,count,marks) }
+    if strcmp(name,"oddfyield") == 0 { return OddPriceStub(st,args,count,marks) }
+    if strcmp(name,"oddlprice") == 0 { return OddPriceStub(st,args,count,marks) }
+    if strcmp(name,"oddlyield") == 0 { return OddPriceStub(st,args,count,marks) }
+    if strcmp(name,"amorlinc") == 0 { return FnAmorlinc(st,args,count,marks) }
+    if strcmp(name,"amordegrc") == 0 { return FnAmordegrc(st,args,count,marks) }
+    if strcmp(name,"euro") == 0 { return FnEuro(st,args,count,marks) }
+    if strcmp(name,"euroconvert") == 0 { return FnEuroconvert(st,args,count,marks) }
+    if strcmp(name,"xnpv") == 0 { return FnXnpv(st,args,count,marks) }
+    if strcmp(name,"xirr") == 0 { return FnXirr(st,args,count,marks) }
+    if strcmp(name,"dollar") == 0 { return FnDollarText(st,args,count,marks) }
     if strcmp(name,"sum") == 0 { return FnSum(st,args,count,marks) }
     if strcmp(name,"average") == 0 || strcmp(name,"mean") == 0 { return FnAverage(st,args,count,marks) }
     if strcmp(name,"count") == 0 { return FnCount(st,args,count,marks) }

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName>Fin</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Fin</gnm:Name><gnm:MaxCol>3</gnm:MaxCol><gnm:MaxRow>95</gnm:MaxRow>
+  <gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="40">-1000</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="40">300</gnm:Cell>
+<gnm:Cell Row="2" Col="0" ValueType="40">420</gnm:Cell>
+<gnm:Cell Row="3" Col="0" ValueType="40">680</gnm:Cell>
+<gnm:Cell Row="0" Col="1" ValueType="40">44927</gnm:Cell>
+<gnm:Cell Row="1" Col="1" ValueType="40">45292</gnm:Cell>
+<gnm:Cell Row="2" Col="1" ValueType="40">45658</gnm:Cell>
+<gnm:Cell Row="0" Col="3">=PMT(0.05/12,60,-10000)</gnm:Cell>
+<gnm:Cell Row="1" Col="3">=PMT(0.05/12,60,-10000,0,1)</gnm:Cell>
+<gnm:Cell Row="2" Col="3">=PMT(0.08,10,10000)</gnm:Cell>
+<gnm:Cell Row="3" Col="3">=FV(0.05/12,60,-100)</gnm:Cell>
+<gnm:Cell Row="4" Col="3">=FV(0.1,10,-200,-500,1)</gnm:Cell>
+<gnm:Cell Row="5" Col="3">=PV(0.05,10,-100)</gnm:Cell>
+<gnm:Cell Row="6" Col="3">=PV(0.06/12,120,-1500)</gnm:Cell>
+<gnm:Cell Row="7" Col="3">=RATE(60,-188.7123364401093,10000)</gnm:Cell>
+<gnm:Cell Row="8" Col="3">=RATE(10,-100,800)</gnm:Cell>
+<gnm:Cell Row="9" Col="3">=NPER(0.05,100,-1000)</gnm:Cell>
+<gnm:Cell Row="10" Col="3">=IPMT(0.05/12,1,60,-10000)</gnm:Cell>
+<gnm:Cell Row="11" Col="3">=IPMT(0.05/12,13,60,-10000)</gnm:Cell>
+<gnm:Cell Row="12" Col="3">=PPMT(0.05/12,1,60,-10000)</gnm:Cell>
+<gnm:Cell Row="13" Col="3">=PPMT(0.05/12,13,60,-10000)</gnm:Cell>
+<gnm:Cell Row="14" Col="3">=ISPMT(0.05/12,1,60,-10000)</gnm:Cell>
+<gnm:Cell Row="15" Col="3">=NPV(0.1,A1:A4)</gnm:Cell>
+<gnm:Cell Row="16" Col="3">=NPV(0.1,100,200,300)</gnm:Cell>
+<gnm:Cell Row="17" Col="3">=IRR(A1:A4)</gnm:Cell>
+<gnm:Cell Row="18" Col="3">=IRR(A1:A3)</gnm:Cell>
+<gnm:Cell Row="19" Col="3">=MIRR(A1:A4,0.1,0.12)</gnm:Cell>
+<gnm:Cell Row="20" Col="3">=SLN(10000,1000,5)</gnm:Cell>
+<gnm:Cell Row="21" Col="3">=SYD(10000,1000,5,1)</gnm:Cell>
+<gnm:Cell Row="22" Col="3">=SYD(10000,1000,5,3)</gnm:Cell>
+<gnm:Cell Row="23" Col="3">=DDB(10000,1000,5,1)</gnm:Cell>
+<gnm:Cell Row="24" Col="3">=DDB(10000,1000,5,3)</gnm:Cell>
+<gnm:Cell Row="25" Col="3">=DDB(10000,1000,5,3,1.5)</gnm:Cell>
+<gnm:Cell Row="26" Col="3">=DB(10000,1000,5,1)</gnm:Cell>
+<gnm:Cell Row="27" Col="3">=DB(10000,1000,5,2,6)</gnm:Cell>
+<gnm:Cell Row="28" Col="3">=VDB(10000,1000,5,0,1)</gnm:Cell>
+<gnm:Cell Row="29" Col="3">=VDB(10000,1000,5,1,3)</gnm:Cell>
+<gnm:Cell Row="30" Col="3">=CUMIPMT(0.05/12,60,-10000,1,12,0)</gnm:Cell>
+<gnm:Cell Row="31" Col="3">=CUMPRINC(0.05/12,60,-10000,1,12,0)</gnm:Cell>
+<gnm:Cell Row="32" Col="3">=CUMIPMT(0.05/12,60,-10000,13,24,0)</gnm:Cell>
+<gnm:Cell Row="33" Col="3">=FVSCHEDULE(1000,0.05,0.05,-0.02)</gnm:Cell>
+<gnm:Cell Row="34" Col="3">=FVSCHEDULE(100,A1:A3)</gnm:Cell>
+<gnm:Cell Row="35" Col="3">=EFFECT(0.05,12)</gnm:Cell>
+<gnm:Cell Row="36" Col="3">=EFFECT(0.08,4)</gnm:Cell>
+<gnm:Cell Row="37" Col="3">=NOMINAL(0.051161897881733184,12)</gnm:Cell>
+<gnm:Cell Row="38" Col="3">=DOLLARDE(1.25,8)</gnm:Cell>
+<gnm:Cell Row="39" Col="3">=DOLLARDE(1.02,16)</gnm:Cell>
+<gnm:Cell Row="40" Col="3">=DOLLARFR(1.3,8)</gnm:Cell>
+<gnm:Cell Row="41" Col="3">=DOLLARFR(1.125,16)</gnm:Cell>
+<gnm:Cell Row="42" Col="3">=YEARFRAC(45000,45100,0)</gnm:Cell>
+<gnm:Cell Row="43" Col="3">=YEARFRAC(45000,45100,1)</gnm:Cell>
+<gnm:Cell Row="44" Col="3">=YEARFRAC(45000,45100,2)</gnm:Cell>
+<gnm:Cell Row="45" Col="3">=YEARFRAC(45000,45100,3)</gnm:Cell>
+<gnm:Cell Row="46" Col="3">=YEARFRAC(45000,45100,4)</gnm:Cell>
+<gnm:Cell Row="47" Col="3">=YEARFRAC(44900,45300,1)</gnm:Cell>
+<gnm:Cell Row="48" Col="3">=YEARFRAC(44000,46000,1)</gnm:Cell>
+<gnm:Cell Row="49" Col="3">=COUPNCD(45000,46000,2,1)</gnm:Cell>
+<gnm:Cell Row="50" Col="3">=COUPNCD(45000,46000,4,0)</gnm:Cell>
+<gnm:Cell Row="51" Col="3">=COUPPCD(45000,46000,2,1)</gnm:Cell>
+<gnm:Cell Row="52" Col="3">=COUPNUM(45000,46000,2,1)</gnm:Cell>
+<gnm:Cell Row="53" Col="3">=COUPNUM(45000,46000,1,1)</gnm:Cell>
+<gnm:Cell Row="54" Col="3">=COUPDAYBS(45000,46000,2,1)</gnm:Cell>
+<gnm:Cell Row="55" Col="3">=COUPDAYBS(45000,46000,2,0)</gnm:Cell>
+<gnm:Cell Row="56" Col="3">=COUPDAYS(45000,46000,2,1)</gnm:Cell>
+<gnm:Cell Row="57" Col="3">=COUPDAYS(45000,46000,2,0)</gnm:Cell>
+<gnm:Cell Row="58" Col="3">=COUPDAYSNC(45000,46000,2,1)</gnm:Cell>
+<gnm:Cell Row="59" Col="3">=ACCRINT(44900,44950,45000,0.05,1000,2,1)</gnm:Cell>
+<gnm:Cell Row="60" Col="3">=ACCRINTM(44900,45000,0.05,1000,1)</gnm:Cell>
+<gnm:Cell Row="61" Col="3">=INTRATE(45000,45365,95,100,1)</gnm:Cell>
+<gnm:Cell Row="62" Col="3">=INTRATE(45000,45365,950,1000,2)</gnm:Cell>
+<gnm:Cell Row="63" Col="3">=RECEIVED(45000,45365,1000,0.05,1)</gnm:Cell>
+<gnm:Cell Row="64" Col="3">=DISC(45000,45365,97,100,1)</gnm:Cell>
+<gnm:Cell Row="65" Col="3">=PRICEDISC(45000,45365,0.05,100,1)</gnm:Cell>
+<gnm:Cell Row="66" Col="3">=PRICEDISC(45000,45275,0.04,100,3)</gnm:Cell>
+<gnm:Cell Row="67" Col="3">=TBILLEQ(45000,45182,0.045)</gnm:Cell>
+<gnm:Cell Row="68" Col="3">=TBILLPRICE(45000,45182,0.045)</gnm:Cell>
+<gnm:Cell Row="69" Col="3">=TBILLYIELD(45000,45182,97.75)</gnm:Cell>
+<gnm:Cell Row="70" Col="3">=PRICE(45000,46000,0.05,0.06,100,2,1)</gnm:Cell>
+<gnm:Cell Row="71" Col="3">=PRICE(45000,46000,0.05,0.06,100,2,0)</gnm:Cell>
+<gnm:Cell Row="72" Col="3">=PRICE(44800,46800,0.07,0.075,100,4,2)</gnm:Cell>
+<gnm:Cell Row="73" Col="3">=YIELD(45000,46000,0.05,97.5,100,2,1)</gnm:Cell>
+<gnm:Cell Row="74" Col="3">=YIELD(45000,46000,0.05,100,100,2,1)</gnm:Cell>
+<gnm:Cell Row="75" Col="3">=DURATION(45000,46000,0.05,0.06,2,1)</gnm:Cell>
+<gnm:Cell Row="76" Col="3">=DURATION(45000,46000,0.05,0.06,1,0)</gnm:Cell>
+<gnm:Cell Row="77" Col="3">=MDURATION(45000,46000,0.05,0.06,2,1)</gnm:Cell>
+<gnm:Cell Row="78" Col="3">=PRICEMAT(44900,46000,44800,0.06,0.065,1)</gnm:Cell>
+<gnm:Cell Row="79" Col="3">=YIELDMAT(44900,46000,44800,0.06,99,1)</gnm:Cell>
+<gnm:Cell Row="80" Col="3">=XNPV(0.1,A1:A3,B1:B3)</gnm:Cell>
+<gnm:Cell Row="81" Col="3">=XIRR(A1:A3,B1:B3)</gnm:Cell>
+<gnm:Cell Row="82" Col="3">=EUROCONVERT(1,"FRF","EUR")</gnm:Cell>
+<gnm:Cell Row="83" Col="3">=EUROCONVERT(100,"DEM","FRF")</gnm:Cell>
+<gnm:Cell Row="84" Col="3">=EUROCONVERT(50,"EUR","ITL")</gnm:Cell>
+<gnm:Cell Row="85" Col="3">=EUROCONVERT(100,"NLG","EUR",1)</gnm:Cell>
+<gnm:Cell Row="86" Col="3">=DOLLAR(1234.567)</gnm:Cell>
+<gnm:Cell Row="87" Col="3">=DOLLAR(1234.567,2)</gnm:Cell>
+<gnm:Cell Row="88" Col="3">=DOLLAR(-500,0)</gnm:Cell>
+<gnm:Cell Row="89" Col="3">=DOLLAR(1234.567,-2)</gnm:Cell>
+<gnm:Cell Row="90" Col="3">=DOLLAR(-1234567.891,2)</gnm:Cell>
+<gnm:Cell Row="91" Col="3">=AMORLINC(1500,45000,45031,300,1,0.14,1)</gnm:Cell>
+<gnm:Cell Row="92" Col="3">=AMORLINC(1500,45000,45031,300,2,0.14,1)</gnm:Cell>
+<gnm:Cell Row="93" Col="3">=AMORLINC(1500,45000,45031,300,0,0.14,1)</gnm:Cell>
+<gnm:Cell Row="94" Col="3">=AMORDEGRC(1500,45000,45031,300,1,0.14,1)</gnm:Cell>
+<gnm:Cell Row="95" Col="3">=AMORDEGRC(2400,45000,45031,300,1,0.15,1)</gnm:Cell>
+  </gnm:Cells><gnm:SheetLayout TopLeft="A1"/></gnm:Sheet></gnm:Sheets>
+  <gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>
