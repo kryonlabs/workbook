@@ -14069,6 +14069,16 @@ else {
     if strcmp(name,"prob") == 0 { return FnProb(st,args,count,marks) }
     if strcmp(name,"subtotal") == 0 { return FnSubtotal(st,args,count,marks) }
     if strcmp(name,"ssmedian") == 0 { return FnSsMedian(st,args,count,marks) }
+    if strcmp(name,"mmult") == 0 { return FnMmult(st,args,count,marks) }
+    if strcmp(name,"mdeterm") == 0 { return FnMdeterm(st,args,count,marks) }
+    if strcmp(name,"minverse") == 0 { return FnMinverse(st,args,count,marks) }
+    if strcmp(name,"linsolve") == 0 { return FnLinsolve(st,args,count,marks) }
+    if strcmp(name,"transpose") == 0 { return FnTranspose(st,args,count,marks) }
+    if strcmp(name,"munit") == 0 { return FnMunit(st,args,count,marks) }
+    if strcmp(name,"sort") == 0 { return FnSortFn(st,args,count,marks) }
+    if strcmp(name,"unique") == 0 { return FnUnique(st,args,count,marks) }
+    if strcmp(name,"eigen") == 0 { return FnEigen(st,args,count,marks) }
+    if strcmp(name,"cholesky") == 0 { return FnCholesky(st,args,count,marks) }
     if strcmp(name,"averageif") == 0 { return FnSumIf(st,args,count,marks,1) }
     if strcmp(name,"countif") == 0 { return FnCountIf(st,args,count,marks) }
     return ValError(ERR_NAME)
@@ -14352,6 +14362,7 @@ FnSsMedian :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     n: int = 0
     interval: double = 1
     if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 2 { return ValError(ERR_NA) }
     GroupBounds(marks,count,0,&gx0,&gl0)
     n = CashList(args + gx0,gl0,data)
     if n < 0 { return ValError(ERR_VALUE) }
@@ -14372,6 +14383,933 @@ FnSsMedian :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
         return ValNumber((m0 + m1) / 2)
     }
     return ValNumber(SsMedianCalc(data,n,data[n / 2],interval))
+}
+
+/* ==== quad matrix core: exact ports of goffice go-matrix.c/go-accumulator.c ==== */
+QMat :: struct {
+    m: int
+    n: int
+    data: [16][16] Qd
+}
+
+QQR :: struct {
+    V: QMat
+    R: QMat
+    qdet: int
+}
+
+QAcc :: struct {
+    partials: [128] double
+    len: int
+}
+
+QAccClear :: (acc: QAcc *) {
+    acc->len = 0
+}
+
+QAccAdd :: (acc: QAcc *, x: double) {
+    ui: int = 0
+    uj: int = 0
+    y: double = 0
+    hi: double = 0
+    lo: double = 0
+    t: double = 0
+    uj = 0
+    while uj < acc->len {
+        y = acc->partials[uj]
+        if fabs(x) < fabs(y) {
+            t = x
+            x = y
+            y = t
+        }
+        hi = x + y
+        if isfinite(hi) == 0 {
+            x = hi
+            ui = 0
+            break
+        }
+        lo = y - (hi - x)
+        if lo != 0 {
+            acc->partials[ui] = lo
+            ui += 1
+        }
+        x = hi
+        uj += 1
+    }
+    acc->len = ui + 1
+    acc->partials[ui] = x
+}
+
+QAccAddQuad :: (acc: QAcc *, x: Qd *) {
+    QAccAdd(acc,x->h)
+    QAccAdd(acc,x->l)
+}
+
+QZero :: (r: Qd *) {
+    r->h = 0
+    r->l = 0
+}
+
+QAccValue :: (acc: QAcc *) -> double {
+    sum: double = 0
+    ui: int = 0
+    while ui < acc->len {
+        sum += acc->partials[ui]
+        ui += 1
+    }
+    return sum
+}
+
+QQRNew :: (A: QMat *) -> QQR {
+    qr: QQR = {0}
+    qdet: int = 1
+    R: QMat = {0}
+    i: int = 0
+    j: int = 0
+    k: int = 0
+    m: int = A->m
+    n: int = A->n
+    L: Qd = {0,0}
+    L2: Qd = {0,0}
+    L2p: Qd = {0,0}
+    s: Qd = {0,0}
+    p: Qd = {0,0}
+    tmp: [16] Qd = {0}
+    qr.V.m = m
+    qr.V.n = n
+    qr.R.m = n
+    qr.R.n = n
+    R.m = m
+    R.n = n
+    i = 0
+    while i < m {
+        j = 0
+        while j < n {
+            R.data[i][j] = A->data[i][j]
+            j += 1
+        }
+        i += 1
+    }
+    k = 0
+    while k < n {
+        QZero(&L2)
+        QZero(&L2p)
+        i = m - 1
+        while i >= k {
+            qr.V.data[i][k] = R.data[i][k]
+            Q_Mul(&s,&qr.V.data[i][k],&qr.V.data[i][k])
+            L2p = L2
+            Q_Add(&L2,&L2,&s)
+            i -= 1
+        }
+        Q_Sqrt(&L,&L2)
+        if Q_Val(&qr.V.data[k][k]) < 0 {
+            Q_Sub(&qr.V.data[k][k],&qr.V.data[k][k],&L)
+        }
+else {
+            Q_Add(&qr.V.data[k][k],&qr.V.data[k][k],&L)
+        }
+        Q_Mul(&s,&qr.V.data[k][k],&qr.V.data[k][k])
+        Q_Add(&L2p,&L2p,&s)
+        Q_Sqrt(&L,&L2p)
+        if Q_Val(&L) == 0 {
+            k += 1
+            continue
+        }
+        i = k
+        while i < m {
+            Q_Div(&qr.V.data[i][k],&qr.V.data[i][k],&L)
+            i += 1
+        }
+        qdet = -qdet
+        j = k
+        while j < n {
+            QZero(&tmp[j])
+            i = k
+            while i < m {
+                Q_Mul(&p,&qr.V.data[i][k],&R.data[i][j])
+                Q_Add(&tmp[j],&tmp[j],&p)
+                i += 1
+            }
+            j += 1
+        }
+        j = k
+        while j < n {
+            i = k
+            while i < m {
+                Q_Mul(&p,&qr.V.data[i][k],&tmp[j])
+                Q_Add(&p,&p,&p)
+                Q_Sub(&R.data[i][j],&R.data[i][j],&p)
+                i += 1
+            }
+            j += 1
+        }
+        i = k + 1
+        while i < m {
+            QZero(&R.data[i][k])
+            i += 1
+        }
+        k += 1
+    }
+    i = 0
+    while i < n {
+        j = 0
+        while j < n {
+            qr.R.data[i][j] = R.data[i][j]
+            j += 1
+        }
+        i += 1
+    }
+    qr.qdet = qdet
+    return qr
+}
+
+QQRMultiplyQt :: (qr: QQR *, x: Qd *) {
+    k: int = 0
+    i: int = 0
+    s: Qd = {0,0}
+    p: Qd = {0,0}
+    k = 0
+    while k < qr->V.n {
+        QZero(&s)
+        i = k
+        while i < qr->V.m {
+            Q_Mul(&p,&x[i],&qr->V.data[i][k])
+            Q_Add(&s,&s,&p)
+            i += 1
+        }
+        Q_Add(&s,&s,&s)
+        i = k
+        while i < qr->V.m {
+            Q_Mul(&p,&s,&qr->V.data[i][k])
+            Q_Sub(&x[i],&x[i],&p)
+            i += 1
+        }
+        k += 1
+    }
+}
+
+QMatBackSolve :: (R: QMat *, x: Qd *, b: Qd *, allow_degenerate: int) -> int {
+    i: int = 0
+    j: int = 0
+    n: int = R->m
+    d: Qd = {0,0}
+    Rii: Qd = {0,0}
+    p: Qd = {0,0}
+    i = n - 1
+    while i >= 0 {
+        d = b[i]
+        Rii = R->data[i][i]
+        if Q_Val(&Rii) == 0 {
+            if allow_degenerate != 0 {
+                QZero(&x[i])
+                i -= 1
+                continue
+            }
+            while i >= 0 {
+                QZero(&x[i])
+                i -= 1
+            }
+            return 1
+        }
+        j = i + 1
+        while j < n {
+            Q_Mul(&p,&R->data[i][j],&x[j])
+            Q_Sub(&d,&d,&p)
+            j += 1
+        }
+        Q_Div(&x[i],&d,&Rii)
+        i -= 1
+    }
+    return 0
+}
+
+QMatEigenRange :: (A: QMat *, emin: double *, emax: double *) {
+    i: int = 0
+    abs_e: double = 0
+    abs_e = fabs(Q_Val(&A->data[0][0]))
+    emin[0] = abs_e
+    emax[0] = abs_e
+    i = 1
+    while i < A->m {
+        abs_e = fabs(Q_Val(&A->data[i][i]))
+        if abs_e < emin[0] { emin[0] = abs_e }
+        if abs_e > emax[0] { emax[0] = abs_e }
+        i += 1
+    }
+}
+
+QMatDetQuad :: (A: QMat *, res: Qd *) {
+    qr: QQR = {0}
+    a: Qd = {0,0}
+    b: Qd = {0,0}
+    i: int = 0
+    if A->m == 1 {
+        res[0] = A->data[0][0]
+        return
+    }
+    if A->m == 2 {
+        Q_Mul(&a,&A->data[0][0],&A->data[1][1])
+        Q_Mul(&b,&A->data[1][0],&A->data[0][1])
+        Q_Sub(res,&a,&b)
+        return
+    }
+    qr = QQRNew(A)
+    Q_Init(res,qr.qdet)
+    i = 0
+    while i < qr.R.n {
+        Q_Mul(res,res,&qr.R.data[i][i])
+        i += 1
+    }
+}
+
+QMatInverse :: (A: QMat *, threshold: double, Z: QMat *) -> int {
+    qr: QQR = {0}
+    n: int = A->n
+    i: int = 0
+    k: int = 0
+    ok: int = 0
+    emin: double = 0
+    emax: double = 0
+    x: [16] Qd = {0}
+    QTk: [16] Qd = {0}
+    qr = QQRNew(A)
+    Z->m = n
+    Z->n = n
+    QMatEigenRange(&qr.R,&emin,&emax)
+    ok = emin > emax * threshold ? 1 : 0
+    k = 0
+    while ok != 0 && k < n {
+        i = 0
+        while i < n {
+            Q_Init(&QTk[i],i == k ? 1.0 : 0.0)
+            i += 1
+        }
+        QQRMultiplyQt(&qr,QTk)
+        if QMatBackSolve(&qr.R,x,QTk,0) != 0 {
+            ok = 0
+            break
+        }
+        i = 0
+        while i < n {
+            Z->data[i][k] = x[i]
+            i += 1
+        }
+        k += 1
+    }
+    return ok
+}
+
+GoMatrixDeterminant :: (a: double *, n: int) -> double {
+    qA: QMat = {0}
+    qres: Qd = {0,0}
+    i: int = 0
+    j: int = 0
+    if n < 1 { return 0 }
+    qA.m = n
+    qA.n = n
+    i = 0
+    while i < n {
+        j = 0
+        while j < n {
+            Q_Init(&qA.data[i][j],a[i * 16 + j])
+            j += 1
+        }
+        i += 1
+    }
+    QMatDetQuad(&qA,&qres)
+    return Q_Val(&qres)
+}
+
+GoMatrixInvert :: (a: double *, n: int) -> int {
+    qA: QMat = {0}
+    qZ: QMat = {0}
+    i: int = 0
+    j: int = 0
+    qA.m = n
+    qA.n = n
+    i = 0
+    while i < n {
+        j = 0
+        while j < n {
+            Q_Init(&qA.data[i][j],a[i * 16 + j])
+            j += 1
+        }
+        i += 1
+    }
+    if QMatInverse(&qA,256 * 2.220446049250313e-16,&qZ) == 0 { return 0 }
+    i = 0
+    while i < n {
+        j = 0
+        while j < n {
+            a[i * 16 + j] = Q_Val(&qZ.data[i][j])
+            j += 1
+        }
+        i += 1
+    }
+    return 1
+}
+
+GoLinearSolveMultiple :: (a: double *, n: int, b: double *, bn: int) -> int {
+    qA: QMat = {0}
+    qr: QQR = {0}
+    i: int = 0
+    j: int = 0
+    regres: int = 0
+    QTb: [16] Qd = {0}
+    x: [16] Qd = {0}
+    if n < 1 || bn < 1 { return 2 }
+    if n == 1 {
+        d0: double = a[0]
+        if d0 == 0 { return 1 }
+        i = 0
+        while i < bn {
+            b[i] /= d0
+            i += 1
+        }
+        return 0
+    }
+    qA.m = n
+    qA.n = n
+    i = 0
+    while i < n {
+        j = 0
+        while j < n {
+            Q_Init(&qA.data[i][j],a[i * 16 + j])
+            j += 1
+        }
+        i += 1
+    }
+    qr = QQRNew(&qA)
+    regres = 0
+    j = 0
+    while j < bn {
+        i = 0
+        while i < n {
+            Q_Init(&QTb[i],b[i * 16 + j])
+            i += 1
+        }
+        QQRMultiplyQt(&qr,QTb)
+        if QMatBackSolve(&qr.R,x,QTb,0) != 0 { regres = 1 }
+        i = 0
+        while i < n {
+            b[i * 16 + j] = Q_Val(&x[i])
+            i += 1
+        }
+        j += 1
+    }
+    return regres
+}
+
+MatFromGroup :: (args: Val *, start: int, len: int, cols: int, a: double *, rows: int *, out_cols: int *) -> int {
+    i: int = 0
+    r: int = 0
+    c: int = 0
+    if cols < 1 { return 0 }
+    if len % cols != 0 { return 0 }
+    r = len / cols
+    if r < 1 || r > 16 || cols > 16 { return 0 }
+    i = 0
+    while i < len {
+        v: Val * = &args[start + i]
+        if v->kind == VAL_ERROR { return -1 }
+        a[(i / cols) * 16 + i % cols] = CoerceNumber(v)
+        i += 1
+    }
+    rows[0] = r
+    out_cols[0] = cols
+    return 1
+}
+
+FnMmult :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    a: [16][16] double = {0}
+    b: [16][16] double = {0}
+    ar: int = 0
+    ac: int = 0
+    br: int = 0
+    bc: int = 0
+    ok1: int = 0
+    ok2: int = 0
+    acc: QAcc = {0}
+    p: Qd = {0,0}
+    sum: double = 0
+    i: int = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if groups > 2 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    ok1 = MatFromGroup(args,gx0,gl0,st->call_group_cols[gx0],&a[0][0],&ar,&ac)
+    ok2 = MatFromGroup(args,gx1,gl1,st->call_group_cols[gx1],&b[0][0],&br,&bc)
+    if ok1 < 0 { return ValError(args[gx0].err) }
+    if ok2 < 0 { return ValError(args[gx1].err) }
+    if ok1 == 0 || ok2 == 0 { return ValError(ERR_VALUE) }
+    if ac != br { return ValError(ERR_VALUE) }
+    i = 0
+    while i < ac {
+        Q_Mul12(&p,a[0][i],b[i][0])
+        QAccAddQuad(&acc,&p)
+        i += 1
+    }
+    sum = QAccValue(&acc)
+    return ValNumber(sum)
+}
+
+FnMdeterm :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    a: [16][16] double = {0}
+    ar: int = 0
+    ac: int = 0
+    ok: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 1 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    ok = MatFromGroup(args,gx0,gl0,st->call_group_cols[gx0],&a[0][0],&ar,&ac)
+    if ok < 0 { return ValError(args[gx0].err) }
+    if ok == 0 { return ValError(ERR_VALUE) }
+    if ar != ac { return ValError(ERR_VALUE) }
+    return ValNumber(GoMatrixDeterminant(&a[0][0],ar))
+}
+
+FnMinverse :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    a: [16][16] double = {0}
+    ar: int = 0
+    ac: int = 0
+    ok: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 1 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    ok = MatFromGroup(args,gx0,gl0,st->call_group_cols[gx0],&a[0][0],&ar,&ac)
+    if ok < 0 { return ValError(args[gx0].err) }
+    if ok == 0 { return ValError(ERR_VALUE) }
+    if ar != ac { return ValError(ERR_VALUE) }
+    if GoMatrixInvert(&a[0][0],ar) == 0 { return ValError(ERR_NUM) }
+    return ValNumber(a[0][0])
+}
+
+FnLinsolve :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    a: [16][16] double = {0}
+    b: [16][16] double = {0}
+    ar: int = 0
+    ac: int = 0
+    br: int = 0
+    bc: int = 0
+    ok1: int = 0
+    ok2: int = 0
+    regres: int = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if groups > 2 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    GroupBounds(marks,count,1,&gx1,&gl1)
+    ok1 = MatFromGroup(args,gx0,gl0,st->call_group_cols[gx0],&a[0][0],&ar,&ac)
+    ok2 = MatFromGroup(args,gx1,gl1,st->call_group_cols[gx1],&b[0][0],&br,&bc)
+    if ok1 < 0 { return ValError(args[gx0].err) }
+    if ok2 < 0 { return ValError(args[gx1].err) }
+    if ok1 == 0 || ok2 == 0 { return ValError(ERR_VALUE) }
+    if ar != ac || br != ar { return ValError(ERR_VALUE) }
+    regres = GoLinearSolveMultiple(&a[0][0],ar,&b[0][0],bc)
+    if regres != 0 { return ValError(ERR_NUM) }
+    return ValNumber(b[0][0])
+}
+
+FnTranspose :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 1 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    if gl0 < 1 { return ValError(ERR_VALUE) }
+    if args[gx0].kind == VAL_ERROR { return ValError(args[gx0].err) }
+    return ValNumber(CoerceNumber(&args[gx0]))
+}
+
+FnMunit :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if count > 1 { return ValError(ERR_NA) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    n = CoerceNumber(&args[0])
+    if n < 1 { return ValError(ERR_NUM) }
+    if n > 5000 { return ValError(ERR_NUM) }
+    return ValNumber(1)
+}
+
+FnSortFn :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    data: [4096] double = {0}
+    n: int = 0
+    order: int = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 2 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    n = CashList(args + gx0,gl0,data)
+    if n < 0 { return ValError(args[gx0].err) }
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 {
+            if args[gx1].kind == VAL_ERROR { return ValError(args[gx1].err) }
+            order = (int)CoerceNumber(&args[gx1])
+        }
+    }
+    if order != 0 && order != 1 { return ValError(ERR_VALUE) }
+    if n == 0 { return ValError(ERR_VALUE) }
+    SortDoubles(data,n)
+    if order == 0 {
+        return ValNumber(data[n - 1])
+    }
+    return ValNumber(data[0])
+}
+
+RowColEqual :: (args: Val *, start: int, cols: int, i: int, j: int) -> int {
+    c: int = 0
+    while c < cols {
+        cmp: int = CompareVals(&args[start + i * cols + c],&args[start + j * cols + c])
+        if cmp != 0 { return 0 }
+        c += 1
+    }
+    return 1
+}
+
+FnUnique :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    gx1: int = 0
+    gl1: int = 0
+    gx2: int = 0
+    gl2: int = 0
+    cols: int = 0
+    rows: int = 0
+    by_col: int = 0
+    exactly_once: int = 0
+    ncount: int = 0
+    keep: [256] int = {0}
+    i: int = 0
+    j: int = 0
+    first: int = -1
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 3 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    if gl0 < 1 { return ValError(ERR_VALUE) }
+    if args[gx0].kind == VAL_ERROR { return ValError(args[gx0].err) }
+    cols = st->call_group_cols[gx0]
+    if cols < 1 { cols = gl0 }
+    if gl0 % cols != 0 { return ValError(ERR_VALUE) }
+    rows = gl0 / cols
+    if groups >= 2 {
+        GroupBounds(marks,count,1,&gx1,&gl1)
+        if gl1 >= 1 { by_col = CoerceNumber(&args[gx1]) != 0 ? 1 : 0 }
+    }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&gx2,&gl2)
+        if gl2 >= 1 { exactly_once = CoerceNumber(&args[gx2]) != 0 ? 1 : 0 }
+    }
+    ncount = by_col != 0 ? cols : rows
+    if ncount > 256 { ncount = 256 }
+    i = 0
+    while i < ncount {
+        keep[i] = 1
+        i += 1
+    }
+    i = 0
+    while i < ncount {
+        j = 0
+        while j < i {
+            same: int = 0
+            if by_col != 0 {
+                c2: int = 0
+                same = 1
+                while c2 < rows {
+                    cmp: int = CompareVals(&args[gx0 + c2 * cols + i],&args[gx0 + c2 * cols + j])
+                    if cmp != 0 { same = 0 }
+                    c2 += 1
+                }
+            }
+else {
+                same = RowColEqual(args,gx0,cols,i,j)
+            }
+            if same != 0 {
+                keep[i] = 0
+                if exactly_once != 0 { keep[j] = 0 }
+            }
+            j += 1
+        }
+        i += 1
+    }
+    i = 0
+    while i < ncount {
+        if keep[i] != 0 { first = i; break }
+        i += 1
+    }
+    if first < 0 { return ValError(ERR_VALUE) }
+    if by_col != 0 {
+        return ValNumber(CoerceNumber(&args[gx0 + first]))
+    }
+    return ValNumber(CoerceNumber(&args[gx0 + first * cols]))
+}
+
+EigenMaxIndex :: (matrix: [16][16] double, row: int, row_n: int, size: int) -> int {
+    i: int = 0
+    res: int = row_n + 1
+    maxv: double = 0
+    if res >= size {
+        return size - 1
+    }
+    maxv = fabs(matrix[row][res])
+    i = res + 1
+    while i < size {
+        if fabs(matrix[row][i]) > maxv {
+            res = i
+            maxv = fabs(matrix[row][i])
+        }
+        i += 1
+    }
+    return res
+}
+
+FnEigen :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    a: [16][16] double = {0}
+    ar: int = 0
+    ac: int = 0
+    ok: int = 0
+    n: int = 0
+    c: int = 0
+    r: int = 0
+    k: int = 0
+    i: int = 0
+    m: int = 0
+    l: int = 0
+    state: int = 0
+    counter: int = 0
+    ind: [16] int = {0}
+    changed: [16] int = {0}
+    eigv: [16][16] double = {0}
+    eigenvalues: [16] double = {0}
+    evsort_val: [16] double = {0}
+    evsort_idx: [16] int = {0}
+    pivot: double = 0
+    y: double = 0
+    t: double = 0
+    s: double = 0
+    cc: double = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 1 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    ok = MatFromGroup(args,gx0,gl0,st->call_group_cols[gx0],&a[0][0],&ar,&ac)
+    if ok < 0 { return ValError(args[gx0].err) }
+    if ok == 0 { return ValError(ERR_VALUE) }
+    if ar != ac { return ValError(ERR_VALUE) }
+    n = ar
+    c = 0
+    while c < n {
+        r = c + 1
+        while r < n {
+            av: double = (a[r][c] + a[c][r]) / 2
+            a[r][c] = av
+            a[c][r] = av
+            r += 1
+        }
+        c += 1
+    }
+    state = n
+    i = 0
+    while i < n {
+        j2: int = 0
+        while j2 < n {
+            eigv[j2][i] = 0
+            j2 += 1
+        }
+        eigv[i][i] = 1
+        eigenvalues[i] = a[i][i]
+        ind[i] = EigenMaxIndex(a,i,i,n)
+        changed[i] = 1
+        i += 1
+    }
+    while n > 1 && state != 0 {
+        counter += 1
+        if counter > 400000 { return ValError(ERR_NUM) }
+        m = 0
+        k = 1
+        while k < n - 1 {
+            if fabs(a[k][ind[k]]) > fabs(a[m][ind[m]]) { m = k }
+            k += 1
+        }
+        l = ind[m]
+        pivot = a[m][l]
+        if pivot == 0 { break }
+        y = (eigenvalues[l] - eigenvalues[m]) / 2
+        t = fabs(y) + hypot(pivot,y)
+        s = hypot(pivot,t)
+        cc = t / s
+        s = pivot / s
+        t = pivot * pivot / t
+        if y < 0 {
+            s = -s
+            t = -t
+        }
+        a[m][l] = 0
+        i = 0
+        while i < n {
+            yk: double = eigenvalues[i]
+            if i == m { eigenvalues[i] -= t }
+            if i == l { eigenvalues[i] += t }
+            unchanged: int = yk == eigenvalues[i] ? 1 : 0
+            if i == m || i == l {
+                if changed[i] != 0 && unchanged != 0 {
+                    changed[i] = 0
+                    state -= 1
+                }
+else if changed[i] == 0 && unchanged == 0 {
+                    changed[i] = 1
+                    state += 1
+                }
+            }
+            i += 1
+        }
+        i = 0
+        while i < m {
+            x2: double = cc * a[i][m] - s * a[i][l]
+            y2: double = s * a[i][m] + cc * a[i][l]
+            a[i][m] = x2
+            a[i][l] = y2
+            i += 1
+        }
+        i = m + 1
+        while i < l {
+            x2: double = cc * a[m][i] - s * a[i][l]
+            y2: double = s * a[m][i] + cc * a[i][l]
+            a[m][i] = x2
+            a[i][l] = y2
+            i += 1
+        }
+        i = l + 1
+        while i < n {
+            x2: double = cc * a[m][i] - s * a[l][i]
+            y2: double = s * a[m][i] + cc * a[l][i]
+            a[m][i] = x2
+            a[l][i] = y2
+            i += 1
+        }
+        i = 0
+        while i < n {
+            x3: double = cc * eigv[i][m] - s * eigv[i][l]
+            y3: double = s * eigv[i][m] + cc * eigv[i][l]
+            eigv[i][m] = x3
+            eigv[i][l] = y3
+            i += 1
+        }
+        ind[m] = EigenMaxIndex(a,m,m,n)
+        ind[l] = EigenMaxIndex(a,l,l,n)
+    }
+    i = 0
+    while i < n {
+        evsort_val[i] = eigenvalues[i]
+        evsort_idx[i] = i
+        i += 1
+    }
+    i = 1
+    while i < n {
+        v2: double = evsort_val[i]
+        i2: int = evsort_idx[i]
+        j3: int = i - 1
+        while j3 >= 0 {
+            va: double = fabs(evsort_val[j3])
+            vb: double = fabs(v2)
+            keep: int = 0
+            if vb > va { keep = 1 }
+            else if vb < va { keep = 0 }
+            else if v2 > evsort_val[j3] { keep = 1 }
+            if keep == 0 { break }
+            evsort_val[j3 + 1] = evsort_val[j3]
+            evsort_idx[j3 + 1] = evsort_idx[j3]
+            j3 -= 1
+        }
+        evsort_val[j3 + 1] = v2
+        evsort_idx[j3 + 1] = i2
+        i += 1
+    }
+    return ValNumber(eigenvalues[evsort_idx[0]])
+}
+
+FnCholesky :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    gx0: int = 0
+    gl0: int = 0
+    a: [16][16] double = {0}
+    b: [16][16] double = {0}
+    ar: int = 0
+    ac: int = 0
+    ok: int = 0
+    n: int = 0
+    r: int = 0
+    c: int = 0
+    k: int = 0
+    sum: double = 0
+    if groups < 1 { return ValError(ERR_VALUE) }
+    if groups > 1 { return ValError(ERR_NA) }
+    GroupBounds(marks,count,0,&gx0,&gl0)
+    ok = MatFromGroup(args,gx0,gl0,st->call_group_cols[gx0],&a[0][0],&ar,&ac)
+    if ok < 0 { return ValError(args[gx0].err) }
+    if ok == 0 { return ValError(ERR_VALUE) }
+    if ar != ac { return ValError(ERR_VALUE) }
+    n = ar
+    c = 0
+    while c < n {
+        r = c + 1
+        while r < n {
+            av: double = (a[r][c] + a[c][r]) / 2
+            a[r][c] = av
+            a[c][r] = av
+            r += 1
+        }
+        c += 1
+    }
+    r = 0
+    while r < n {
+        c = 0
+        while c < r {
+            sum = 0
+            k = 0
+            while k < c {
+                sum += b[r][k] * b[c][k]
+                k += 1
+            }
+            b[c][r] = 0
+            b[r][c] = (a[r][c] - sum) / b[c][c]
+            c += 1
+        }
+        sum = 0
+        k = 0
+        while k < r {
+            sum += b[r][k] * b[r][k]
+            k += 1
+        }
+        b[r][r] = sqrt(a[r][r] - sum)
+        r += 1
+    }
+    return ValNumber(b[0][0])
 }
 
 
