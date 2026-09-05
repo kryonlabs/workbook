@@ -7449,17 +7449,35 @@ Lgamma1p :: (a: double) -> double {
 }
 
 dgamma_go :: (x: double, shape: double, scale: double, give_log: int) -> double {
+    if (x != x || shape != shape || scale != scale) { return x + shape + scale }
+    if shape < 0 || scale <= 0 { return 0.0 / 0.0 }
+    if x < 0 { return give_log != 0 ? -1e308 * 10 : 0.0 }
+    if shape == 0 {
+        if x == 0 { return 1e308 * 10 }
+        return give_log != 0 ? -1e308 * 10 : 0.0
+    }
+    if x == 0 {
+        if shape < 1 { return 1e308 * 10 }
+        if shape > 1 { return give_log != 0 ? -1e308 * 10 : 0.0 }
+        if give_log != 0 { return 0 - log(scale) }
+        return 1 / scale
+    }
     if (x <= 0 || shape <= 0 || scale <= 0) {
         return give_log != 0 ? -1e308 * 10 : 0.0
     }
-    if x < 1 {
-        pr: double = Pow1p(x / scale,shape - 1) * exp(0 - x / scale) / scale / shape * exp(lgamma1p_raw(shape))
-        if give_log != 0 { return log(pr) }
-        return pr
+    if shape < 1 {
+        pr3: double = dpois_raw(shape,x / scale,give_log)
+        if give_log != 0 {
+            if isfinite(shape / x) != 0 {
+                return pr3 + log(shape / x)
+            }
+            return pr3 + log(shape) - log(x)
+        }
+        return pr3 * shape / x
     }
-    pr2: double = exp(0 - x / scale + shape * log(x / scale) - lgamma(shape) - log(scale))
-    if give_log != 0 { return log(pr2) }
-    return pr2
+    pr2: double = dpois_raw(shape - 1,x / scale,give_log)
+    if give_log != 0 { return pr2 - log(scale) }
+    return pr2 / scale
 }
 
 dnorm_go :: (x: double, mu: double, sigma: double, give_log: int) -> double {
@@ -9146,13 +9164,14 @@ PFuncInverter :: (which: int, p: double, shape: double *, lower_tail: int, log_p
     e: double = 0
     px: double = 0
     i: int = 0
+    newton: int = 0
     dt_0: double = lower_tail != 0 ? 0.0 : 1.0
     dt_1: double = lower_tail != 0 ? 1.0 : 0.0
     if log_p != 0 {
         if p > 0 { return 0.0 / 0.0 }
     }
 else {
-        if (p < 0 || p > 1) { return 0.0 / 0.0 }
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
     }
     if p == dt_0 { return xlow }
     if p == dt_1 { return xhigh }
@@ -9172,7 +9191,7 @@ else if (have_xlow != 0 && x0_in <= xlow) {
                 x = have_xhigh != 0 ? xlow + (xhigh - xlow) / 100 : xlow + 1
             }
 else if (have_xhigh != 0 && x0_in >= xhigh) {
-                x = have_xlow != 0 ? xhigh - (xhigh - xlow) / 100 : xhigh - 1
+                x = have_xhigh != 0 ? xhigh - (xhigh - xlow) / 100 : xhigh - 1
             }
 else {
                 x = 0
@@ -9195,11 +9214,15 @@ else if (have_xlow != 0 && have_xhigh != 0) {
                 x = xhigh - (xhigh - xlow) * (exhigh / (exhigh - exlow))
             }
 else if m8 == 4 {
-                if (xlow >= 0 && xhigh >= 0) {
-                    x = sqrt(fmax(2.2250738585072014e-308,xlow)) * sqrt(xhigh)
+                if xlow >= 0 && xhigh >= 0 {
+                    xl2: double = xlow
+                    if xl2 < 2.2250738585072014e-308 { xl2 = 2.2250738585072014e-308 }
+                    x = sqrt(xl2) * sqrt(xhigh)
                 }
 else if (xlow <= 0 && xhigh <= 0) {
-                    x = 0 - sqrt(0 - xlow) * sqrt(fmax(2.2250738585072014e-308,0 - xhigh))
+                    xh2: double = 0 - xhigh
+                    if xh2 < 2.2250738585072014e-308 { xh2 = 2.2250738585072014e-308 }
+                    x = 0 - sqrt(0 - xlow) * sqrt(xh2)
                 }
 else {
                     x = 0
@@ -9221,88 +9244,75 @@ else if have_xlow != 0 {
 else {
             x = xhigh > -1 ? -1 : (2 * i) * xhigh
         }
-        if (have_xlow != 0 && x <= xlow) || (have_xhigh != 0 && x >= xhigh) {
-            i += 1
-            continue
-        }
-        if which == 1 {
-            px = pbeta(x,shape[0],shape[1],lower_tail,log_p)
-        }
-else {
-            px = pgamma(x,shape[0],1,lower_tail,log_p)
-        }
-        e = px - p
-        if lower_tail == 0 { e = 0 - e }
-        if e == 0 {
-            break
-        }
-else if e > 0 {
-            xhigh = x
-            exhigh = e
-            have_xhigh = 1
-        }
-else if e < 0 {
-            xlow = x
-            exlow = e
-            have_xlow = 1
-        }
-        if (have_xlow != 0 && have_xhigh != 0) {
-            prec: double = (xhigh - xlow) / (fabs(xlow) + fabs(xhigh))
-            if prec < 2.2204460492503131e-16 * 4 {
-                x = (xhigh + xlow) / 2
-                if which == 1 {
-                    e = pbeta(x,shape[0],shape[1],lower_tail,log_p) - p
-                }
-else {
-                    e = pgamma(x,shape[0],1,lower_tail,log_p) - p
-                }
-                if lower_tail == 0 { e = 0 - e }
+        newton = 1
+        while newton != 0 {
+            newton = 0
+            if (have_xlow != 0 && x <= xlow) || (have_xhigh != 0 && x >= xhigh) {
                 break
             }
-            if i % 3 < 2 {
-                d2: double = 0
-                if which == 1 {
-                    d2 = dbeta(x,shape[0],shape[1],0)
-                }
+            if which == 1 {
+                px = pbeta(x,shape[0],shape[1],lower_tail,log_p)
+            }
 else {
-                    d2 = dgamma_go(x,shape[0],1,0)
-                }
-                if d2 != 0 {
-                    xn2: double = x - e / d2 * 1.000001
-                    if (xn2 > xlow && xn2 < xhigh) {
-                        x = xn2
-                        i += 1
-                        if which == 1 {
-                            px = pbeta(x,shape[0],shape[1],lower_tail,log_p)
-                        }
-else {
-                            px = pgamma(x,shape[0],1,lower_tail,log_p)
-                        }
-                        e = px - p
-                        if lower_tail == 0 { e = 0 - e }
-                        if e == 0 {
-                            break
-                        }
+                px = pgamma(x,shape[0],1,lower_tail,log_p)
+            }
+            e = px - p
+            if lower_tail == 0 { e = 0 - e }
+            if e == 0 {
+                i = 100
+            }
 else if e > 0 {
-                            xhigh = x
-                            exhigh = e
-                            have_xhigh = 1
-                        }
+                xhigh = x
+                exhigh = e
+                have_xhigh = 1
+            }
 else if e < 0 {
-                            xlow = x
-                            exlow = e
-                            have_xlow = 1
+                xlow = x
+                exlow = e
+                have_xlow = 1
+            }
+            if i >= 100 { break }
+            if (have_xlow != 0 && have_xhigh != 0) {
+                prec: double = (xhigh - xlow) / (fabs(xlow) + fabs(xhigh))
+                if prec < 2.2204460492503131e-16 * 4 {
+                    x = (xhigh + xlow) / 2
+                    if which == 1 {
+                        e = pbeta(x,shape[0],shape[1],lower_tail,log_p) - p
+                    }
+else {
+                        e = pgamma(x,shape[0],1,lower_tail,log_p) - p
+                    }
+                    if lower_tail == 0 { e = 0 - e }
+                    i = 100
+                    break
+                }
+                if (i % 3 < 2) && (i == 0 || prec < 0.05) {
+                    d2: double = 0
+                    if which == 1 {
+                        d2 = dbeta(x,shape[0],shape[1],0)
+                    }
+else {
+                        d2 = dgamma_go(x,shape[0],1,0)
+                    }
+                    if d2 != 0 {
+                        x = x - e / d2 * 1.000001
+                        if (x > xlow && x < xhigh) {
+                            i += 1
+                            newton = 1
                         }
                     }
                 }
             }
         }
+        if i >= 100 { break }
         i += 1
     }
-    if (have_xhigh != 0 && fabs(e) > exhigh) {
+    if have_xhigh != 0 && fabs(e) > exhigh {
+        e = exhigh
         x = xhigh
     }
-    if (have_xlow != 0 && fabs(e) > 0 - exlow) {
+    if have_xlow != 0 && fabs(e) > 0 - exlow {
+        e = exlow
         x = xlow
     }
     return x
@@ -9844,7 +9854,7 @@ phyper :: (x: double, NR: double, NB: double, n: double, lower_tail: int, log_p:
     }
     d  = dhyper (x, NR, NB, n, log_p)
     pd = pdhyper(x, NR, NB, n, log_p)
-    return log_p != 0 ? (lower_tail != 0 ? (d + pd) : swap_log_tail(d + pd)) : (d * pd)
+    return log_p != 0 ? (lower_tail != 0 ? (d + pd) : swap_log_tail(d + pd)) : (lower_tail != 0 ? d * pd : 1 - d * pd)
 }
 
 /* == dhyper == */
@@ -13464,6 +13474,63 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
         }
         return ValNumber(dbeta((bx - lo) / (hi - lo),alpha2,beta2,0) / (hi - lo))
     }
+    if strcmp(name,"r.dnorm") == 0 { return ValNumber(dnorm_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dchisq") == 0 { return ValNumber(DchisqGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0)) }
+    if strcmp(name,"r.dexp") == 0 { return ValNumber(dexp_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]))) }
+    if strcmp(name,"r.df") == 0 { return ValNumber(DfGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dgamma") == 0 { return ValNumber(dgamma_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dgeom") == 0 { return ValNumber(DgeomGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0)) }
+    if strcmp(name,"r.dgumbel") == 0 { return ValNumber(DgumbelGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dhyper") == 0 { return ValNumber(dhyper(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),0)) }
+    if strcmp(name,"r.dlnorm") == 0 { return ValNumber(DlnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dnbinom") == 0 { return ValNumber(dnbinom(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dpois") == 0 { return ValNumber(dpois_wrap(CoerceNumber(&args[0]) + 1,CoerceNumber(&args[1]),0)) }
+    if strcmp(name,"r.drayleigh") == 0 { return ValNumber(DRayleighGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]))) }
+    if strcmp(name,"r.dsnorm") == 0 { return ValNumber(DsnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),0)) }
+    if strcmp(name,"r.dst") == 0 { return ValNumber(DstGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dt") == 0 { return ValNumber(dt_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0)) }
+    if strcmp(name,"r.dweibull") == 0 { return ValNumber(dweibull_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]))) }
+    if strcmp(name,"r.dbeta") == 0 { return ValNumber(dbeta(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dbinom") == 0 { return ValNumber(dbinom(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.dcauchy") == 0 { return ValNumber(DcauchyGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0)) }
+    if strcmp(name,"r.pnorm") == 0 { return ValNumber(pnorm(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pchisq") == 0 { return ValNumber(pchisq(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pexp") == 0 { return ValNumber(pexp_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pf") == 0 { return ValNumber(pf(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pgamma") == 0 { return ValNumber(pgamma(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pgeom") == 0 { return ValNumber(PgeomGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pgumbel") == 0 { return ValNumber(PgumbelGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.phyper") == 0 { return ValNumber(phyper(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),count < 5 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.plnorm") == 0 { return ValNumber(PlnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pnbinom") == 0 { return ValNumber(pnbinom(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.ppois") == 0 { return ValNumber(ppois(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.prayleigh") == 0 { return ValNumber(PrayleighGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.psnorm") == 0 { return ValNumber(PsnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),count < 5 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pst") == 0 { return ValNumber(PstGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pt") == 0 { return ValNumber(pt(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pweibull") == 0 { return ValNumber(pweibull_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pbeta") == 0 { return ValNumber(pbeta(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pbinom") == 0 { return ValNumber(pbinom(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.pcauchy") == 0 { return ValNumber(PcauchyGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qnorm") == 0 { return ValNumber(qnorm(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qchisq") == 0 { return ValNumber(qchisq(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qexp") == 0 { return ValNumber(QexpGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qf") == 0 { return ValNumber(qf(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qgamma") == 0 { return ValNumber(qgamma(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qgeom") == 0 { return ValNumber(QgeomGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qgumbel") == 0 { return ValNumber(QgumbelGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qhyper") == 0 { return ValNumber(QhyperGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),count < 5 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qlnorm") == 0 { return ValNumber(QlnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qnbinom") == 0 { return ValNumber(QNbinomGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qpois") == 0 { return ValNumber(QPoisGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qrayleigh") == 0 { return ValNumber(QrayleighGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qsnorm") == 0 { return ValNumber(QsnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),count < 5 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qst") == 0 { return ValNumber(QstGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qt") == 0 { return ValNumber(qt(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qweibull") == 0 { return ValNumber(QweibullGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qbeta") == 0 { return ValNumber(qbeta(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qbinom") == 0 { return ValNumber(qbinom(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qcauchy") == 0 { return ValNumber(QcauchyGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
     if strcmp(name,"rand") == 0 { return FnRandGen(st,args,count,marks,0) }
     if strcmp(name,"randuniform") == 0 { return FnRandGen(st,args,count,marks,1) }
     if strcmp(name,"randbetween") == 0 { return FnRandGen(st,args,count,marks,2) }
@@ -17086,6 +17153,529 @@ PcauchyGo :: (x_in: double, location: double, scale: double, lower_tail: int, lo
     }
     v2: double = 0.5 + GoAtanPi(x)
     return log_p != 0 ? log(v2) : v2
+}
+
+DchisqGo :: (x: double, df: double, give_log: int) -> double {
+    return dgamma_go(x,df / 2,2,give_log)
+}
+
+DfGo :: (x: double, m: double, n: double, give_log: int) -> double {
+    p2: double = 0
+    q2: double = 0
+    f2: double = 0
+    dens: double = 0
+    if (x != x || m != m || n != n) { return x + m + n }
+    if m <= 0 || n <= 0 { return 0.0 / 0.0 }
+    if x < 0 { return give_log != 0 ? -1e308 * 10 : 0 }
+    if x == 0 {
+        if m > 2 { return give_log != 0 ? -1e308 * 10 : 0 }
+        if m == 2 { return give_log != 0 ? 0.0 : 1.0 }
+        return 1e308 * 10
+    }
+    if isfinite(m) == 0 && isfinite(n) == 0 {
+        if x == 1 { return 1e308 * 10 }
+        return give_log != 0 ? -1e308 * 10 : 0
+    }
+    if isfinite(n) == 0 {
+        return dgamma_go(x,m / 2,2 / m,give_log)
+    }
+    if m > 1e14 {
+        dens = dgamma_go(1 / x,n / 2,2 / n,give_log)
+        if give_log != 0 { return dens - 2 * log(x) }
+        return dens / (x * x)
+    }
+    f2 = 1 / (n + x * m)
+    q2 = n * f2
+    p2 = x * m * f2
+    if m >= 2 {
+        f2 = m * q2 / 2
+        dens = dbinom_raw((m - 2) / 2,(m + n - 2) / 2,p2,q2,give_log)
+    }
+else {
+        f2 = m * m * q2 / (2 * p2 * (m + n))
+        dens = dbinom_raw(m / 2,(m + n) / 2,p2,q2,give_log)
+    }
+    if give_log != 0 { return log(f2) + dens }
+    return f2 * dens
+}
+
+QexpGo :: (p: double, scale: double, lower_tail: int, log_p: int) -> double {
+    if (p != p || scale != scale) { return p + scale }
+    if scale < 0 { return 0.0 / 0.0 }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+    }
+    if p == 0 { return 0.0 }
+    if log_p != 0 {
+        return 0 - scale * (lower_tail != 0 ? log1p(0 - exp(p)) : p)
+    }
+    return 0 - scale * (lower_tail != 0 ? log1p(0 - p) : log(p))
+}
+
+DlnormGo :: (x: double, logmean: double, logsd: double, give_log: int) -> double {
+    qx: Quad = {0,0}
+    qlx: Quad = {0,0}
+    qs: Quad = {0,0}
+    qy: Quad = {0,0}
+    qt: Quad = {0,0}
+    qsqrt2pi: Quad = {2.5066282746310002,-1.6233650353192337e-16}
+    if (x != x || logmean != logmean || logsd != logsd) { return x + logmean + logsd }
+    if logsd <= 0 { return 0.0 / 0.0 }
+    if x <= 0 { return give_log != 0 ? -1e308 * 10 : 0 }
+    quad_init(&qx,x)
+    quad_log(&qlx,&qx)
+    quad_init(&qt,logmean)
+    quad_sub(&qy,&qlx,&qt)
+    quad_init(&qs,logsd)
+    quad_div(&qy,&qy,&qs)
+    quad_mul(&qy,&qy,&qy)
+    qy.h *= -0.5
+    qy.l *= -0.5
+    quad_mul(&qt,&qs,&qx)
+    quad_mul(&qt,&qt,&qsqrt2pi)
+    if give_log != 0 {
+        quad_log(&qt,&qt)
+        quad_sub(&qy,&qy,&qt)
+    }
+else {
+        quad_exp(&qy,NULL,&qy)
+        quad_div(&qy,&qy,&qt)
+    }
+    return quad_val(&qy)
+}
+
+PlnormGo :: (x: double, logmean: double, logsd: double, lower_tail: int, log_p: int) -> double {
+    if (x != x || logmean != logmean || logsd != logsd) { return x + logmean + logsd }
+    if logsd <= 0 { return 0.0 / 0.0 }
+    if x > 0 {
+        return pnorm(log(x),logmean,logsd,lower_tail,log_p)
+    }
+    return lower_tail != 0 ? (log_p != 0 ? -1e308 * 10 : 0.0) : (log_p != 0 ? 0.0 : 1.0)
+}
+
+QlnormGo :: (p: double, logmean: double, logsd: double, lower_tail: int, log_p: int) -> double {
+    if (p != p || logmean != logmean || logsd != logsd) { return p + logmean + logsd }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+    }
+    return exp(qnorm(p,logmean,logsd,lower_tail,log_p))
+}
+
+QweibullGo :: (p: double, shape: double, scale: double, lower_tail: int, log_p: int) -> double {
+    if (p != p || shape != shape || scale != scale) { return p + shape + scale }
+    if shape <= 0 || scale <= 0 { return 0.0 / 0.0 }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+        if p == 0 { return lower_tail != 0 ? 0.0 : 1e308 * 10 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+        if p == 0 { return lower_tail != 0 ? 0.0 : 1e308 * 10 }
+        if p == 1 { return lower_tail != 0 ? 1e308 * 10 : 0.0 }
+    }
+    cval: double = 0
+    if log_p != 0 {
+        cval = lower_tail != 0 ? log1p(0 - exp(p)) : p
+    }
+else {
+        cval = lower_tail != 0 ? 0 - log1p(0 - p) : log(p)
+    }
+    return scale * pow(cval,1 / shape)
+}
+
+PrayleighGo :: (x: double, scale: double, lower_tail: int, log_p: int) -> double {
+    return pweibull_go(x,2,1.4142135623730951 * scale,lower_tail,log_p)
+}
+
+QrayleighGo :: (p: double, scale: double, lower_tail: int, log_p: int) -> double {
+    return QweibullGo(p,2,1.4142135623730951 * scale,lower_tail,log_p)
+}
+
+DgeomGo :: (x: double, p: double, give_log: int) -> double {
+    prob2: double = 0
+    if (x != x || p != p) { return x + p }
+    if p <= 0 || p > 1 { return 0.0 / 0.0 }
+    if x < 0 || isfinite(x) == 0 || p == 0 {
+        return give_log != 0 ? -1e308 * 10 : 0
+    }
+    x = round(x)
+    prob2 = dbinom_raw(0,x,p,1 - p,give_log)
+    if give_log != 0 { return prob2 + log(p) }
+    return prob2 * p
+}
+
+PgeomGo :: (x: double, p: double, lower_tail: int, log_p: int) -> double {
+    if (x != x || p != p) { return x + p }
+    if p <= 0 || p > 1 { return 0.0 / 0.0 }
+    if x < 0 { return lower_tail != 0 ? (log_p != 0 ? -1e308 * 10 : 0.0) : (log_p != 0 ? 0.0 : 1.0) }
+    if isfinite(x) == 0 { return lower_tail != 0 ? (log_p != 0 ? 0.0 : 1.0) : (log_p != 0 ? -1e308 * 10 : 0.0) }
+    x = eval_fake_floor(x)
+    if p == 1 {
+        if lower_tail != 0 { return log_p != 0 ? 0.0 : 1.0 }
+        return log_p != 0 ? -1e308 * 10 : 0.0
+    }
+    x = log1p(0 - p) * (x + 1)
+    if log_p != 0 {
+        return lower_tail != 0 ? log1p(0 - exp(x)) : x
+    }
+    if lower_tail != 0 { return 0 - expm1(x) }
+    return exp(x)
+}
+
+QgeomGo :: (p: double, prob2: double, lower_tail: int, log_p: int) -> double {
+    if (p != p || prob2 != prob2) { return p + prob2 }
+    if prob2 <= 0 || prob2 > 1 { return 0.0 / 0.0 }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+        if p == 0 { return 0.0 }
+        if p == 0.0 { return 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+        if p == 0 { return 0.0 }
+        if p == 1 { return 1e308 * 10 }
+    }
+    if prob2 == 1 { return 0 }
+    cval: double = 0
+    if log_p != 0 {
+        cval = lower_tail != 0 ? log1p(0 - exp(p)) : p
+    }
+else {
+        cval = lower_tail != 0 ? log1p(0 - p) : log(p)
+    }
+    v2: double = cval / log1p(0 - prob2) - 1 - 1e-12
+    if v2 < 0 { v2 = 0 }
+    return ceil(v2)
+}
+
+DgumbelGo :: (x: double, mu: double, beta: double, give_log: int) -> double {
+    z: double = (x - mu) / beta
+    lval: double = 0 - (z + exp(0 - z)) - log(beta)
+    if give_log != 0 { return lval }
+    return exp(lval)
+}
+
+PgumbelGo :: (x: double, mu: double, beta: double, lower_tail: int, log_p: int) -> double {
+    z: double = (x - mu) / beta
+    val: double = exp(0 - exp(0 - z))
+    if lower_tail != 0 { return log_p != 0 ? log(val) : val }
+    if log_p != 0 { return log1p(0 - val) }
+    return 1 - val
+}
+
+QgumbelGo :: (p: double, mu: double, beta: double, lower_tail: int, log_p: int) -> double {
+    if lower_tail != 0 { return mu - beta * log(0 - log(p)) }
+    return mu - beta * log(0 - log1p(0 - p))
+}
+
+DsnormGo :: (x: double, shape: double, location: double, scale: double, give_log: int) -> double {
+    z: double = (x - location) / scale
+    val: double = 2 / scale * dnorm_go(z,0,1,0) * pnorm(shape * z,0,1,1,0)
+    if give_log != 0 { return log(val) }
+    return val
+}
+
+PsnormGo :: (x: double, shape: double, location: double, scale: double, lower_tail: int, log_p: int) -> double {
+    z: double = (x - location) / scale
+    val: double = pnorm(z,0,1,1,0) - 2 * OwentT(z,shape)
+    if lower_tail != 0 { return log_p != 0 ? log(val) : val }
+    val2: double = 1 - val
+    return log_p != 0 ? log(val2) : val2
+}
+
+QsnormGo :: (p: double, shape: double, location: double, scale: double, lower_tail: int, log_p: int) -> double {
+    z: double = GenInvSnorm(p,shape,lower_tail)
+    return location + scale * z
+}
+
+GenInvSnorm :: (p: double, shape: double, lower_tail: int) -> double {
+    lo: double = -50
+    hi: double = 50
+    mid: double = 0
+    i: int = 0
+    i = 0
+    while i < 200 {
+        mid = (lo + hi) / 2
+        if PsnormGo(mid * shape >= 0 ? mid : mid,shape,0,1,lower_tail,0) < p {
+            lo = mid
+        }
+else {
+            hi = mid
+        }
+        i += 1
+    }
+    return (lo + hi) / 2
+}
+
+DstGo :: (x: double, df: double, shape: double, give_log: int) -> double {
+    z: double = x
+    inner: double = shape * z * sqrt((df + 1) / (df + z * z))
+    val: double = 2 * dt_go(z,df,0) * pt(inner,df + 1,1,0)
+    if give_log != 0 { return log(val) }
+    return val
+}
+
+PstGo :: (x: double, df: double, shape: double, lower_tail: int, log_p: int) -> double {
+    step: double = 0.01
+    total: double = 0
+    xx: double = -50
+    if x <= -50 {
+        return lower_tail != 0 ? (log_p != 0 ? -1e308 * 10 : 0.0) : (log_p != 0 ? 0.0 : 1.0)
+    }
+    total = 0
+    xx = -50
+    while xx < x {
+        midp: double = xx + step / 2
+        total += DstGo(midp,df,shape,0) * step
+        xx += step
+    }
+    if lower_tail != 0 { return log_p != 0 ? log(total) : total }
+    return log_p != 0 ? log1p(0 - total) : 1 - total
+}
+
+QstGo :: (p: double, df: double, shape: double, lower_tail: int, log_p: int) -> double {
+    lo: double = -50
+    hi: double = 50
+    mid: double = 0
+    i: int = 0
+    i = 0
+    while i < 200 {
+        mid = (lo + hi) / 2
+        if PstGo(mid,df,shape,lower_tail,0) < p {
+            lo = mid
+        }
+else {
+            hi = mid
+        }
+        i += 1
+    }
+    return (lo + hi) / 2
+}
+
+QcauchyGo :: (p_in: double, location: double, scale: double, lower_tail_in: int, log_p_in: int) -> double {
+    p: double = p_in
+    lower_tail: int = lower_tail_in
+    log_p: int = log_p_in
+    x: double = 0
+    if (p != p || location != location || scale != scale) { return p + location + scale }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+    }
+    if scale < 0 || isfinite(scale) == 0 { return 0.0 / 0.0 }
+    if log_p != 0 {
+        if p > -1 {
+            lower_tail = (lower_tail == 0)
+            p = 0 - expm1(p)
+        }
+else {
+            p = exp(p)
+        }
+        log_p = 0
+    }
+else {
+        if p > 0.5 {
+            p = 1 - p
+            lower_tail = (lower_tail == 0)
+        }
+    }
+    x = location + (lower_tail != 0 ? 0 - scale : scale) * (GoCospi(p) / GoSinpi(p))
+    return x
+}
+
+QNbinomGo :: (p: double, size: double, prob2: double, lower_tail: int, log_p: int) -> double {
+    shape: [3] double = {0}
+    mu: double = 0
+    sigma: double = 0
+    if (p != p || size != size || prob2 != prob2) { return p + size + prob2 }
+    if size <= 0 || prob2 <= 0 || prob2 > 1 { return 0.0 / 0.0 }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+    }
+    shape[0] = size
+    shape[1] = prob2
+    mu = size * (1 - prob2) / prob2
+    sigma = sqrt(size * (1 - prob2)) / prob2
+    return DiscPFuncInverter(p,shape,lower_tail,log_p,0,1e308 * 10,mu + sigma * qnorm(p,0,1,lower_tail,log_p),1)
+}
+
+QPoisGo :: (p: double, lambda: double, lower_tail: int, log_p: int) -> double {
+    shape: [3] double = {0}
+    mu: double = 0
+    sigma: double = 0
+    if (p != p || lambda != lambda) { return p + lambda }
+    if lambda < 0 { return 0.0 / 0.0 }
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+    }
+    shape[0] = lambda
+    mu = lambda
+    sigma = sqrt(lambda)
+    return DiscPFuncInverter(p,shape,lower_tail,log_p,0,1e308 * 10,mu + sigma * qnorm(p,0,1,lower_tail,log_p),2)
+}
+
+DiscPFuncInverter :: (p: double, shape: double *, lower_tail: int, log_p: int, xlow_in: double, xhigh_in: double, x0_in: double, which: int) -> double {
+    have_xlow: int = isfinite(xlow_in) != 0 ? 1 : 0
+    have_xhigh: int = isfinite(xhigh_in) != 0 ? 1 : 0
+    check_left: int = 1
+    xlow: double = xlow_in
+    xhigh: double = xhigh_in
+    x0: double = x0_in
+    step: double = 0
+    i: int = 0
+    ex0: double = 0
+    dt0: double = lower_tail != 0 ? 0.0 : 1.0
+    dt1: double = lower_tail != 0 ? 1.0 : 0.0
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if p < 0 || p > 1 { return 0.0 / 0.0 }
+    }
+    if p == dt0 { return xlow }
+    if p == dt1 { return xhigh }
+    if isfinite(x0) != 0 && x0 >= xlow && x0 <= xhigh {
+        x0 = x0
+    }
+else if have_xlow != 0 && have_xhigh != 0 {
+        x0 = (xlow + xhigh) / 2
+    }
+else if have_xhigh != 0 {
+        x0 = xhigh
+    }
+else if have_xlow != 0 {
+        x0 = xlow
+    }
+else {
+        x0 = 0
+    }
+    x0 = round(x0)
+    step = 1 + floor(fabs(x0) * 2.220446049250313e-16)
+    i = 1
+    while 1 {
+        if which == 0 {
+            ex0 = phyper(x0,shape[0],shape[1],shape[2],lower_tail,log_p) - p
+        }
+else if which == 1 {
+            ex0 = pnbinom(x0,shape[0],shape[1],lower_tail,log_p) - p
+        }
+else {
+            ex0 = ppois(x0,shape[0],lower_tail,log_p) - p
+        }
+        if lower_tail == 0 { ex0 = 0 - ex0 }
+        if ex0 == 0 {
+            return x0
+        }
+else if ex0 < 0 {
+            xlow = x0
+            have_xlow = 1
+            check_left = 0
+        }
+else {
+            xhigh = x0
+            have_xhigh = 1
+            step = 0 - fabs(step)
+        }
+        if i > 1 && have_xlow != 0 && have_xhigh != 0 {
+            xmid: double = floor((xlow + xhigh) / 2)
+            if xmid - xlow < 0.5 || xmid - xlow < fabs(xlow) * 2.220446049250313e-16 {
+                if check_left != 0 {
+                    e2: double = 0
+                    if which == 0 {
+                        e2 = phyper(xlow,shape[0],shape[1],shape[2],lower_tail,log_p) - p
+                    }
+else if which == 1 {
+                        e2 = pnbinom(xlow,shape[0],shape[1],lower_tail,log_p) - p
+                    }
+else {
+                        e2 = ppois(xlow,shape[0],lower_tail,log_p) - p
+                    }
+                    if lower_tail == 0 { e2 = 0 - e2 }
+                    if e2 >= 0 {
+                        return xlow
+                    }
+                }
+                return xhigh
+            }
+            x0 = xmid
+        }
+else {
+            x1: double = x0 + step
+            if x1 == x0 {
+                return 0.0 / 0.0
+            }
+else if x1 >= xlow && x1 <= xhigh {
+                x0 = x1
+                step *= 2 * i
+            }
+else {
+                newstep: double = 1 + floor(fabs(x0) * 2.220446049250313e-16)
+                if step > 0 {
+                    step = newstep
+                }
+else {
+                    step = 0 - newstep
+                }
+                x1 = x0 + step
+                if x1 >= xlow && x1 <= xhigh {
+                    i += 1
+                    continue
+                }
+                if step > 0 { return xhigh }
+                return xlow
+            }
+        }
+        i += 1
+    }
+    return 0
+}
+
+QhyperGo :: (p: double, nr: double, nb: double, n: double, lower_tail: int, log_p: int) -> double {
+    nn2: double = nr + nb
+    mu: double = 0
+    sigma: double = 0
+    sigma_gamma: double = 0
+    z: double = 0
+    y: double = 0
+    shape: [3] double = {0}
+    lo: double = 0
+    hi: double = 0
+    if (p != p || nn2 != nn2 || n != n) { return p + nn2 + n }
+    if isfinite(p) == 0 || isfinite(nn2) == 0 || nr < 0 || nb < 0 || n < 0 || n > nn2 {
+        return 0.0 / 0.0
+    }
+    shape[0] = nr
+    shape[1] = nb
+    shape[2] = n
+    if nn2 > 2 {
+        mu = n * nr / nn2
+        sigma = sqrt(nr * nb * n * (nn2 - n) / (nn2 * nn2 * (nn2 - 1)))
+        sigma_gamma = (nn2 - 2 * nr) * (nn2 - 2 * n) / ((nn2 - 2) * nn2)
+        z = qnorm(p,0,1,lower_tail,log_p)
+        y = mu + sigma * z + sigma_gamma * (z * z - 1) / 6
+    }
+else {
+        y = 0
+    }
+    lo = n - nb
+    if lo < 0 { lo = 0 }
+    hi = n
+    if nr < hi { hi = nr }
+    return DiscPFuncInverter(p,shape,lower_tail,log_p,lo,hi,y,0)
 }
 
 Random01 :: () -> double {
