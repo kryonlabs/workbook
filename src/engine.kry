@@ -1200,6 +1200,17 @@ CellDisplayText :: (cell: Cell *, out: char *, cap: int) {
         SerialToTimeText(cell->cached_number,out,cap)
         return
     }
+    if cell->cached_kind == VAL_FLOAT && cell->hint == 3 {
+        dbuf: [32] char = ""
+        SerialToDateText((int)cell->cached_number,dbuf,sizeof(dbuf))
+        if cell->cached_number - (int)cell->cached_number == 0 {
+            snprintf(out,cap,"%s",dbuf)
+            return
+        }
+        snprintf(out,cap,"%s ",dbuf)
+        SerialToTimeText(cell->cached_number - (int)cell->cached_number,out + strlen(out),cap - strlen(out))
+        return
+    }
     WbCellValueText(&v,out,cap)
 }
 
@@ -13476,6 +13487,9 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"imfact") == 0 { return FnImfact(st,args,count,marks) }
     if strcmp(name,"imgamma") == 0 { return FnImgamma(st,args,count,marks) }
     if strcmp(name,"imigamma") == 0 { return FnImigamma(st,args,count,marks) }
+    if strcmp(name,"unix2date") == 0 { return FnUnix2date(st,args,count,marks) }
+    if strcmp(name,"timevalue") == 0 { return FnTimevalue(st,args,count,marks) }
+    if strcmp(name,"odf.time") == 0 { return FnOdfTime(st,args,count,marks) }
     if strcmp(name,"acot") == 0 { return FnMath1(0,args,count) }
     if strcmp(name,"acoth") == 0 { return FnMath1(1,args,count) }
     if strcmp(name,"acosh") == 0 { return FnMath1(2,args,count) }
@@ -16372,6 +16386,75 @@ else {
     }
     k[0] = k[0] & ((1 << (e + 1)) - 1)
     return xr
+}
+
+FnUnix2date :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    futime: double = 0
+    t: double = 0
+    lt: struct tm * = NULL
+    tzoff: double = 0
+    serial: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    futime = CoerceNumber(&args[0])
+    t = trunc(futime)
+    if fabs(futime - t) >= 1 { return ValError(ERR_VALUE) }
+    tt: time_t = (time_t)t
+    lt = localtime(&tt)
+    if lt == NULL { return ValError(ERR_VALUE) }
+    tzoff = (double)lt->tm_gmtoff
+    serial = (t + tzoff) / 86400.0 + 25569
+    serial += (futime - t) / 86400.0
+    st->hint = 3
+    return ValNumber(serial)
+}
+
+FnTimevalue :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    raw: double = 0
+    text: [128] char = ""
+    n: int = 0
+    nums: [8] int = {0}
+    frac: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[0].kind != VAL_STRING {
+        raw = CoerceNumber(&args[0])
+        return ValNumber(raw - (int)raw)
+    }
+    CoerceText(&args[0],text,sizeof(text))
+    {
+        i: int = 0
+        ni: int = 0
+        cur: int = 0
+        while text[i] != 0 && ni < 8 {
+            ch: int = text[i]
+            if ch >= '0' && ch <= '9' {
+                cur = cur * 10 + (ch - '0')
+            }
+else if ch == ':' {
+                nums[ni] = cur
+                ni += 1
+                cur = 0
+            }
+            i += 1
+        }
+        nums[ni] = cur
+        n = ni + 1
+    }
+    if n >= 2 {
+        secs: int = nums[0] * 3600 + nums[1] * 60 + (n >= 3 ? nums[2] : 0)
+        frac = secs / 86400.0
+        return ValNumber(frac)
+    }
+    return ValError(ERR_VALUE)
+}
+
+FnOdfTime :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    v: Val = FnTime(st,args,count,marks)
+    if v.kind == VAL_FLOAT {
+        st->hint = 3
+    }
+    return v
 }
 
 FnReducepi :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {

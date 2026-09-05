@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+<gnm:SheetNameIndex><gnm:SheetName gnm:Cols="6" gnm:Rows="16">Sheet1</gnm:SheetName></gnm:SheetNameIndex>
+<gnm:Sheets><gnm:Sheet><gnm:Name>Sheet1</gnm:Name><gnm:MaxCol>5</gnm:MaxCol><gnm:MaxRow>15</gnm:MaxRow><gnm:Cells>
+<gnm:Cell Row="0" Col="4">=UNIX2DATE(86400)</gnm:Cell>
+<gnm:Cell Row="1" Col="4">=UNIX2DATE(0)</gnm:Cell>
+<gnm:Cell Row="2" Col="4">=UNIX2DATE(1e9)</gnm:Cell>
+<gnm:Cell Row="3" Col="4">=UNIX2DATE(1234567890)</gnm:Cell>
+
+<gnm:Cell Row="5" Col="4">=TIMEVALUE("12:30:00")</gnm:Cell>
+<gnm:Cell Row="6" Col="4">=TIMEVALUE("00:00")</gnm:Cell>
+<gnm:Cell Row="7" Col="4">=TIMEVALUE("23:59:59")</gnm:Cell>
+<gnm:Cell Row="8" Col="4">=TIMEVALUE(2.75)</gnm:Cell>
+<gnm:Cell Row="9" Col="4">=ODF.TIME(12,30,2)</gnm:Cell>
+<gnm:Cell Row="10" Col="4">=ODF.TIME(0,0,0)</gnm:Cell>
+<gnm:Cell Row="11" Col="4">=ODF.TIME(23,0,30)</gnm:Cell>
+<gnm:Cell Row="12" Col="4">=UNIX2DATE(1e11)</gnm:Cell>
+</gnm:Cells></gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>
