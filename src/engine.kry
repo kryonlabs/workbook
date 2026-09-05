@@ -10,6 +10,10 @@
 #import "time.h"
 
 state {
+    QFACT_MANT_H: [10000] double
+    QFACT_MANT_L: [10000] double
+    QFACT_EXP: [10000] int
+    QFACT_BUILT: int = 0
     BD0_CH: [129] CString = {0}
     BD0_V: [516] double
     BD0_READY: int = 0
@@ -2165,17 +2169,17 @@ GoLogcf :: (x: double, iv: double, dv: double, eps: double) -> double {
         c4 += dv
         a2 = c4 * a1 - c3 * a2
         b2 = c4 * b1 - c3 * b2
-        if (fabs(b2) > scalefactor) {
-            a1 /= scalefactor
-            b1 /= scalefactor
-            a2 /= scalefactor
-            b2 /= scalefactor
+        if (fabs(b2) > (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)) {
+            a1 /= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b1 /= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            a2 /= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b2 /= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
         }
-else if (fabs(b2) < 1 / scalefactor) {
-            a1 *= scalefactor
-            b1 *= scalefactor
-            a2 *= scalefactor
-            b2 *= scalefactor
+else if (fabs(b2) < 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)) {
+            a1 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b1 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            a2 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b2 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
         }
     }
     return a2 / b2
@@ -4332,7 +4336,7 @@ FnMedian :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     return ValNumber((list.data[mid - 1] + list.data[mid]) / 2.0)
 }
 
-FnVar :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int) -> Val {
+FnVarOld :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int) -> Val {
     list: NumList = {0}
     CollectNumbers(args,count,&list)
     if list.saw_error { return FirstError(args,count) }
@@ -4356,7 +4360,7 @@ FnVar :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int) -
 }
 
 FnStdev :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int) -> Val {
-    v: Val = FnVar(st,args,count,marks,sample)
+    v: Val = FnVarOld(st,args,count,marks,sample)
     if v.kind == VAL_ERROR { return v }
     return ValNumber(sqrt(v.number))
 }
@@ -6695,6 +6699,3912 @@ FnBitlshift :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
 
 FnBitrshift :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     return FnBitshift(args,count,0)
+}
+
+kmax_i :: (a: int, b: int) -> int {
+    if a > b { return a }
+    return b
+}
+
+kmin_i :: (a: int, b: int) -> int {
+    if a < b { return a }
+    return b
+}
+
+r_pow_di :: (x: double, n: int) -> double {
+    xn: double = x
+    y: double = 1
+    n2: int = n
+    if n2 < 0 {
+        n2 = -n2
+        if xn != 0 { xn = 1 / xn }
+    }
+    while n2 > 0 {
+        if (n2 & 1) != 0 { y *= xn }
+        n2 >>= 1
+        if n2 > 0 { xn *= xn }
+    }
+    return y
+}
+
+swap_log_tail :: (lp: double) -> double {
+    if (lp > -1 / log(2)) {
+        return log(0 - expm1(lp))
+    }
+    return log1p(0 - exp(lp))
+}
+
+logspace_add_go :: (logx: double, logy: double) -> double {
+    return fmax(logx,logy) + log1p(exp(0 - fabs(logx - logy)))
+}
+
+logspace_sub_go :: (logx: double, logy: double) -> double {
+    return logx + swap_log_tail(logy - logx)
+}
+
+chebyshev_eval :: (x: double, a: double *, n: int) -> double {
+    b0: double = 0
+    b1: double = 0
+    b2: double = 0
+    i: int = 0
+    if (x < -1.0001 || x > 1.0001 || n < 1 || n > 1000) {
+        return 0.0 / 0.0
+    }
+    nx: double = 2 * x
+    i = n - 1
+    while i >= 0 {
+        b2 = b1
+        b1 = b0
+        b0 = nx * b1 - b2 + a[i]
+        i -= 1
+    }
+    return 0.5 * (b0 - b2)
+}
+
+lgammacor :: (x: double) -> double {
+    algmcs: [15] double = {0.1666389480451863247205729650822,0 - 0.1384948176067563840732986059135e-4,0.9810825646924729426157171547487e-8,0 - 0.1809129475572494194263306266719e-10,0.6221098041892605227126015543416e-13,0 - 0.3399615005417721944303330599666e-15,0.2683181998482698748957538846666e-17,0 - 0.2868042435334643284144622399999e-19,0.3962837061046434803679306666666e-21,0 - 0.6831888753985766870111999999999e-23,0.1429227355942498147573333333333e-24,0 - 0.3547598158101070547199999999999e-26,0.1025680058010470912000000000000e-27,0 - 0.3401102254316748799999999999999e-29,0.1276642195630062933333333333333e-30}
+    tmp: double = 0
+    if x < 10 {
+        return 0.0 / 0.0
+    }
+    if x >= 3.745194030963158e306 {
+        return 0.0
+    }
+    if x < 94906265.62425156 {
+        tmp = 10 / x
+        return chebyshev_eval(tmp * tmp * 2 - 1,algmcs,5) / x
+    }
+    return 1 / (x * 12)
+}
+
+lbeta_go :: (a: double, b: double) -> double {
+    corr: double = 0
+    p: double = 0
+    q: double = 0
+    if (a != a || b != b) {
+        return a + b
+    }
+    q = a
+    p = q
+    if b < p {
+        p = b
+    }
+    if b > q {
+        q = b
+    }
+    if p < 0 {
+        return 0.0 / 0.0
+    }
+    if p == 0 {
+        return (1e308*10)
+    }
+    if isfinite(q) == 0 {
+        return (-1e308*10)
+    }
+    if p >= 10 {
+        corr = lgammacor(p) + lgammacor(q) - lgammacor(p + q)
+        return log(q) * -0.5 + 0.918938533204672741780329736406 + corr + (p - 0.5) * log(p / (p + q)) + q * log1p(0 - p / (p + q))
+    }
+    if q >= 10 {
+        corr = lgammacor(q) - lgammacor(p + q)
+        return lgamma(p) + corr + p - p * log(p + q) + (q - 0.5) * log1p(0 - p / (p + q))
+    }
+    if p < 1e-306 {
+        return lgamma(p) + (lgamma(q) - lgamma(p + q))
+    }
+    return lgamma(p) + lgamma(q) - lgamma(p + q)
+}
+
+gnm_fact_port :: (x: double) -> double {
+    mant: Qd = {0,0}
+    e: int = 0
+    r: double = 0
+    if x != x {
+        return 0.0 / 0.0
+    }
+    if (x < 0 && x == floor(x)) {
+        return 0.0 / 0.0
+    }
+    if x >= 536870911 {
+        return (1e308*10)
+    }
+    if x != floor(x) {
+        return tgamma(x + 1)
+    }
+    if qfactf(x,&mant,&e) != 0 {
+        return 0.0 / 0.0
+    }
+    r = Q_Val(&mant)
+    return scalbn(r,e)
+}
+
+Qd :: struct {
+    h: double
+    l: double
+}
+
+Q_Init :: (r: Qd *, hv: double) {
+    r->h = hv
+    r->l = 0
+}
+
+Q_Val :: (a: Qd *) -> double {
+    return a->h + a->l
+}
+
+Q_Neg :: (r: Qd *, a: Qd *) {
+    r->h = 0 - a->h
+    r->l = 0 - a->l
+}
+
+Q_Add :: (r: Qd *, a: Qd *, b: Qd *) {
+    rr: double = a->h + b->h
+    s: double = fabs(a->h) > fabs(b->h) ? a->h - rr + b->h + b->l + a->l : b->h - rr + a->h + a->l + b->l
+    r->h = rr + s
+    r->l = rr - r->h + s
+}
+
+Q_Sub :: (r: Qd *, a: Qd *, b: Qd *) {
+    rr: double = a->h - b->h
+    s: double = fabs(a->h) > fabs(b->h) ? a->h - rr - b->h - b->l + a->l : 0 - b->h - rr + a->h + a->l - b->l
+    r->h = rr + s
+    r->l = rr - r->h + s
+}
+
+Q_Split1 :: (x_in: double, h: double *, t: double *) -> double {
+    x: double = x_in
+    p: double = x * 134217729.0
+    if (isfinite(p) == 0 && isfinite(x) != 0) {
+        x *= 2.2204460492503131e-16
+        p = x * 134217729.0
+        h[0] = x - p + p
+        t[0] = x - h[0]
+        h[0] *= (1 / 2.2204460492503131e-16)
+        t[0] *= (1 / 2.2204460492503131e-16)
+    }
+else {
+        h[0] = x - p + p
+        t[0] = x - h[0]
+    }
+    return x
+}
+
+Q_Mul12 :: (r: Qd *, xv: double, yv: double) {
+    hx: double = 0
+    tx: double = 0
+    hy: double = 0
+    ty: double = 0
+    p: double = 0
+    q: double = 0
+    x: double = Q_Split1(xv,&hx,&tx)
+    y: double = Q_Split1(yv,&hy,&ty)
+    p = hx * hy
+    q = hx * ty + tx * hy
+    r->h = p + q
+    r->l = p - r->h + q + tx * ty
+}
+
+Q_Mul :: (r: Qd *, a: Qd *, b: Qd *) {
+    c: Qd = {0,0}
+    Q_Mul12(&c,a->h,b->h)
+    c.l = a->h * b->l + a->l * b->h + c.l
+    r->h = c.h + c.l
+    r->l = c.h - r->h + c.l
+}
+
+Q_Div :: (r: Qd *, a: Qd *, b: Qd *) {
+    c_h: double = a->h / b->h
+    u: Qd = {0,0}
+    Q_Mul12(&u,c_h,b->h)
+    c_l: double = (a->h - u.h - u.l + a->l - c_h * b->l) / b->h
+    r->h = c_h + c_l
+    r->l = c_h - r->h + c_l
+}
+
+Q_Scalbn :: (r: Qd *, a: Qd *, n: int) {
+    r->h = scalbn(a->h,n)
+    r->l = scalbn(a->l,n)
+}
+
+Q_Sqrt :: (r: Qd *, a: Qd *) {
+    if a->h > 0 {
+        c_h: double = sqrt(a->h)
+        u: Qd = {0,0}
+        Q_Mul12(&u,c_h,c_h)
+        c_l: double = (a->h - u.h - u.l + a->l) * 0.5 / c_h
+        r->h = c_h + c_l
+        r->l = c_h - r->h + c_l
+    }
+else {
+        r->h = 0
+        r->l = 0
+    }
+}
+
+Q_Floor :: (r: Qd *, a: Qd *) {
+    qh: Qd = {0,0}
+    ql: Qd = {0,0}
+    q: Qd = {0,0}
+    rr: Qd = {0,0}
+    Q_Init(&qh,floor(a->h))
+    Q_Init(&ql,floor(a->l))
+    Q_Add(&q,&qh,&ql)
+    Q_Sub(&rr,a,&q)
+    if Q_Val(&rr) < 0 {
+        one: Qd = {1,0}
+        Q_Sub(r,&q,&one)
+    }
+else {
+        r->h = q.h
+        r->l = q.l
+    }
+}
+
+Q_Compare :: (a: Qd *, b: Qd *) -> int {
+    sa: int = a->h < 0 ? 1 : 0
+    sb: int = b->h < 0 ? 1 : 0
+    d: Qd = {0,0}
+    if sa != sb {
+        if sa != 0 { return -1 }
+        return 1
+    }
+    Q_Sub(&d,a,b)
+    if d.h > 0 { return 1 }
+    if d.h == 0 { return 0 }
+    return -1
+}
+
+Q_RescaleBase :: (x: Qd *, e: double *) {
+    xe: int = ilogb(Q_Val(x))
+    if xe != 0 {
+        qs: Qd = {0,0}
+        Q_Init(&qs,scalbn(1.0,-xe))
+        Q_Mul(x,x,&qs)
+        e[0] += xe
+    }
+}
+
+Q_PowInt :: (r: Qd *, exp2: double *, x: Qd *, y: Qd *) {
+    xn: Qd = {0,0}
+    xe: double = 0
+    dy: double = 0
+    xn.h = x->h
+    xn.l = x->l
+    exp2[0] = 0
+    dy = Q_Val(y)
+    r->h = 1
+    r->l = 0
+    Q_RescaleBase(&xn,&xe)
+    while dy > 0 {
+        if fmod(dy,2) > 0 {
+            Q_Mul(r,r,&xn)
+            exp2[0] += xe
+            Q_RescaleBase(r,exp2)
+            dy -= 1
+            if dy == 0 { break }
+        }
+        dy /= 2
+        Q_Mul(&xn,&xn,&xn)
+        xe *= 2
+        Q_RescaleBase(&xn,&xe)
+    }
+}
+
+Q_Sqrt1pm1 :: (r: Qd *, a: Qd *) {
+    x0: Qd = {0,0}
+    x1: Qd = {0,0}
+    d: Qd = {0,0}
+    one: Qd = {1,0}
+    Q_Add(&x0,a,&one)
+    Q_Sqrt(&x0,&x0)
+    while 1 {
+        Q_Add(&x1,&x0,&one)
+        Q_Sub(&d,&x1,&x0)
+        if Q_Val(&d) == 0 { break }
+        Q_Mul(&d,&x0,&d)
+        Q_Sub(&x1,&one,&d)
+        Q_Div(&x1,&x1,&d)
+        Q_Mul(&x1,&x0,&x1)
+        Q_Sub(&x1,&x1,&x0)
+        if (Q_Val(&x1) == Q_Val(&x0) && x1.h == x0.h && x1.l == x0.l) { break }
+        x0.h = x1.h
+        x0.l = x1.l
+    }
+    r->h = x0.h
+    r->l = x0.l
+}
+
+Q_PowFrac :: (r: Qd *, x: Qd *, y: Qd *) {
+    qx: Qd = {0,0}
+    qr: Qd = {0,0}
+    qy: Qd = {0,0}
+    dy: double = 0
+    x1m: int = 0
+    one: Qd = {1,0}
+    qy.h = y->h
+    qy.l = y->l
+    x1m = fabs(Q_Val(x)) >= 0.5 ? 1 : 0
+    if x1m != 0 {
+        Q_Sub(&qx,x,&one)
+    }
+else {
+        qx.h = x->h
+        qx.l = x->l
+    }
+    qr.h = 0
+    qr.l = 0
+    while 1 {
+        dy = Q_Val(&qy)
+        if dy <= 0 { break }
+        Q_Add(&qy,&qy,&qy)
+        if x1m != 0 {
+            Q_Sqrt1pm1(&qx,&qx)
+            if Q_Val(&qx) == 0 { break }
+        }
+else {
+            Q_Sqrt(&qx,&qx)
+            if Q_Val(&qx) >= 0.5 {
+                x1m = 1
+                Q_Sub(&qx,&qx,&one)
+            }
+        }
+        if dy >= 0.5 {
+            qp: Qd = {0,0}
+            Q_Sub(&qy,&qy,&one)
+            Q_Mul(&qp,&qx,&qr)
+            qr.h = qp.h
+            qr.l = qp.l
+        }
+    }
+    r->h = qr.h
+    r->l = qr.l
+}
+
+Q_Pow :: (r: Qd *, expb: double *, x: Qd *, y: Qd *) {
+    one: Qd = {1,0}
+    half: Qd = {0.5,0}
+    if expb != NULL { expb[0] = 0 }
+    if (y->h == 0 || Q_Compare(x,&one) == 0) {
+        r->h = 1
+        r->l = 0
+        return
+    }
+    if (x->h == 0 && y->h > 0) {
+        r->h = 0
+        r->l = 0
+        return
+    }
+    if (x->h != x->h) {
+        r->h = x->h
+        r->l = x->l
+        return
+    }
+    if (y->h != y->h) {
+        r->h = y->h
+        r->l = y->l
+        return
+    }
+    if Q_Compare(y,&one) == 0 {
+        r->h = x->h
+        r->l = x->l
+        return
+    }
+    if (x->h > 0 && Q_Compare(y,&half) == 0) {
+        Q_Sqrt(r,x)
+        return
+    }
+    dy: double = Q_Val(y)
+    if dy < 0 {
+        my: Qd = {0,0}
+        zero: Qd = {0,0}
+        Q_Sub(&my,&zero,y)
+        Q_Pow(r,expb,x,&my)
+        one2: Qd = {1,0}
+        Q_Div(r,&one2,r)
+        if expb != NULL { expb[0] = 0 - expb[0] }
+        return
+    }
+    qew: Qd = {0,0}
+    qef: Qd = {0,0}
+    exp2ew: double = 0
+    Q_Floor(r,y)
+    qf: Qd = {0,0}
+    Q_Sub(&qf,y,r)
+    Q_PowInt(&qew,&exp2ew,x,r)
+    Q_PowFrac(&qef,x,&qf)
+    Q_Mul(r,&qew,&qef)
+    if expb != NULL {
+        expb[0] = exp2ew
+    }
+else {
+        e: int = (int)exp2ew
+        Q_Scalbn(r,r,e)
+    }
+}
+
+rescale_mantexp :: (mant: Qd *, expb: int *) {
+    e: int = ilogb(Q_Val(mant))
+    if e != -1 {
+        qs: Qd = {0,0}
+        Q_Init(&qs,scalbn(1.0,-e - 1))
+        Q_Mul(mant,mant,&qs)
+        expb[0] += e + 1
+    }
+}
+
+qfacti :: (n: int, mant: Qd *, expb: int *) -> int {
+    if (n < 0 || n >= 10000) {
+        mant->h = 0
+        mant->l = 0
+        expb[0] = 0
+        return 1
+    }
+    if QFACT_BUILT == 0 {
+        m0: Qd = {0,0}
+        Q_Init(&m0,0.5)
+        QFACT_MANT_H[0] = m0.h
+        QFACT_MANT_L[0] = m0.l
+        QFACT_EXP[0] = 1
+        QFACT_BUILT = 1
+    }
+    while n >= QFACT_BUILT {
+        m: Qd = {0,0}
+        nxt: Qd = {0,0}
+        e: int = 0
+        Q_Init(&m,(double)QFACT_BUILT)
+        nxt.h = QFACT_MANT_H[QFACT_BUILT - 1]
+        nxt.l = QFACT_MANT_L[QFACT_BUILT - 1]
+        Q_Mul(&m,&m,&nxt)
+        e = QFACT_EXP[QFACT_BUILT - 1]
+        rescale_mantexp(&m,&e)
+        QFACT_MANT_H[QFACT_BUILT] = m.h
+        QFACT_MANT_L[QFACT_BUILT] = m.l
+        QFACT_EXP[QFACT_BUILT] = e
+        QFACT_BUILT += 1
+    }
+    mant->h = QFACT_MANT_H[n]
+    mant->l = QFACT_MANT_L[n]
+    expb[0] = QFACT_EXP[n]
+    return 0
+}
+
+qfactf :: (x: double, mant: Qd *, expb: int *) -> int {
+    expb[0] = 0
+    if (x != x || (x < 0 && x == floor(x))) {
+        mant->h = 0.0 / 0.0
+        mant->l = 0.0 / 0.0
+        return 2
+    }
+    if x >= 536870911 {
+        mant->h = 1e308 * 10
+        mant->l = 0
+        return 1
+    }
+    if x == floor(x) {
+        if qfacti((int)x,mant,expb) == 0 {
+            return 0
+        }
+    }
+    mant->h = tgamma(x + 1)
+    mant->l = 0
+    return 0
+}
+
+do_search :: (y_in: double, z: double *, p: double, n: double, pr: double, incr: double) -> double {
+    y: double = y_in
+    newz: double = 0
+    if z[0] >= p {
+        while 1 {
+            if y == 0 {
+                return y
+            }
+            newz = pbinom(y - incr,n,pr,1,0)
+            if newz < p {
+                return y
+            }
+            y = fmax(0,y - incr)
+            z[0] = newz
+        }
+    }
+    while 1 {
+        y = fmin(y + incr,n)
+        if y == n {
+            return y
+        }
+        z[0] = pbinom(y,n,pr,1,0)
+        if z[0] >= p {
+            return y
+        }
+    }
+}
+
+/* == bd0 == */
+dstirlerr_go :: (x: double) -> double {
+    xph: double = x + 0.5
+    if x < 0.5 {
+        return 1 - xph * log1p(1 / x)
+    }
+    if x < 2 {
+        return -1 / (2 * x) - xph * Log1pmx(1 / x)
+    }
+    return 0 - (x + 2) / (12 * x * x * x) - xph * GoLogTaylor4(1 / x, 4)
+}
+
+GoLogTaylor4 :: (x: double, k: int) -> double {
+    return x - x * x / 2 + x * x * x / 3 - x * x * x * x / 4
+}
+
+log1px3 :: (x: double) -> double {
+    if x < -0.5 {
+        return log(1 + x)
+    }
+    if x < 0 {
+        return x - x * x / 2 + x * x * x / 3
+    }
+    return x
+}
+
+Q_Exp :: (r: Qd *, expb: double *, a: Qd *) {
+    if expb != NULL { expb[0] = 0 }
+    if a->h != a->h {
+        r->h = a->h
+        r->l = 0
+        return
+    }
+    lnx: double = log(a->h)
+    e: int = 0
+    fmant: double = frexp(lnx,&e)
+    half: double = fmant / 2
+    q2: Qd = {0,0}
+    Q_Init(&q2,half)
+    s: Qd = {0,0}
+    Q_Sqrt(&s,&q2)
+    if a->l != 0 {
+        corr: Qd = {0,0}
+        one: Qd = {1,0}
+        Q_Init(&corr,a->l / a->h)
+        Q_Add(&corr,&corr,&one)
+        Q_Mul(&s,&s,&corr)
+    }
+    k: int = 2 * (e + 1)
+    Q_Scalbn(r,&s,k)
+}
+
+Lgamma1p :: (a: double) -> double {
+    return lgamma(1 + a)
+}
+
+dgamma_go :: (x: double, shape: double, scale: double, give_log: int) -> double {
+    if (x <= 0 || shape <= 0 || scale <= 0) {
+        return give_log != 0 ? -1e308 * 10 : 0.0
+    }
+    if x < 1 {
+        pr: double = Pow1p(x / scale,shape - 1) * exp(0 - x / scale) / scale / shape * exp(lgamma1p_raw(shape))
+        if give_log != 0 { return log(pr) }
+        return pr
+    }
+    pr2: double = exp(0 - x / scale + shape * log(x / scale) - lgamma(shape) - log(scale))
+    if give_log != 0 { return log(pr2) }
+    return pr2
+}
+
+dnorm_go :: (x: double, mu: double, sigma: double, give_log: int) -> double {
+    c: double = 0
+    if (x != x || mu != mu || sigma != sigma) {
+        return x + mu + sigma
+    }
+    if sigma < 0 {
+        return 0.0 / 0.0
+    }
+    if sigma == 0 {
+        return x == mu ? 1.0 : 0.0
+    }
+    x = (x - mu) / sigma
+    if (x * x >= -2.0 * (give_log != 0 ? -745.1332191019412 : 3.6205246350374e-155)) {
+        c = 0.398942280401432677939946059934 * exp(0 - x * x / 2) / sigma
+        if give_log != 0 {
+            return log(c)
+        }
+        return c
+    }
+    if give_log != 0 {
+        return 0 - 745.1332191019412 - log(fabs(sigma)) - x * x / 2
+    }
+    return 0.0
+}
+
+bd0 :: (x: double, M: double) -> double {
+    yh: double = 0
+    yl: double = 0
+    Ebd0(x, M, &yh, &yl)
+    return yh + yl
+}
+
+/* == stirlerr == */
+stirlerr :: (n: double) -> double {
+    S0: double = (1.0) / 12
+    S1: double = (1.0) / 360
+    S2: double = (1.0) / 1260
+    S3: double = (1.0) / 1680
+    S4: double = (1.0) / 1188
+    S5: double = (691.0) / 360360
+    S6: double = (1.0) / 156
+    S7: double = (3617.0) / 122400
+    S8: double = (43867.0) / 244188
+    sferr_halves: [31] double = {(0.0/0.0),                                   
+		(0.1534264097200273452913848),           
+		(0.0810614667953272582196702),           
+		(0.0548141210519176538961390),           
+		(0.0413406959554092940938221),           
+		(0.03316287351993628748511048),          
+		(0.02767792568499833914878929),          
+		(0.02374616365629749597132920),          
+		(0.02079067210376509311152277),          
+		(0.01848845053267318523077934),          
+		(0.01664469118982119216319487),          
+		(0.01513497322191737887351255),          
+		(0.01387612882307074799874573),          
+		(0.01281046524292022692424986),          
+		(0.01189670994589177009505572),          
+		(0.01110455975820691732662991),          
+		(0.010411265261972096497478567),          
+		(0.009799416126158803298389475),          
+		(0.009255462182712732917728637),          
+		(0.008768700134139385462952823),          
+		(0.008330563433362871256469318),           
+		(0.007934114564314020547248100),           
+		(0.007573675487951840794972024),           
+		(0.007244554301320383179543912),           
+		(0.006942840107209529865664152),           
+		(0.006665247032707682442354394),           
+		(0.006408994188004207068439631),           
+		(0.006171712263039457647532867),           
+		(0.005951370112758847735624416),           
+		(0.005746216513010115682023589),           
+		(0.005554733551962801371038690)}
+    nn: double = 0
+    y: double = 0
+    if ((n > 0) == 0) {
+        return (0.0/0.0)
+    }
+    if n <= 15 {
+        nn: double = n + n
+        if nn == (int)nn {
+            return (sferr_halves[(int)nn])
+        }
+    }
+    nn = n * n
+    if n > (3043.0) {
+        return (S0-S1/nn)/n
+    }
+    if n > (200.2) {
+        return (S0-(S1-S2/nn)/nn)/n
+    }
+    if n > (55.57) {
+        return (S0-(S1-(S2-S3/nn)/nn)/nn)/n
+    }
+    if n > (27.01) {
+        return (S0-(S1-(S2-(S3-S4/nn)/nn)/nn)/nn)/n
+    }
+    if n > (17.23) {
+        return (S0-(S1-(S2-(S3-(S4-S5/nn)/nn)/nn)/nn)/nn)/n
+    }
+    if n > (12.77) {
+        return (S0-(S1-(S2-(S3-(S4-(S5-S6/nn)/nn)/nn)/nn)/nn)/nn)/n
+    }
+    if n > (10.38) {
+        return (S0-(S1-(S2-(S3-(S4-(S5-(S6-S7/nn)/nn)/nn)/nn)/nn)/nn)/nn)/n
+    }
+    if n > (8.946) {
+        return (S0-(S1-(S2-(S3-(S4-(S5-(S6-(S7-S8/nn)/nn)/nn)/nn)/nn)/nn)/nn)/nn)/n
+    }
+    y = 0
+    while n < 9 {
+        y -= (dstirlerr_go(n))
+        n += 1
+    }
+    return y + stirlerr (n)
+}
+
+/* == dpois_raw == */
+dpois_raw :: (x: double, lambda: double, give_log: int) -> double {
+    d: double = 0
+    d_l: double = 0
+    res: double = 0
+    if isnan (x) || ((lambda >= 0) == 0) {
+        return (0.0/0.0)
+    }
+    if lambda == 0 {
+        return( (x == 0) ? 1.0 : 0.0 )
+    }
+    if lambda == (1e308*10) {
+        return 0.0
+    }
+    if x < 0 {
+        return 0.0
+    }
+    if x <= lambda * 2.2250738585072014e-308 {
+        return give_log ? -lambda : exp(-lambda)
+    }
+    d = x - lambda
+    d_l = d / lambda
+    if (give_log == 0) && x <= 140 && lambda <= 140 {
+        f1: double = pow(lambda, x)
+        f2: double = exp(-lambda)
+        f3: double = gnm_fact_port(x)
+        return f1 * f2 / f3
+    }
+    if (give_log == 0) && x <= 1000000 && lambda <= 1000000 {
+        e1: double = 0
+        e2: double = 0
+        res: double = 0
+        eres: double = 0
+        e3: int = 0
+        qx: Qd = {0,0}
+        ql: Qd = {0,0}
+        qf1: Qd = {0,0}
+        qf2: Qd = {0,0}
+        qf3: Qd = {0,0}
+        qres: Qd = {0,0}
+        Q_Init(&qx, x)
+        Q_Init(&ql, lambda)
+        Q_Pow(&qf1, &e1, &ql, &qx)
+        Q_Neg(&ql, &ql)
+        Q_Exp(&qf2, &e2, &ql)
+        qfactf(x, &qf3, &e3)
+        Q_Mul(&qres, &qf1, &qf2)
+        Q_Div(&qres, &qres, &qf3)
+        res = Q_Val(&qres)
+        eres = e1 + e2 - e3
+        
+        return scalbn(res, eres)
+    }
+    if give_log && lambda <= 1 {
+        t1: double = x * log(lambda)
+        t2: double = -lambda
+        t3: double = -Lgamma1p(x)
+        return t1 + t2 + t3
+    }
+    if x >= (0.16) && x <= 2 * lambda {
+        t1: double = -x * log1px3 (d_l)
+        t2: double = d_l * d_l * (0.5) * (d - lambda)
+        t3: double = log(2 * 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117 * x) * (-0.5)
+        t4: double = -stirlerr (x)
+        res = t1 + t2 + t3 + t4
+    } else {
+        res = -bd0 (x, lambda)
+        res -= stirlerr (x)
+        res -= log(2 * 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117 * x) * (0.5)
+    }
+    return give_log ? res : exp(res)
+}
+
+/* == dbinom_raw == */
+
+dbinom :: (x: double, n: double, p: double, give_log: int) -> double {
+    if (x != x || n != n || p != p) {
+        return x + n + p
+    }
+    if (p < 0 || p > 1 || n < 0 || n != floor(n)) {
+        return 0.0 / 0.0
+    }
+    if (x != floor(x)) {
+        return 0.0
+    }
+    if (x < 0 || isfinite(x) == 0) {
+        return 0.0
+    }
+    n = round(n)
+    x = round(x)
+    return dbinom_raw(x,n,p,1 - p,give_log)
+}
+
+dbinom_raw :: (x: double, n: double, p: double, q: double, give_log: int) -> double {
+    lf: double = 0
+    lc: double = 0
+    if p == 0 {
+        return((x == 0) ? 1.0 : 0.0)
+    }
+    if q == 0 {
+        return((x == n) ? 1.0 : 0.0)
+    }
+    if x == 0 {
+        if p > q {
+            return give_log ? n * log(q) : pow(q, n)
+        } else {
+            return give_log ? n * log1p(-p) : Pow1p(-p, n)
+        }
+    }
+    if x == n {
+        if p > q {
+            return give_log ? n * log1p(-q) : Pow1p(-q, n)
+        } else {
+            return give_log ? n * log(p) : pow(p, n)
+        }
+    }
+    if x < 0 || x > n {
+        return( 0.0 )
+    }
+    if (give_log == 0) {
+                qp: Qd = {0,0}
+qq: Qd = {0,0}
+qx: Qd = {0,0}
+qnmx: Qd = {0,0}
+        qf1: Qd = {0,0}
+        qf2: Qd = {0,0}
+        qf3: Qd = {0,0}
+        qf4: Qd = {0,0}
+        qf5: Qd = {0,0}
+        qres: Qd = {0,0}
+        e1: int = 0
+        e2: int = 0
+        e3: int = 0
+        bad: int = 0
+        e4: double = 0
+        e5: double = 0
+        e: double = 0
+        Q_Init(&qp, p)
+        Q_Init(&qq, q)
+        Q_Init(&qx, x)
+        Q_Init(&qnmx, n - x)
+        bad += qfactf (n, &qf1, &e1)
+        bad += qfactf (x, &qf2, &e2)
+        bad += qfactf (n - x, &qf3, &e3)
+        Q_Pow(&qf4, &e4, &qp, &qx)
+        Q_Pow(&qf5, &e5, &qq, &qnmx)
+        Q_Mul(&qres, &qf2, &qf3)
+        Q_Div(&qres, &qf1, &qres)
+        Q_Mul(&qres, &qres, &qf4)
+        Q_Mul(&qres, &qres, &qf5)
+        e = e4 + e5 + e1 - e2 - e3
+        
+        if (bad == 0) && isfinite(qres.h) && qres.h > 0 {
+            e = e
+            return scalbn(Q_Val(&qres), e)
+        }
+    }
+    lc = stirlerr(n) - stirlerr(x) - stirlerr(n-x) - bd0(x,n*p) - bd0(n-x,n*q)
+    lf = 1.837877066409345483560659472811 + log(x) + log1p(- x/n)
+    return exp(lc - (0.5)*lf)
+}
+
+/* == pnorm == */
+pnorm :: (x: double, mu: double, sigma: double, lower_tail: int, log_p: int) -> double {
+    p: double = 0
+    cp: double = (0.0/0.0)
+    if (x) != (x) || (mu) != (mu) || (sigma) != (sigma) {
+        return x + mu + sigma
+    }
+    if (isfinite(x) == 0) && mu == x {
+        return (0.0/0.0)
+    }
+    if sigma <= 0 {
+        if sigma < 0 {
+            return (0.0/0.0)
+        }
+        return (x < mu) ? (lower_tail != 0 ? 0.0 : 1.0) : (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    p = (x - mu) / sigma
+    if (isfinite(p) == 0) {
+        return (x < mu) ? (lower_tail != 0 ? 0.0 : 1.0) : (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    x = p
+    pnorm_both(x, &p, &cp, (lower_tail ? 0 : 1), log_p)
+    return(lower_tail ? p : cp)
+}
+
+/* == pnorm_both == */
+pnorm_both :: (x: double, cum: double *, ccum: double *, i_tail: int, log_p: int) {
+    a: [5] double = {(2.2352520354606839287),
+	(161.02823106855587881),
+	(1067.6894854603709582),
+	(18154.981253343561249),
+	(0.065682337918207449113)}
+    b: [4] double = {(47.20258190468824187),
+	(976.09855173777669322),
+	(10260.932208618978205),
+	(45507.789335026729956)}
+    c: [9] double = {(0.39894151208813466764),
+	(8.8831497943883759412),
+	(93.506656132177855979),
+	(597.27027639480026226),
+	(2494.5375852903726711),
+	(6848.1904505362823326),
+	(11602.651437647350124),
+	(9842.7148383839780218),
+	(1.0765576773720192317e-8)}
+    d: [8] double = {(22.266688044328115691),
+	(235.38790178262499861),
+	(1519.377599407554805),
+	(6485.558298266760755),
+	(18615.571640885098091),
+	(34900.952721145977266),
+	(38912.003286093271411),
+	(19685.429676859990727)}
+    p: [6] double = {(0.21589853405795699),
+	(0.1274011611602473639),
+	(0.022235277870649807),
+	(0.001421619193227893466),
+	(2.9112874951168792e-5),
+	(0.02307344176494017303)}
+    q: [5] double = {(1.28426009614491121),
+	(0.468238212480865118),
+	(0.0659881378689285515),
+	(0.00378239633202758244),
+	(7.29751555083966205e-5)}
+    xden: double = 0
+    xnum: double = 0
+    temp: double = 0
+    del: double = 0
+    eps: double = 0
+    xsq: double = 0
+    y: double = 0
+    min: double = 2.2250738585072014e-308
+    i: int = 0
+    lower: int = 0
+    upper: int = 0
+    if (x) != (x) {
+        cum[0] = x
+        ccum[0] = x
+        return
+    }
+    eps = 2.2204460492503131e-16 * (0.5)
+    lower = i_tail != 1
+    upper = i_tail != 0
+    y = fabs(x)
+    if y <= (0.67448975) {
+        if y > eps {
+            xsq = x * x
+            xnum = a[4] * xsq
+            xden = xsq
+            i = 0
+            while i < 3 {
+                xnum = (xnum + a[i]) * xsq
+                xden = (xden + b[i]) * xsq
+                i += 1
+            }
+        } else {
+            xnum = 0
+            xden = 0
+        }
+        temp = x * (xnum + a[3]) / (xden + b[3])
+        if lower != 0 {
+            cum[0] = (0.5) + temp
+        }
+        if upper != 0 {
+            ccum[0] = (0.5) - temp
+        }
+        if log_p != 0 {
+            if lower != 0 {
+                cum[0] = log(cum[0])
+            }
+            if upper != 0 {
+                ccum[0] = log(ccum[0])
+            }
+        }
+    } else if y <= 5.6568542494923801952067548968387923142790136176 {
+        xnum = c[8] * y
+        xden = y
+        i = 0
+        while i < 7 {
+            xnum = (xnum + c[i]) * y
+            xden = (xden + d[i]) * y
+            i += 1
+        }
+        temp = (xnum + c[7]) / (xden + d[7])
+        xsq = trunc(y * 16) / 16
+        del = (y - xsq) * (y + xsq)
+        if log_p != 0 {
+            cum[0] = (0 - xsq * xsq * 0.5) + (0 - del * 0.5) + log(temp)
+            if (lower != 0 && y > 0) || (upper != 0 && y <= 0) {
+                ccum[0] = log1p(0 - exp(0 - xsq * xsq * 0.5) * exp(0 - del * 0.5) * temp)
+            }
+        }
+else {
+            cum[0] = exp(0 - xsq * xsq * 0.5) * exp(0 - del * 0.5) * temp
+            ccum[0] = 1.0 - cum[0]
+        }
+        if x > 0 {
+            t2: double = cum[0]
+            if lower != 0 { cum[0] = ccum[0] }
+            ccum[0] = t2
+        }
+    } else if (log_p != 0 && y < 1e170) || ((lower != 0 && -37.5193 < x && x < 8.2924) || (upper != 0 && -8.2924 < x && x < 37.5193)) {
+        xsq = (1.0) / (x * x)
+        xnum = p[5] * xsq
+        xden = xsq
+        i = 0
+        while i < 4 {
+            xnum = (xnum + p[i]) * xsq
+            xden = (xden + q[i]) * xsq
+            i += 1
+        }
+        temp = xsq * (xnum + p[4]) / (xden + q[4])
+        temp = (0.398942280401432677939946059934 - temp) / y
+        xsq = trunc(x * 16) / 16
+        del = (x - xsq) * (x + xsq)
+        if log_p != 0 {
+            cum[0] = (0 - xsq * xsq * 0.5) + (0 - del * 0.5) + log(temp)
+            if (lower != 0 && x > 0) || (upper != 0 && x <= 0) {
+                ccum[0] = log1p(0 - exp(0 - xsq * xsq * 0.5) * exp(0 - del * 0.5) * temp)
+            }
+        }
+else {
+            cum[0] = exp(0 - xsq * xsq * 0.5) * exp(0 - del * 0.5) * temp
+            ccum[0] = 1.0 - cum[0]
+        }
+        if x > 0 {
+            t2: double = cum[0]
+            if lower != 0 { cum[0] = ccum[0] }
+            ccum[0] = t2
+        }
+    } else {
+        if x > 0 {
+            cum[0] = 1.0
+            ccum[0] = 0.0
+        } else {
+            cum[0] = 0.0
+            ccum[0] = 1.0
+        }
+    }
+    if log_p != 0 {
+        if cum[0] > -min {
+            cum[0] = (-0.0)
+        }
+        if ccum[0] > -min {
+            ccum[0] = (-0.0)
+        }
+    } else {
+        if cum[0] < min {
+            cum[0] = 0
+        }
+        if ccum[0] < min {
+            ccum[0] = 0
+        }
+    }
+    return
+}
+
+/* == qnorm == */
+qnorm :: (p: double, mu: double, sigma: double, lower_tail: int, log_p: int) -> double {
+    p_: double = 0
+    q: double = 0
+    r: double = 0
+    val: double = 0
+    if (p != p || mu != mu || sigma != sigma) {
+        return p + mu + sigma
+    }
+    if log_p != 0 {
+        if p > 0 {
+            return 0.0 / 0.0
+        }
+        if p == 0 {
+            return lower_tail != 0 ? 1e308 * 10 : -1e308 * 10
+        }
+        if p == -1e308 * 10 {
+            return lower_tail != 0 ? -1e308 * 10 : 1e308 * 10
+        }
+    }
+else {
+        if (p < 0 || p > 1) {
+            return 0.0 / 0.0
+        }
+        if p == 0 {
+            return lower_tail != 0 ? -1e308 * 10 : 1e308 * 10
+        }
+        if p == 1 {
+            return lower_tail != 0 ? 1e308 * 10 : -1e308 * 10
+        }
+    }
+    if sigma < 0 {
+        return 0.0 / 0.0
+    }
+    if sigma == 0 {
+        return mu
+    }
+    p_ = log_p != 0 ? exp(p) : p
+    q = p_ - 0.5
+    if fabs(q) <= 0.425 {
+        r = 0.180625 - q * q
+        val = q * (((((((r * 2509.0809287301226727 + 33430.575583588128105) * r + 67265.770927008700853) * r + 45921.953931549871457) * r + 13731.693765509461125) * r + 1971.5909503065514427) * r + 133.14166789178437745) * r + 3.387132872796366608) / (((((((r * 5226.495278852854561 + 28729.085735721942674) * r + 39307.89580009271061) * r + 21213.794301586595867) * r + 5394.1960214247511077) * r + 687.1870074920579083) * r + 42.313330701600911252) * r + 1.0)
+    }
+else {
+        if q > 0 {
+            if log_p != 0 {
+                r = lower_tail != 0 ? 0 - expm1(p) : exp(p)
+            }
+else {
+                r = 1 - p
+            }
+        }
+else {
+            r = p_
+        }
+        r = sqrt(0 - ((log_p != 0 && ((lower_tail != 0 && q <= 0) || (lower_tail == 0 && q > 0))) ? p : log(r)))
+        if r <= 5 {
+            r += -1.6
+            val = (((((((r * 7.7454501427834140764e-4 + 0.0227238449892691845833) * r + 0.24178072517745061177) * r + 1.27045825245236838258) * r + 3.64784832476320460504) * r + 5.7694972214606914055) * r + 4.6303378461565452959) * r + 1.42343711074968357734) / (((((((r * 1.05075007164441684324e-9 + 5.475938084995344946e-4) * r + 0.0151986665636164571966) * r + 0.14810397642748007459) * r + 0.68976733498510000455) * r + 1.6763848301838038494) * r + 2.05319162663775882187) * r + 1.0)
+        }
+else {
+            r += -5.0
+            val = (((((((r * 2.01033439929228813265e-7 + 2.71155556874348757815e-5) * r + 0.0012426609473880784386) * r + 0.026532189526576123093) * r + 0.29656057182850489123) * r + 1.7848265399172913358) * r + 5.4637849111641143699) * r + 6.6579046435011037772) / (((((((r * 2.04426310338993978564e-15 + 1.4215117583164458887e-7) * r + 1.8463183175100546818e-5) * r + 7.868691311456132591e-4) * r + 0.0148753612908506148525) * r + 0.13692988092273580531) * r + 0.59983220655588793769) * r + 1.0)
+        }
+        if q < 0 {
+            val = 0 - val
+        }
+    }
+    return mu + sigma * val
+}
+
+/* == lfbaccdif == */
+lfbaccdif :: (a: double, b: double) -> double {
+    if a > (0.03) * (a + b) {
+        return logfbit (a + b) - logfbit (b)
+    } else {
+        a2: double = a * a
+        ab2: double = a / 2 + b
+        return a * (logfbit1 (ab2) + a2 / 24 *
+			    (logfbit3 (ab2) + a2 / 80 *
+			     (logfbit5 (ab2) + a2 / 168 *
+			      logfbit7 (ab2))))
+    }
+}
+
+/* == compbfunc == */
+compbfunc :: (x: double, a: double, b: double) -> double {
+    sumAcc: double = (5E-16)
+    term: double = x
+    d: double = 2
+    sum: double = term / (a + 1)
+    while fabs (term) > fabs (sum * sumAcc) {
+        term *= (d - b) * x / d
+        sum += term / (a + d)
+        d += 1
+    }
+    return a * (b - 1) * sum
+}
+
+/* == tdistexp == */
+tdistexp :: (p: double, q: double, logqk2: double, k: double, log_p: int, approxtdistDens: double *) -> double {
+    sumAcc: double = (5E-16)
+    cfVSmall: double = (1.0e-14)
+    lstpi: double = log (2 * 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117) / 2
+    if floor (k / 2) * 2 == k {
+        ldens: double = logqk2 + logfbit (k - 1) - 2 * logfbit (k * (0.5) - 1) - lstpi
+        *approxtdistDens = exp(ldens)
+    } else {
+        ldens: double = logqk2 + k * Log1pmx(1 / k) + 2 * logfbit ((k - 1) * (0.5)) - logfbit (k - 1) - lstpi
+        *approxtdistDens = exp(ldens)
+    }
+    if k * p < 4 * q {
+        sum: double = 0
+        aki: double = k + 1
+        ai: double = 3
+        term: double = aki * p / ai
+        while term > sumAcc * sum {
+            sum += term
+            ai += 2
+            aki += 2
+            term *= aki * p / ai
+        }
+        sum += term
+        return log_p
+			? logspace_sub_go(-0.693147180559945309417232121458, *approxtdistDens + log1p (sum) + log (k * p) / 2)
+			: (0.5) - *approxtdistDens * (sum + 1) * sqrt (k * p)
+    } else {
+        q1: double = 2 * (1 + q)
+        q8: double = 8 * q
+        a1: double = 0
+        b1: double = 1
+        c1: double = -6 * q
+        a2: double = 1
+        b2: double = (k - 1) * p + 3
+        cadd: double = -14 * q
+        c2: double = b2 + q1
+        while fabs (a2 * b1 - a1 * b2) > fabs (cfVSmall * b1 * b2) {
+            a1 = c2 * a2 + c1 * a1
+            b1 = c2 * b2 + c1 * b1
+            c1 += cadd
+            cadd -= q8
+            c2 += q1
+            a2 = c2 * a1 + c1 * a2
+            b2 = c2 * b1 + c1 * b2
+            c1 += cadd
+            cadd -= q8
+            c2 += q1
+            if fabs (b2) > (115792089237316195423570985008687907853269984665640564039457584007913129639936.0) {
+                a1 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+                b1 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+                a2 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+                b2 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            } else if fabs (b2) < 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0) {
+                a1 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+                b1 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+                a2 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+                b2 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            }
+        }
+        return log_p
+			? *approxtdistDens + log1p (-q * a2 / b2) - log (k * p) / 2
+			: *approxtdistDens * (1 - q * a2 / b2) / sqrt (k * p)
+    }
+}
+
+/* == logspace_signed_add == */
+logspace_signed_add :: (logx: double, logabsy: double, ypos: int) -> double {
+    return ypos
+		? logspace_add_go(logx, logabsy)
+		: logspace_sub_go(logx, logabsy)
+}
+
+/* == binomialTerm == */
+binomialTerm :: (i: double, j: double, p: double, q: double, diffFromMean: double, log_p: int) -> double {
+    minLog1Value: double = (-0.79149064)
+    c1: double = 0
+    c2: double = 0
+    c3: double = 0
+    c4: double = 0
+    c5: double = 0
+    c6: double = 0
+    ps: double = 0
+    logbinomialTerm: double = 0
+    dfm: double = 0
+    t: double = 0
+    if i == 0 && j <= 0 {
+        return 1.0
+    }
+    if i <= -1 || j < 0 {
+        return 0.0
+    }
+    c1 = (i + 1) + j
+    if p < q {
+        c2 = i
+        c3 = j
+        ps = p
+        dfm = diffFromMean
+    } else {
+        c3 = i
+        c2 = j
+        ps = q
+        dfm = -diffFromMean
+    }
+    c5 = (dfm - (1 - ps)) / (c2 + 1)
+    c6 = -(dfm + ps) / (c3 + 1)
+    if c5 < minLog1Value {
+        if c2 == 0 {
+            logbinomialTerm = c3 * log1p (-ps)
+            return log_p ? logbinomialTerm : exp (logbinomialTerm)
+        } else if ps == 0 && c2 > 0 {
+            return 0.0
+        } else {
+            t = log ((ps * c1) / (c2 + 1)) - c5
+        }
+    } else {
+        t = Log1pmx(c5)
+    }
+    c4 = logfbit (i + j) - logfbit (i) - logfbit (j)
+    logbinomialTerm = c4 + c2 * t - c5 + (c3 * Log1pmx(c6) - c6)
+    return log_p
+		? logbinomialTerm + (0.5) * log (c1 / ((c2 + 1) * (c3 + 1) * 2 * 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117))
+		: exp (logbinomialTerm) * sqrt (c1 / ((c2 + 1) * (c3 + 1) * 2 * 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117))
+}
+
+/* == logfbit == */
+logfbitdif :: (x: double) -> double {
+    y: double = 1 / (2 * x + 3)
+    y2: double = y * y
+    return y2 * GoLogcf(y2,3,2,1e-14)
+}
+
+logfbit :: (x: double) -> double {
+    if x >= (1e10) {
+        return 1 / (12 * (x + 1))
+    } else if x >= 6 {
+        x1: double = x + 1
+        x2: double = 1 / (x1 * x1)
+        x3: double = 0
+        x3 =
+			x2 * ((1.0/30) - x2 *
+			      ((1.0/105) - x2 *
+			       ((1.0/140) - x2 *
+				((1.0/99) - x2 *
+				 ((691.0/30030) - x2 *
+				  ((1.0/13) - x2 *
+				   (0.35068606896459316479 - x2 *
+				    1.6769998201671114808)))))))
+        return (1.0/12) * (1 - x3) / x1
+    } else if x == 5 {
+        return (0.13876128823070747998745727023762908562e-1)
+    } else if x == 4 {
+        return (0.16644691189821192163194865373593391145e-1)
+    } else if x == 3 {
+        return (0.20790672103765093111522771767848656333e-1)
+    } else if x == 2 {
+        return (0.27677925684998339148789292746244666596e-1)
+    } else if x == 1 {
+        return (0.41340695955409294093822081407117508025e-1)
+    } else if x == 0 {
+        return (0.81061466795327258219670263594382360138e-1)
+    } else if x > -1 {
+        x1: double = x
+        x2: double = 0
+        while x1 < 6 {
+            x2 += logfbitdif (x1)
+            x1 += 1
+        }
+        return x2 + logfbit (x1)
+    } else {
+        return (1e308*10)
+    }
+}
+
+/* == logfbit1 == */
+logfbit1dif :: (x: double) -> double {
+    return (logfbitdif(x) - 1 / (4 * (x + 1) * (x + 2))) / (x + 1.5)
+}
+
+logfbit3dif :: (x: double) -> double {
+    return 0 - (2 * x + 3) * pow((x + 1) * (x + 2),-3)
+}
+
+logfbit5dif :: (x: double) -> double {
+    return 0 - 6 * (2 * x + 3) * ((5 * x + 15) * x + 12) * pow((x + 1) * (x + 2),-5)
+}
+
+logfbit7dif :: (x: double) -> double {
+    return 0 - 120 * (2 * x + 3) * ((((14 * x + 84) * x + 196) * x + 210) * x + 87) * pow((x + 1) * (x + 2),-7)
+}
+
+logfbit1 :: (x: double) -> double {
+    if x >= (1e10) {
+        return -(1.0/12) * pow (x + 1, -2)
+    } else if x >= 6 {
+        x1: double = x + 1
+        x2: double = 1 / (x1 * x1)
+        x3: double = 0
+        x3 =
+			x2 * (3 * (1.0/30) - x2*
+			      (5 * (1.0/105) - x2 *
+			       (7 * (1.0/140) - x2 *
+				(9 * (1.0/99) - x2 *
+				 (11 * (691.0/30030) - x2 *
+				  (13 * (1.0/13) - x2 *
+				   (15 * 0.35068606896459316479 - x2 *
+				    17 * 1.6769998201671114808)))))))
+        return -(1.0/12) * (1 - x3) * x2
+    } else if x > -1 {
+        x1: double = x
+        x2: double = 0
+        while x1 < 6 {
+            x2 += logfbit1dif (x1)
+            x1 += 1
+        }
+        return x2 + logfbit1 (x1)
+    } else {
+        return (-1e308*10)
+    }
+}
+
+/* == logfbit3 == */
+logfbit3 :: (x: double) -> double {
+    if x >= (1e10) {
+        return (-0.5) * pow (x + 1, -4)
+    } else if x >= 6 {
+        x1: double = x + 1
+        x2: double = 1 / (x1 * x1)
+        x3: double = 0
+        x3 =
+			x2 * (60 * (1.0/30) - x2 *
+			      (210 * (1.0/105) - x2 *
+			       (504 * (1.0/140) - x2 *
+				(990 * (1.0/99) - x2 *
+				 (1716 * (691.0/30030) - x2 *
+				  (2730 * (1.0/13) - x2 *
+				   (4080 * 0.35068606896459316479 - x2 *
+				    5814 * 1.6769998201671114808)))))))
+        return -(1.0/12) * (6 - x3) * x2 * x2
+    } else if x > -1 {
+        x1: double = x
+        x2: double = 0
+        while x1 < 6 {
+            x2 += logfbit3dif (x1)
+            x1 += 1
+        }
+        return x2 + logfbit3 (x1)
+    } else {
+        return (-1e308*10)
+    }
+}
+
+/* == logfbit5 == */
+logfbit5 :: (x: double) -> double {
+    if x >= (1e10) {
+        return -10 * pow (x + 1, -6)
+    } else if x >= 6 {
+        x1: double = x + 1
+        x2: double = 1 / (x1 * x1)
+        x3: double = 0
+        x3 =
+			x2 * (2520 * (1.0/30) - x2 *
+			      (15120 * (1.0/105) - x2 *
+			       (55440 * (1.0/140) - x2 *
+				(154440 * (1.0/99) - x2 *
+				 (360360 * (691.0/30030) - x2 *
+				  (742560 * (1.0/13) - x2 *
+				   (1395360 * 0.35068606896459316479 - x2 *
+				    2441880 * 1.6769998201671114808)))))))
+        return -(1.0/12) * (120 - x3) * x2 * x2 * x2
+    } else if x > -1 {
+        x1: double = x
+        x2: double = 0
+        while x1 < 6 {
+            x2 += logfbit5dif (x1)
+            x1 += 1
+        }
+        return x2 + logfbit5 (x1)
+    } else {
+        return (-1e308*10)
+    }
+}
+
+/* == logfbit7 == */
+logfbit7 :: (x: double) -> double {
+    if x >= (1e10) {
+        return -420 * pow (x + 1, -8)
+    } else if x >= 6 {
+        x1: double = x + 1
+        x2: double = 1 / (x1 * x1)
+        x3: double = 0
+        x3 =
+			x2 * (181440 * (1.0/30) - x2 *
+			      (1663200 * (1.0/105) - x2 *
+			       (8648640 * (1.0/140) - x2 *
+				(32432400 * (1.0/99) - x2 *
+				 (98017920 * (691.0/30030) - x2 *
+				  (253955520 * (1.0/13) - x2 *
+				   (586051200 * 0.35068606896459316479 - x2 *
+				    1235591280 * 1.6769998201671114808)))))))
+        return -(1.0/12) * (5040 - x3) * x2 * x2 * x2 * x2
+    } else if x > -1 {
+        x1: double = x
+        x2: double = 0
+        while x1 < 6 {
+            x2 += logfbit7dif (x1)
+            x1 += 1
+        }
+        return x2 + logfbit7 (x1)
+    } else {
+        return (-1e308*10)
+    }
+}
+
+/* == logspace_signed_add == */
+
+/* == dt == */
+dt :: (x: double, n: double, give_log: int) -> double {
+    if (x) != (x) || (n) != (n) {
+        return x + n
+    }
+    if n <= 0 {
+        return (0.0/0.0)
+    }
+    if (isfinite(x) == 0) {
+        return 0.0
+    }
+    if (isfinite(n) == 0) {
+        return dnorm_go(x, 0, 1, give_log)
+    }
+    u: double = 0
+    t: double = 0 - bd0(n / 2,(n + 1) / 2) + stirlerr((n + 1) / 2) - stirlerr(n / 2)
+    x2n: double = x * x / n
+    ax: double = 0
+    l_x2n: double = 0
+    lrg_x2n: int = x2n > 1 / 2.2204460492503131e-16
+    if lrg_x2n {
+        ax = fabs(x)
+        l_x2n = log(ax) - log(n)/(2.0)
+        u = 
+	    n * l_x2n
+    } else if x2n > (0.2) {
+        l_x2n = log1p (x2n)/(2.0)
+        u = n * l_x2n
+    } else {
+        l_x2n = log1p(x2n)/(2.0)
+        u = -bd0(n/(2.0),(n+x*x)/(2.0)) + x*x/(2.0)
+    }
+    if give_log {
+        return t-u - (0.918938533204672741780329736406 + l_x2n)
+    }
+    I_sqrt_: double = (lrg_x2n ? sqrt(n)/ax : exp(-l_x2n))
+    return exp(t-u) * 0.398942280401432677939946059934 * I_sqrt_
+}
+
+pt :: (x: double, n: double, lower_tail: int, log_p: int) -> double {
+    val: double = 0
+    nx: double = 0
+    if (x) != (x) || (n) != (n) {
+        return x + n
+    }
+    if n <= 0 {
+        return (0.0/0.0)
+    }
+    if (isfinite(x) == 0) {
+        return (x < 0) ? (lower_tail != 0 ? 0.0 : 1.0) : (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    if (isfinite(n) == 0) {
+        return pnorm(x, (0.0), (1.0), lower_tail, log_p)
+    }
+    if n > (4e5) {
+        val = (1.0)/((4.0)*n)
+        return pnorm(x*((1.0) - val)/sqrt((1.0) + x*x*(2.0)*val), (0.0), (1.0),
+		     lower_tail, log_p)
+    }
+    nx = 1 + (x/n)*x
+    if nx > (1e100) {
+        lval: double = 0
+        lval = (-0.5)*n*(2*log(fabs(x)) - log(n))
+		- lbeta_go((0.5)*n, (0.5)) - log((0.5)*n)
+        val = log_p ? lval : exp(lval)
+    } else {
+        val = (n > x * x)
+	    ? pbeta(x * x / (n + x * x), (0.5), n / (2.0),               0, log_p)
+	    : pbeta((1.0) / nx,             n / (2.0), (0.5),               1, log_p)
+    }
+    if x <= 0 {
+        lower_tail = (lower_tail == 0)
+    }
+    if log_p != 0 {
+        if lower_tail {
+            return log1p((-0.5)*exp(val))
+        } else {
+            return val - 0.693147180559945309417232121458
+        }
+    } else {
+        val /= 2
+        return (lower_tail != 0 ? 1 - val : val)
+    }
+}
+
+/* == qt == */
+dt_go :: (x: double, n: double, give_log: int) -> double {
+    u: double = 0
+    t: double = 0
+    x2n: double = 0
+    ax: double = 0
+    l_x2n: double = 0
+    lrg_x2n: int = 0
+    if (x != x || n != n) {
+        return x + n
+    }
+    if n <= 0 {
+        return 0.0 / 0.0
+    }
+    if isfinite(x) == 0 {
+        return 0.0
+    }
+    if isfinite(n) == 0 {
+        return dnorm_go(x,0,1,give_log)
+    }
+    t = 0 - bd0(n / 2,(n + 1) / 2) + stirlerr((n + 1) / 2) - stirlerr(n / 2)
+    x2n = x * x / n
+    ax = 0
+    l_x2n = 0
+    lrg_x2n = x2n > 1 / 2.2204460492503131e-16 ? 1 : 0
+    if lrg_x2n != 0 {
+        ax = fabs(x)
+        l_x2n = log(ax) - log(n) / 2
+        u = n * l_x2n
+    }
+else if x2n > 0.2 {
+        l_x2n = log1p(x2n) / 2
+        u = n * l_x2n
+    }
+else {
+        l_x2n = log1p(x2n) / 2
+        u = 0 - bd0(n / 2,(n + x * x) / 2) + x * x / 2
+    }
+    if give_log != 0 {
+        return t - u - (0.918938533204672741780329736406 + l_x2n)
+    }
+    i_sqrt: double = lrg_x2n != 0 ? sqrt(n) / ax : exp(0 - l_x2n)
+    return exp(t - u) * 0.398942280401432677939946059934 * i_sqrt
+}
+
+qt :: (p: double, ndf: double, lower_tail: int, log_p: int) -> double {
+    eps: double = 1.0e-12
+    P: double = 0
+    q: double = 0
+    if (p != p || ndf != ndf) {
+        return p + ndf
+    }
+    if log_p != 0 {
+        if p > 0 {
+            return 0.0 / 0.0
+        }
+        if p == 0 {
+            return lower_tail != 0 ? 1e308 * 10 : -1e308 * 10
+        }
+        if p == -1e308 * 10 {
+            return lower_tail != 0 ? -1e308 * 10 : 1e308 * 10
+        }
+    }
+else {
+        if (p < 0 || p > 1) {
+            return 0.0 / 0.0
+        }
+        if p == 0 {
+            return lower_tail != 0 ? -1e308 * 10 : 1e308 * 10
+        }
+        if p == 1 {
+            return lower_tail != 0 ? 1e308 * 10 : -1e308 * 10
+        }
+    }
+    if ndf <= 0 {
+        return 0.0 / 0.0
+    }
+    if ndf < 1 {
+        accu: double = 1e-13
+        Eps: double = 1e-11
+        ux: double = 0
+        lx: double = 0
+        nx2: double = 0
+        pp: double = 0
+        iter: int = 0
+        if p > 1 - 2.2204460492503131e-16 {
+            return 1e308 * 10
+        }
+        pp = fmin(1 - 2.2204460492503131e-16,p * (1 + Eps))
+        ux = 1
+        while ux < 1.7976931348623157e308 && pt(ux,ndf,1,0) < pp {
+            ux *= 2
+        }
+        pp = p * (1 - Eps)
+        lx = -1.0
+        while lx > -1.7976931348623157e308 && pt(lx,ndf,1,0) > pp {
+            lx *= 2
+        }
+        while iter < 1000 {
+            nx2 = 0.5 * (lx + ux)
+            if (ux - lx > accu * fabs(nx2)) == 0 {
+                break
+            }
+            if pt(nx2,ndf,1,0) > p {
+                ux = nx2
+            }
+else {
+                lx = nx2
+            }
+            iter += 1
+        }
+        return 0.5 * (lx + ux)
+    }
+    if ndf > 1e20 {
+        return qnorm(p,0,1,lower_tail,log_p)
+    }
+    P = log_p != 0 ? exp(p) : p
+    neg: int = ((lower_tail == 0 || P < 0.5) && (lower_tail != 0 || P > 0.5)) ? 1 : 0
+    is_neg_lower: int = lower_tail == neg ? 1 : 0
+    if neg != 0 {
+        if log_p != 0 {
+            if lower_tail != 0 {
+                P = 2 * P
+            }
+else {
+                P = 2 * (0 - expm1(p))
+            }
+        }
+else {
+            P = 2 * (lower_tail != 0 ? P : 0.5 - p + 0.5)
+        }
+    }
+else {
+        if log_p != 0 {
+            if lower_tail != 0 {
+                P = 2 * (0 - expm1(p))
+            }
+else {
+                P = 2 * P
+            }
+        }
+else {
+            P = 2 * (lower_tail != 0 ? 0.5 - p + 0.5 : p)
+        }
+    }
+    if fabs(ndf - 2) < eps {
+        if P > 2.2250738585072014e-308 {
+            if (3 * P < 2.2204460492503131e-16) {
+                q = 1 / sqrt(P)
+            }
+else if P > 0.9 {
+                q = (1 - P) * sqrt(2 / (P * (2 - P)))
+            }
+else {
+                q = sqrt(2 / (P * (2 - P)) - 2)
+            }
+        }
+else {
+            if log_p != 0 {
+                if is_neg_lower != 0 {
+                    q = exp(0 - p / 2) / 1.4142135623730950488016887242096980785696718753769480731766797379907324784621070388503875343276415727350138846229
+                }
+else {
+                    q = 1 / sqrt(0 - expm1(p))
+                }
+            }
+else {
+                q = 1e308 * 10
+            }
+        }
+    }
+else if ndf < 1 + eps {
+        if P == 1 {
+            q = 0
+        }
+else if P > 0 {
+            q = 1 / GoTanpi(P / 2)
+        }
+else {
+            if log_p != 0 {
+                if is_neg_lower != 0 {
+                    q = 0.3183098861837906715377675267450287240689192914809128974953346881177953537 * exp(0 - p)
+                }
+else {
+                    q = -1 / (0.3183098861837906715377675267450287240689192914809128974953346881177953537 * expm1(p))
+                }
+            }
+else {
+                q = 1e308 * 10
+            }
+        }
+    }
+else {
+        x: double = 0
+        y: double = 0
+        log_P2: double = 0
+        a: double = 1 / (ndf - 0.5)
+        b: double = 48 / (a * a)
+        c: double = ((20700 * a / b - 98) * a - 16) * a + 96.36
+        d: double = ((94.5 / (b + c) - 3) / b + 1) * sqrt(a * 1.5707963267948966192313216916397514420985846996875529104874722961539082031431044993140174126711) * ndf
+        P_ok1: int = (P > 2.2250738585072014e-308 || log_p == 0) ? 1 : 0
+        P_ok: int = P_ok1
+        if P_ok1 != 0 {
+            y = pow(d * P,2.0 / ndf)
+            P_ok = y >= 2.2204460492503131e-16 ? 1 : 0
+        }
+        if P_ok == 0 {
+            if is_neg_lower != 0 {
+                log_P2 = log_p != 0 ? p : log1p(0 - p)
+            }
+else {
+                log_P2 = log_p != 0 ? swap_log_tail(p) : log1p(0 - p)
+            }
+            x = (log(d) + 0.693147180559945309417232121458 + log_P2) / ndf
+            y = exp(2 * x)
+        }
+        if ((ndf < 2.1 && P > 0.5) || y > 0.05 + a) {
+            if P_ok != 0 {
+                x = qnorm(0.5 * P,0,1,1,0)
+            }
+else {
+                x = qnorm(log_P2,0,1,lower_tail,log_p)
+            }
+            y = x * x
+            if ndf < 5 {
+                c += 0.3 * (ndf - 4.5) * (x + 0.6)
+            }
+            c = (((0.05 * d * x - 5) * x - 7) * x - 2) * x + b + c
+            y = (((((0.4 * y + 6.3) * y + 36) * y + 94.5) / c - y - 3) / b + 1) * x
+            y = expm1(a * y * y)
+            q = sqrt(ndf * y)
+        }
+else if (P_ok == 0 && x < 0 - 0.693147180559945309417232121458 * 53) {
+            q = sqrt(ndf) * exp(0 - x)
+        }
+else {
+            y = ((1 / (((ndf + 6) / (ndf * y) - 0.089 * d - 0.822) * (ndf + 2) * 3) + 0.5 / (ndf + 4)) * y - 1) * (ndf + 1) / (ndf + 2) + 1 / y
+            q = sqrt(ndf * y)
+        }
+        if P_ok1 != 0 {
+            it: int = 0
+            while it < 10 {
+                y = dt_go(q,ndf,0)
+                if (y > 0) == 0 {
+                    break
+                }
+                x = (pt(q,ndf,0,0) - P / 2) / y
+                if (isfinite(x) == 0) {
+                    break
+                }
+                if (fabs(x) > 1e-14 * fabs(q)) == 0 {
+                    break
+                }
+                q += x * (1 + x * q * (ndf + 1) / (2 * (q * q + ndf)))
+                it += 1
+            }
+        }
+    }
+    if neg != 0 {
+        q = 0 - q
+    }
+    return q
+}
+
+/* == pbeta_smalla == */
+pbeta_smalla :: (x: double, a: double, b: double, lower_tail: int, log_p: int) -> double {
+    r: double = 0
+
+
+
+    if x > (0.5) {
+        olda: double = a
+        a = b
+        b = olda
+        x = 1 - x
+        lower_tail = (lower_tail == 0)
+    }
+    r = (a + b + (0.5)) * Log1pmx(a / (1 + b)) +
+		a * (a - (0.5)) / (1 + b) +
+		lfbaccdif (a, b)
+    r += a * log((1 + b) * x) - Lgamma1p(a)
+    if lower_tail {
+        if log_p != 0 {
+            return r + log1p(-compbfunc (x, a, b)) + log(b / (a + b))
+        } else {
+            return exp(r) * (1 - compbfunc (x, a, b)) * (b / (a + b))
+        }
+    } else {
+        if log_p != 0 {
+            return swap_log_tail (r + log1p(-compbfunc (x, a, b)) + log(b / (a + b)))
+        } else {
+            r = -expm1 (r)
+            r += compbfunc (x, a, b) * (1 - r)
+            r += (a / (a + b)) * (1 - r)
+            return r
+        }
+    }
+}
+
+/* == binomial == */
+binomial :: (ii: double, jj: double, pp: double, qq: double, diffFromMean: double, lower_tail: int, log_p: int) -> double {
+    mij: double = fmin(ii, jj)
+    if mij > 500 && fabs(diffFromMean) < (0.01) * mij {
+        return binApprox (jj - 1, ii, diffFromMean, lower_tail, log_p)
+    }
+    return binomialcf (ii, jj, pp, qq, diffFromMean, lower_tail, log_p)
+}
+
+/* == binomialcf == */
+binomialcf :: (ii: double, jj: double, pp: double, qq: double, diffFromMean: double, lower_tail: int, log_p: int) -> double {
+    sumAlways: double = 0
+    sumFactor: double = 6
+    cfSmall: double = (1.0e-15)
+    prob: double = 0
+    p: double = 0
+    q: double = 0
+    a1: double = 0
+    a2: double = 0
+    b1: double = 0
+    b2: double = 0
+    c1: double = 0
+    c2: double = 0
+    c3: double = 0
+    c4: double = 0
+    n1: double = 0
+    q1: double = 0
+    dfm: double = 0
+    i: double = 0
+    j: double = 0
+    ni: double = 0
+    nj: double = 0
+    numb: double = 0
+    ip1: double = 0
+    swapped: int = 0
+    ip1 = ii + 1
+    if ii > -1 && (jj <= 0 || pp == 0) {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    } else if ii > -1 && ii < 0 {
+        f: double = 0
+        ii = -ii
+        ip1 = ii
+        f = ii / ((ii + jj) * pp)
+        prob = binomialTerm (ii, jj, pp, qq, (ii + jj) * pp - ii, log_p)
+        prob = log_p ? prob + log(f) : prob * f
+        ii -= 1
+        diffFromMean = (ii + jj) * pp - ii
+    } else {
+        prob = binomialTerm (ii, jj, pp, qq, diffFromMean, log_p)
+    }
+    n1 = (ii + 3) + jj
+    if ii < 0 {
+        swapped = 0
+    } else if pp > qq {
+        swapped = (n1 * qq >= jj + 1)
+    } else {
+        swapped = (n1 * pp <= ii + 2)
+    }
+    if prob == 0.0 {
+        if swapped == (lower_tail == 0) {
+            return 0.0
+        } else {
+            return 1.0
+        }
+    }
+    if swapped {
+        j = ip1
+        ip1 = jj
+        i = jj - 1
+        p = qq
+        q = pp
+        dfm = 1 - diffFromMean
+    } else {
+        i = ii
+        j = jj
+        p = pp
+        q = qq
+        dfm = diffFromMean
+    }
+    if i > sumAlways {
+        numb = floor(sumFactor * sqrt(p + (0.5)) * exp(log(n1 * p * q) / 3))
+        numb = floor(numb - dfm)
+        if numb > i {
+            numb = floor(i)
+        }
+    } else {
+        numb = floor(i)
+    }
+    if numb < 0 {
+        numb = 0
+    }
+    a1 = 0
+    b1 = 1
+    q1 = q + 1
+    a2 = (i - numb) * q
+    b2 = dfm + numb + 1
+    c1 = 0
+    c2 = a2
+    c4 = b2
+    while fabs(a2 * b1 - a1 * b2) > fabs(cfSmall * b1 * b2) {
+        c1 += 1
+        c2 -= q
+        c3 = c1 * c2
+        c4 += q1
+        a1 = c4 * a2 + c3 * a1
+        b1 = c4 * b2 + c3 * b1
+        c1 += 1
+        c2 -= q
+        c3 = c1 * c2
+        c4 += q1
+        a2 = c4 * a1 + c3 * a2
+        b2 = c4 * b1 + c3 * b2
+        if fabs(b2) > (115792089237316195423570985008687907853269984665640564039457584007913129639936.0) {
+            a1 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b1 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            a2 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b2 *= 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+        } else if fabs(b2) < 1 / (115792089237316195423570985008687907853269984665640564039457584007913129639936.0) {
+            a1 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b1 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            a2 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+            b2 *= (115792089237316195423570985008687907853269984665640564039457584007913129639936.0)
+        }
+    }
+    a1 = a2 / b2
+    ni = (i - numb + 1) * q
+    nj = (j + numb) * p
+    while numb > 0 {
+        a1 = (1 + a1) * (ni / nj)
+        ni = ni + q
+        nj = nj - p
+        numb -= 1
+    }
+    prob = log_p ? prob + log1p(a1) : prob * (1 + a1)
+    if swapped {
+        if log_p != 0 {
+            prob += log(ip1 * q / nj)
+        } else {
+            prob *= ip1 * q / nj
+        }
+    }
+    if swapped == (lower_tail == 0) {
+        return prob
+    } else {
+        return log_p ? swap_log_tail (prob) : 1 - prob
+    }
+}
+
+/* == binApprox == */
+binApprox :: (a: double, b: double, diffFromMean: double, lower_tail: int, log_p: int) -> double {
+    pq1: double = 0
+    res: double = 0
+    t: double = 0
+    ib05: double = 0
+    ib15: double = 0
+    ib25: double = 0
+    ib35: double = 0
+    ib3: double = 0
+    elfb: double = 0
+    coef15: double = 0
+    coef25: double = 0
+    coef35: double = 0
+    approxtdistDens: double = 0
+    n: double = a + b
+    n1: double = n + 1
+    lvv: double = b - n * diffFromMean
+    lval: double = (a * Log1pmx(lvv / (a * n1)) + b * Log1pmx(0 - lvv / (b * n1))) / n
+    tp: double = -expm1 (lval)
+    mfac: double = n1 * tp
+    ib2: double = 1 + mfac
+    t1: double = (n + 2) * tp
+    mfac = 2 * mfac
+    ib3 = ib2 + mfac*t1
+    ib05 = tdistexp (tp, 1 - tp, n1 * lval, 2 * n1, log_p, &approxtdistDens)
+    ib15 = sqrt(mfac)
+    mfac = t1 * ((2.0) / 3)
+    ib25 = 1 + mfac
+    ib35 = ib25 + mfac * (n + 3) * tp * ((2.0) / 5)
+    pq1 = (n * n) / (a * b)
+    res = (ib2 * (1 + 2 * pq1) / 135 - 2 * ib3 * ((2 * pq1 - 43) * pq1 - 22) / (2835 * (n + 3))) / (n + 2)
+    res = ((1.0) / 3 - res) * 2 * sqrt(pq1 / n1) * (a - b) / n
+    if lvv > 0 {
+        res = -res
+        lower_tail = (lower_tail == 0)
+    }
+    n1 = (n + (1.5)) * (n + (2.5))
+    coef15 = (-17 + 2 * pq1) / (24 * (n + (1.5)))
+    coef25 = (-503 + 4 * pq1 * (19 + pq1)) / (1152 * n1)
+    coef35 = (-315733 + pq1 * (53310 + pq1 * (8196 - 1112 * pq1))) / (414720 * n1 * (n + (3.5)))
+    elfb = (coef35 + coef25) + coef15
+    res += ib15 * ((coef35 * ib35 + coef25 * ib25) + coef15)
+    t = log_p != 0 ? logspace_signed_add(ib05, log(fabs(res)) + approxtdistDens - log1p(elfb), res >= 0 ? 1 : 0) : ib05 + res * approxtdistDens / (1 + elfb)
+    return lower_tail
+		? t
+		: log_p ? swap_log_tail (t) : (1 - t)
+}
+
+/* == pbeta == */
+pbeta :: (x: double, a: double, b: double, lower_tail: int, log_p: int) -> double {
+    am1: double = 0
+    if (x) != (x) || (a) != (a) || (b) != (b) {
+        return x + a + b
+    }
+    if x <= 0 {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    if x >= 1 {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    if a < 1 && (b < 1 || (1 + b) * x <= 1) {
+        return pbeta_smalla(x, a, b, lower_tail, log_p)
+    }
+    if b < 1 && (1 + a) * (1 - x) <= 1 {
+        return pbeta_smalla(1 - x, b, a, (lower_tail == 0), log_p)
+    }
+    if a < 1 {
+        return binomial (-a, b, x, 1 - x, 0, (lower_tail == 0), log_p)
+    }
+    if b < 1 {
+        return binomial (-b, a, 1 - x, x, 0, lower_tail, log_p)
+    }
+    am1 = a - 1
+    return binomial (am1, b, x, 1 - x, (am1 + b) * x - am1,
+			 (lower_tail == 0), log_p)
+}
+
+/* == qbeta == */
+abramowitz_stegun :: (p: double, a: double, b: double, lower_tail: int, log_p: int) -> double {
+    yp: double = qnorm(p,0,1,lower_tail == 0 ? 1 : 0,log_p)
+    ta: double = 1 / (2 * a - 1)
+    tb: double = 1 / (2 * b - 1)
+    h: double = 2 / (ta + tb)
+    l: double = (yp * yp - 3) / 6
+    w: double = yp * sqrt(h + l) / h - (tb - ta) * (l + (5 - 4 / h) / 6)
+    return a / (a + b * exp(2 * w))
+}
+
+qbeta :: (p: double, pin: double, qin: double, lower_tail: int, log_p: int) -> double {
+    x0: double = 0
+    q: double = 0
+    shape: [2] double = {0,0}
+    S: double = pin + qin
+    if (S) != (S) || (p) != (p) {
+        return S + p
+    }
+    if pin < 0 || qin < 0 {
+    }
+    if (log_p == 0) && p > (0.9) {
+        p = 1 - p
+        lower_tail = (lower_tail == 0)
+    }
+    if pin >= 1 && qin >= 1 {
+        x0 = abramowitz_stegun(p, pin, qin, lower_tail, log_p)
+    } else {
+        phalf: double = pbeta(0.5, pin, qin, lower_tail, log_p)
+        lb: double = lbeta_go (pin, qin)
+        if (lower_tail == 0) == (p > phalf) {
+            x0 = exp((log(pin) + (lower_tail != 0 ? log(p) : log1p(0 - p)) + 0*(p) + lb) / pin)
+        } else {
+            x0 = -expm1 ((log(qin) + (lower_tail != 0 ? log1p(0 - p) : log(p)) + 0*(p) + lb) / qin)
+        }
+    }
+    shape[0] = pin
+    shape[1] = qin
+    q = PFuncInverter(1,p,shape,lower_tail,log_p,0,1,x0)
+    return q
+}
+
+/* == pgamma_raw == */
+pd_lower_cf :: (y: double, d: double) -> double {
+    f: double = 0
+    of: double = 0
+    f0: double = 0
+    i: double = 0
+    c2: double = 0
+    c3: double = 0
+    c4: double = 0
+    a1: double = 0
+    b1: double = 0
+    a2: double = 0
+    b2: double = 0
+    scalefactor: double = 1.157920892373162e+77
+    f = 0
+    of = -1
+    if (0 - (0.693147180559945309417232121458 * 1024 / 2.2204460492503131e-16) < y && y <= 0) {
+        lf: double = lgamma(y + d) - lgamma(d) - y * log(d)
+        if lf >= -0.693147180559945309417232121458 {
+            f = 1 - exp(0 - d - y + lf * 0.5)
+        }
+else {
+            f = exp(0 - d - y + lf * 0.5)
+            f = 0 - f
+        }
+        return f
+    }
+    f0 = y / d
+    if f0 > 1 { f0 = 1 }
+    c2 = y
+    c4 = d
+    a1 = 0
+    b1 = 1
+    a2 = y
+    b2 = d
+    while b2 > scalefactor {
+        a1 /= scalefactor
+        b1 /= scalefactor
+        a2 /= scalefactor
+        b2 /= scalefactor
+        if b2 <= scalefactor { break }
+    }
+    i = 0
+    of = -1
+    while i < 200000 {
+        i += 1
+        c2 -= 1
+        c3 = i * c2
+        c4 += 2
+        a1 = c4 * a2 + c3 * a1
+        b1 = c4 * b2 + c3 * b1
+        i += 1
+        c2 -= 1
+        c3 = i * c2
+        c4 += 2
+        a2 = c4 * a1 + c3 * a2
+        b2 = c4 * b1 + c3 * b2
+        if b2 > scalefactor {
+            a1 /= scalefactor
+            b1 /= scalefactor
+            a2 /= scalefactor
+            b2 /= scalefactor
+        }
+        if b2 != 0 {
+            f = a2 / b2
+            if (fabs(f - of) <= 2.2204460492503131e-16 * fmax(f0,fabs(f))) {
+                return f
+            }
+            of = f
+        }
+    }
+    return f
+}
+
+pd_upper_series :: (x: double, y_in: double, log_p: int) -> double {
+    y: double = y_in
+    term: double = x / y
+    sum: double = term
+    while 1 {
+        y += 1
+        term *= x / y
+        sum += term
+        if (term > sum * 2.2204460492503131e-16) == 0 {
+            break
+        }
+    }
+    if log_p != 0 {
+        return log(sum)
+    }
+    return sum
+}
+
+pd_upper_gamma :: (y: double, z: double) -> double {
+    z2: double = z * z
+    term: double = 0
+    sum: double = 0
+    i: int = 0
+    term = 1
+    sum = 1
+    i = 1
+    while i < 100 {
+        term *= z2 / (y + i)
+        sum += term
+        if term < sum * 2.2204460492503131e-16 {
+            break
+        }
+        i += 1
+    }
+    return 1 / y + z / y / y * (1 + y * sum)
+}
+
+dpois_wrap :: (x_plus_1: double, lambda: double, give_log: int) -> double {
+    if isfinite(lambda) == 0 {
+        return 0.0
+    }
+    if x_plus_1 > 1 {
+        return dpois_raw(x_plus_1 - 1,lambda,give_log)
+    }
+    if (lambda > fabs(x_plus_1 - 1) * 3.196577e18) {
+        return exp(0 - lambda - lgamma(x_plus_1))
+    }
+    d: double = dpois_raw(x_plus_1,lambda,give_log)
+    if give_log != 0 {
+        return d + log(x_plus_1 / lambda)
+    }
+    return d * (x_plus_1 / lambda)
+}
+
+
+PFuncInverter :: (which: int, p: double, shape: double *, lower_tail: int, log_p: int, xlow_in: double, xhigh_in: double, x0_in: double) -> double {
+    have_xlow: int = isfinite(xlow_in) != 0 ? 1 : 0
+    have_xhigh: int = isfinite(xhigh_in) != 0 ? 1 : 0
+    xlow: double = xlow_in
+    xhigh: double = xhigh_in
+    exlow: double = 0
+    exhigh: double = 0
+    x: double = 0
+    e: double = 0
+    px: double = 0
+    i: int = 0
+    dt_0: double = lower_tail != 0 ? 0.0 : 1.0
+    dt_1: double = lower_tail != 0 ? 1.0 : 0.0
+    if log_p != 0 {
+        if p > 0 { return 0.0 / 0.0 }
+    }
+else {
+        if (p < 0 || p > 1) { return 0.0 / 0.0 }
+    }
+    if p == dt_0 { return xlow }
+    if p == dt_1 { return xhigh }
+    exlow = dt_0 - p
+    exhigh = dt_1 - p
+    if lower_tail == 0 {
+        exlow = 0 - exlow
+        exhigh = 0 - exhigh
+    }
+    i = 0
+    while i < 100 {
+        if i == 0 {
+            if (x0_in > xlow && x0_in < xhigh) {
+                x = x0_in
+            }
+else if (have_xlow != 0 && x0_in <= xlow) {
+                x = have_xhigh != 0 ? xlow + (xhigh - xlow) / 100 : xlow + 1
+            }
+else if (have_xhigh != 0 && x0_in >= xhigh) {
+                x = have_xlow != 0 ? xhigh - (xhigh - xlow) / 100 : xhigh - 1
+            }
+else {
+                x = 0
+            }
+        }
+else if i == 1 {
+            if (have_xlow != 0 && have_xhigh != 0) {
+                x = (xlow + xhigh) / 2
+            }
+else if have_xlow != 0 {
+                x = xlow * 1.1
+            }
+else {
+                x = xhigh / 1.1
+            }
+        }
+else if (have_xlow != 0 && have_xhigh != 0) {
+            m8: int = i % 8
+            if m8 == 0 {
+                x = xhigh - (xhigh - xlow) * (exhigh / (exhigh - exlow))
+            }
+else if m8 == 4 {
+                if (xlow >= 0 && xhigh >= 0) {
+                    x = sqrt(fmax(2.2250738585072014e-308,xlow)) * sqrt(xhigh)
+                }
+else if (xlow <= 0 && xhigh <= 0) {
+                    x = 0 - sqrt(0 - xlow) * sqrt(fmax(2.2250738585072014e-308,0 - xhigh))
+                }
+else {
+                    x = 0
+                }
+            }
+else if m8 == 2 {
+                x = (xhigh + 1000 * xlow) / 1001
+            }
+else if m8 == 6 {
+                x = (1000 * xhigh + xlow) / 1001
+            }
+else {
+                x = (xhigh + xlow) / 2
+            }
+        }
+else if have_xlow != 0 {
+            x = xlow < 1 ? 1 : (2 * i) * xlow
+        }
+else {
+            x = xhigh > -1 ? -1 : (2 * i) * xhigh
+        }
+        if (have_xlow != 0 && x <= xlow) || (have_xhigh != 0 && x >= xhigh) {
+            i += 1
+            continue
+        }
+        if which == 1 {
+            px = pbeta(x,shape[0],shape[1],lower_tail,log_p)
+        }
+else {
+            px = pgamma(x,shape[0],1,lower_tail,log_p)
+        }
+        e = px - p
+        if lower_tail == 0 { e = 0 - e }
+        if e == 0 {
+            break
+        }
+else if e > 0 {
+            xhigh = x
+            exhigh = e
+            have_xhigh = 1
+        }
+else if e < 0 {
+            xlow = x
+            exlow = e
+            have_xlow = 1
+        }
+        if (have_xlow != 0 && have_xhigh != 0) {
+            prec: double = (xhigh - xlow) / (fabs(xlow) + fabs(xhigh))
+            if prec < 2.2204460492503131e-16 * 4 {
+                x = (xhigh + xlow) / 2
+                if which == 1 {
+                    e = pbeta(x,shape[0],shape[1],lower_tail,log_p) - p
+                }
+else {
+                    e = pgamma(x,shape[0],1,lower_tail,log_p) - p
+                }
+                if lower_tail == 0 { e = 0 - e }
+                break
+            }
+            if i % 3 < 2 {
+                d2: double = 0
+                if which == 1 {
+                    d2 = dbeta(x,shape[0],shape[1],0)
+                }
+else {
+                    d2 = dgamma_go(x,shape[0],1,0)
+                }
+                if d2 != 0 {
+                    xn2: double = x - e / d2 * 1.000001
+                    if (xn2 > xlow && xn2 < xhigh) {
+                        x = xn2
+                        i += 1
+                        if which == 1 {
+                            px = pbeta(x,shape[0],shape[1],lower_tail,log_p)
+                        }
+else {
+                            px = pgamma(x,shape[0],1,lower_tail,log_p)
+                        }
+                        e = px - p
+                        if lower_tail == 0 { e = 0 - e }
+                        if e == 0 {
+                            break
+                        }
+else if e > 0 {
+                            xhigh = x
+                            exhigh = e
+                            have_xhigh = 1
+                        }
+else if e < 0 {
+                            xlow = x
+                            exlow = e
+                            have_xlow = 1
+                        }
+                    }
+                }
+            }
+        }
+        i += 1
+    }
+    if (have_xhigh != 0 && fabs(e) > exhigh) {
+        x = xhigh
+    }
+    if (have_xlow != 0 && fabs(e) > 0 - exlow) {
+        x = xlow
+    }
+    return x
+}
+
+dbeta :: (x: double, a: double, b: double, give_log: int) -> double {
+    if (x < 0 || x > 1 || a <= 0 || b <= 0) {
+        return 0.0
+    }
+    l: double = (a - 1) * log(x) + (b - 1) * log1p(0 - x) - lbeta_go(a,b)
+    if give_log != 0 {
+        return l
+    }
+    return exp(l)
+}
+
+pbeta1_go :: (x: double, shape: double *, lower_tail: int, log_p: int) -> double {
+    return pbeta(x,shape[0],shape[1],lower_tail,log_p)
+}
+
+(0.693147180559945309417232121458 * 1024 / 2.2204460492503131e-16): double = 0.693147180559945309417232121458 * 1024 / 2.2204460492503131e-16
+
+pd_lower_series :: (lambda: double, y_in: double) -> double {
+    term: double = 1
+    sum: double = 0
+    y: double = y_in
+    while (y >= 1 && term > sum * 2.2204460492503131e-16) {
+        term *= y / lambda
+        sum += term
+        y -= 1
+    }
+    if y != floor(y) {
+        f: double = pd_lower_cf(y,lambda + 1 - y)
+        sum += term * f
+    }
+    return sum
+}
+
+ppois_asymp :: (x: double, lambda: double, lower_tail: int, log_p: int) -> double {
+    coefs_a: [8] double = {1e-99,0.666666666666666666666666666666,0 - 4 / 135,8 / 2835,16 / 8505,0 - 8992 / 12629925,0 - 334144 / 492567075,698752 / 1477701225}
+    coefs_b: [8] double = {1e-99,1 / 12,1 / 288,0 - 139 / 51840,0 - 571 / 2488320,163879 / 209018880,5246819 / 75246796800,0 - 534703531 / 902961561600}
+    elfb: double = 0
+    elfb_term: double = 0
+    res12: double = 0
+    res1_term: double = 0
+    res1_ig: double = 0
+    res2_term: double = 0
+    res2_ig: double = 0
+    dfm: double = 0
+    pt_: double = 0
+    s2pt: double = 0
+    f: double = 0
+    np: double = 0
+    sum: double = 0
+    ib: double = 0
+    dfm = lambda - x
+    pt_ = x / lambda
+    s2pt = sqrt(2 * (lambda - x - x * log(pt_)))
+    np = 1 / (4 * lambda)
+    f = dfm - s2pt
+    elfb = 0
+    elfb_term = 0
+    ib = 1
+    while ib < 8 {
+        elfb_term = f * elfb_term + coefs_b[(int)ib]
+        elfb = f * elfb + elfb_term
+        ib += 1
+    }
+    elfb *= np
+    res12 = 0
+    res1_term = 1
+    res1_ig = 1
+    res2_term = 0.666666666666666666666666666666
+    res2_ig = 0.666666666666666666666666666666
+    ib = 2
+    while ib < 8 {
+        res1_term *= s2pt / (2 * ib - 1)
+        res1_ig += res1_term
+        res2_term *= s2pt / (2 * ib)
+        res2_ig += res2_term
+        ib += 1
+    }
+    res12 = res1_ig * 0.398942280401432677939946059934 * exp(0 - s2pt * s2pt / 2) + res2_ig * (1 - 0.5) / s2pt
+    sum = elfb * res12
+    if log_p != 0 {
+        return log(0.5) + log(sum)
+    }
+    if lower_tail != 0 {
+        return 0.5 * sum
+    }
+    return 1 - 0.5 * sum
+}
+
+
+lgamma1p_raw :: (a: double) -> double {
+    return lgamma(1 + a)
+}
+
+pgamma_smallx :: (x: double, alph: double, lower_tail: int, log_p: int) -> double {
+    sum: double = 0
+    c: double = alph
+    n: double = 0
+    term: double = 0
+    while 1 {
+        n += 1
+        c *= 0 - x / n
+        term = c / (alph + n)
+        sum += term
+        if (fabs(term) > 2.2204460492503131e-16 * fabs(sum)) == 0 {
+            break
+        }
+    }
+    if lower_tail != 0 {
+        f1: double = 1 + sum
+        f2: double = 0
+        if (alph > 1) {
+            f2 = dpois_raw(alph,x,0)
+            f2 = f2 * exp(x)
+        }
+else {
+            f2 = pow(x,alph) / exp(lgamma1p_raw(alph))
+        }
+        return f1 * f2
+    }
+    lf2: double = alph * log(x) - lgamma1p_raw(alph)
+    f1m1: double = sum
+    f2m1: double = expm1(lf2)
+    return 0 - (f1m1 + f2m1 + f1m1 * f2m1)
+}
+
+pgamma_raw :: (x: double, alph: double, lower_tail: int, log_p: int) -> double {
+    res: double = 0
+    if x <= 0 { return (lower_tail != 0 ? 0.0 : 1.0) }
+    if x >= 1e308 * 10 { return (lower_tail != 0 ? 1.0 : 0.0) }
+    if x < 1 {
+        res = pgamma_smallx (x, alph, lower_tail, log_p)
+    } else if x <= alph - 1 && x < (0.8) * (alph + 50) {
+        sum: double = pd_upper_series (x, alph, log_p)
+        d: double = dpois_wrap (alph, x, log_p)
+        if (lower_tail == 0) {
+            res = log_p
+		? swap_log_tail (d + sum)
+		: 1 - d * sum
+        } else {
+            res = log_p ? sum + d : sum * d
+        }
+    } else if alph - 1 < x && alph < (0.8) * (x + 50) {
+        sum: double = 0
+        d: double = dpois_wrap (alph, x, log_p)
+        if alph < 1 {
+            if x * 2.2204460492503131e-16 > 1 - alph {
+                sum = 1.0
+            } else {
+                f: double = pd_lower_cf (alph, x - (alph - 1)) * x / alph
+                sum = log_p ? log(f) : f
+            }
+        } else {
+            sum = pd_lower_series (x, alph - 1)
+            sum = log_p ? log1p(sum) : 1 + sum
+        }
+        if (lower_tail == 0) {
+            res = log_p ? sum + d : sum * d
+        } else {
+            res = log_p
+		? swap_log_tail (d + sum)
+		: 1 - d * sum
+        }
+    } else {
+        res = ppois_asymp (alph - 1, x, (lower_tail == 0), log_p)
+    }
+    if (log_p == 0) && res < 2.2250738585072014e-308 / 2.2204460492503131e-16 {
+        return exp(pgamma_raw (x, alph, lower_tail, 1))
+    } else {
+        return res
+    }
+}
+
+/* == pgamma == */
+pgamma :: (x: double, alph: double, scale: double, lower_tail: int, log_p: int) -> double {
+    if (x) != (x) || (alph) != (alph) || (scale) != (scale) {
+        return x + alph + scale
+    }
+    if alph < 0 || scale <= 0 {
+        return (0.0/0.0)
+    }
+    x /= scale
+    if (x) != (x) {
+        return x
+    }
+    if alph == 0 {
+        return (x <= 0) ? (lower_tail != 0 ? 0.0 : 1.0): (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    return pgamma_raw (x, alph, lower_tail, log_p)
+}
+
+/* == qgamma == */
+qgamma :: (p: double, alpha: double, scale: double, lower_tail: int, log_p: int) -> double {
+    res1: double = 0
+    x0: double = 0
+    v: double = 0
+    if (p) != (p) || (alpha) != (alpha) || (scale) != (scale) {
+        return p + alpha + scale
+    }
+    if alpha <= 0 {
+    }
+    if (log_p == 0) && p > (0.9) {
+        p = 1 - p
+        lower_tail = (lower_tail == 0)
+    }
+    v = 2 * alpha
+    if v < (-1.24) * (lower_tail != 0 ? log(p) : log1p(0 - p)) + 0*(p) {
+        x0 = pow((p) * alpha * exp(lgamma (alpha) + alpha * 0.693147180559945309417232121458),
+			      1 / alpha) / 2
+    } else {
+        x1: double = qnorm(p, 0, 1, lower_tail, log_p)
+        p1: double = (0.222222) / v
+        x0 = v * pow(x1 * sqrt(p1) + 1 - p1, 3) / 2
+    }
+    res1 = PFuncInverter(0,p,&alpha,lower_tail,log_p,0,1e308 * 10,x0)
+    return res1 * scale
+}
+
+/* == pchisq == */
+pchisq :: (x: double, df: double, lower_tail: int, log_p: int) -> double {
+    return pgamma(x, df/(2.0), (2.0), lower_tail, log_p)
+}
+
+/* == qchisq == */
+qchisq :: (p: double, df: double, lower_tail: int, log_p: int) -> double {
+    return qgamma(p, (0.5) * df, (2.0), lower_tail, log_p)
+}
+
+/* == pf == */
+pf :: (x: double, n1: double, n2: double, lower_tail: int, log_p: int) -> double {
+    if (x) != (x) || (n1) != (n1) || (n2) != (n2) {
+        return x + n2 + n1
+    }
+    if n1 <= 0 || n2 <= 0 {
+    }
+    if x <= 0 {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    if n1 * x > n2 {
+        return pbeta(n2 / (n2 + n1 * x), n2 / 2, n1 / 2,
+			  (lower_tail == 0), log_p)
+    } else {
+        return pbeta(n1 * x / (n2 + n1 * x), n1 / 2, n2 / 2,
+			  lower_tail, log_p)
+    }
+}
+
+/* == qf == */
+qf :: (p: double, n1: double, n2: double, lower_tail: int, log_p: int) -> double {
+    q: double = 0
+    qc: double = 0
+    if (p) != (p) || (n1) != (n1) || (n2) != (n2) {
+        return p + n1 + n2
+    }
+    if n1 <= 0 || n2 <= 0 {
+    }
+    if p == (lower_tail != 0 ? 0.0 : 1.0) {
+        return 0
+    }
+    q = qbeta(p, n2 / 2, n1 / 2, (lower_tail == 0), log_p)
+    if q < (0.9) {
+        qc = 1 - q
+    } else {
+        qc = qbeta(p, n1 / 2, n2 / 2, lower_tail, log_p)
+    }
+    return (qc / q) * (n2 / n1)
+}
+
+/* == ppois == */
+ppois :: (x: double, lambda: double, lower_tail: int, log_p: int) -> double {
+    if (x) != (x) || (lambda) != (lambda) {
+        return x + lambda
+    }
+    if lambda < 0 {
+        return (0.0/0.0)
+    }
+    if x < 0 {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    if lambda == 0 {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    if (isfinite(x) == 0) {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    x = floor(x)
+    return pgamma(lambda, x + 1, (1.0), (lower_tail == 0), log_p)
+}
+
+/* == dpois == */
+dpois :: (x: double, lambda: double, give_log: int) -> double {
+    if (x) != (x) || (lambda) != (lambda) {
+        return x + lambda
+    }
+    if lambda < 0 {
+        return (0.0/0.0)
+    }
+    
+    if x < 0 || (isfinite(x) == 0) {
+        return 0.0
+    }
+    x = round(x)
+    return( dpois_raw(x,lambda,give_log) )
+}
+
+/* == pbinom == */
+pbinom :: (x: double, n: double, p: double, lower_tail: int, log_p: int) -> double {
+    if (x) != (x) || (n) != (n) || (p) != (p) {
+        return x + n + p
+    }
+    if (isfinite(n) == 0) || (isfinite(p) == 0) {
+        return (0.0/0.0)
+    }
+    if n != floor(n) {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    n = round(n)
+    if n < 0 || p < 0 || p > 1 {
+        return (0.0/0.0)
+    }
+    if x < 0 {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    x = floor(x)
+    if n <= x {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    return pbeta(p, x + 1, n - x, (lower_tail == 0), log_p)
+}
+
+/* == pbinom2 == */
+pbinom2 :: (x0: double, x1: double, n: double, p: double) -> double {
+    Pl: double = 0
+    if x0 > n || x1 < 0 || x0 > x1 {
+        return 0
+    }
+    if x0 == x1 {
+        return dbinom (x0, n, p, 0)
+    }
+    if x0 <= 0 {
+        return pbinom(x1, n, p, 1, 0)
+    }
+    if x1 >= n {
+        return pbinom(x0 - 1, n, p, 0, 0)
+    }
+    Pl = pbinom(x0 - 1, n, p, 1, 0)
+    if Pl > (0.75) {
+        PlC: double = pbinom(x0 - 1, n, p, 0, 0)
+        PrC: double = pbinom(x1, n, p, 0, 0)
+        return PlC - PrC
+    } else {
+        Pr: double = pbinom(x1, n, p, 1, 0)
+        return Pr - Pl
+    }
+}
+
+/* == qbinom == */
+qbinom :: (p: double, n: double, pr: double, lower_tail: int, log_p: int) -> double {
+    q: double = 0
+    mu: double = 0
+    sigma: double = 0
+    gamma: double = 0
+    z: double = 0
+    y: double = 0
+    if (p) != (p) || (n) != (n) || (pr) != (pr) {
+        return p + n + pr
+    }
+    if (isfinite(n) == 0) || (isfinite(pr) == 0) {
+        return (0.0/0.0)
+    }
+    if (isfinite(p) == 0) && (log_p == 0) {
+        return (0.0/0.0)
+    }
+    if n != floor(n + (0.5)) {
+        return (0.0/0.0)
+    }
+    if pr < 0 || pr > 1 || n < 0 {
+        return (0.0/0.0)
+    }
+    if log_p != 0 {
+        if p > 0 {
+            return (0.0/0.0)
+        }
+        if p == 0 {
+            return (lower_tail ? n : 0)
+        }
+        if p == (-1e308*10) {
+            return (lower_tail ? 0 : n)
+        }
+    } else {
+        if p < 0 || p > 1 {
+            return (0.0/0.0)
+        }
+        if p == 0 {
+            return (lower_tail ? 0 : n)
+        }
+        if p == 1 {
+            return (lower_tail ? n : 0)
+        }
+    }
+    if pr == 0 || n == 0 {
+        return (0.0)
+    }
+    q = 1 - pr
+    if q == 0 {
+        return n
+    }
+    mu = n * pr
+    sigma = sqrt(n * pr * q)
+    gamma = (q - pr) / sigma
+    if (lower_tail == 0) || log_p {
+        p = (p)
+        if p == 0 {
+            return (0.0)
+        }
+        if p == 1 {
+            return n
+        }
+    }
+    if p + (1.01)*2.2204460492503131e-16 >= 1 {
+        return n
+    }
+    z = qnorm(p, (0.0), (1.0),               1,          0)
+    y = floor(mu + sigma * (z + gamma * (z*z - 1) / 6) + (0.5))
+    if y > n {
+        y = n
+    }
+    z = pbinom(y, n, pr,               1,          0)
+    p *= 1 - 64*2.2204460492503131e-16
+    if n < (1e5) {
+        return do_search(y, &z, p, n, pr, 1)
+    }
+    incr: double = floor(n * (0.001)), oldincr
+    while 1 {
+        oldincr = incr
+        y = do_search(y, &z, p, n, pr, incr)
+        incr = fmax(1, floor(incr/100))
+        if (oldincr > 1 && incr > n*(1e-15)) == 0 { break }
+    }
+    return y
+}
+
+/* == pnbinom == */
+pnbinom :: (x: double, size: double, prob: double, lower_tail: int, log_p: int) -> double {
+    if (x) != (x) || (size) != (size) || (prob) != (prob) {
+        return x + size + prob
+    }
+    if (isfinite(size) == 0) || (isfinite(prob) == 0) {
+        return (0.0/0.0)
+    }
+    if size < 0 || prob <= 0 || prob > 1 {
+        return (0.0/0.0)
+    }
+    if size == 0 {
+        return (x >= 0) ? (lower_tail != 0 ? 1.0 : 0.0) : (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    if x < 0 {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    if (isfinite(x) == 0) {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    x = floor(x)
+    return pbeta(prob, size, x + 1, lower_tail, log_p)
+}
+
+/* == dnbinom == */
+dnbinom :: (x: double, size: double, prob: double, give_log: int) -> double {
+    ans: double = 0
+    p: double = 0
+    if (x) != (x) || (size) != (size) || (prob) != (prob) {
+        return x + size + prob
+    }
+    if prob <= 0 || prob > 1 || size < 0 {
+        return (0.0/0.0)
+    }
+    
+    if x < 0 || (isfinite(x) == 0) {
+        return 0.0
+    }
+    if x == 0 && size==0 {
+        return 1.0
+    }
+    x = round(x)
+    if (isfinite(size) == 0) {
+        size = 1.7976931348623157e308
+    }
+    ans = dbinom_raw(size, x+size, prob, 1-prob, give_log)
+    p = (size)/(size+x)
+    return((give_log) ? log(p) + ans : p * ans)
+}
+
+/* == phyper == */
+
+pdhyper :: (x_in: double, NR: double, NB: double, n: double, log_p: int) -> double {
+    sum: double = 0
+    term: double = 1
+    x: double = x_in
+    while (x > 0 && term >= 2.2204460492503131e-16 * sum) {
+        term *= x * (NB - n + x) / (n + 1 - x) / (NR + 1 - x)
+        sum += term
+        x -= 1
+    }
+    if log_p != 0 {
+        return log1p(sum)
+    }
+    return 1 + sum
+}
+
+phyper :: (x: double, NR: double, NB: double, n: double, lower_tail: int, log_p: int) -> double {
+    d: double = 0
+    pd: double = 0
+    if (x) != (x) || (NR) != (NR) || (NB) != (NB) || (n) != (n) {
+        return x + NR + NB + n
+    }
+    x = floor(x)
+    NR = round(NR)
+    NB = round(NB)
+    n  = round(n)
+    if NR < 0 || NB < 0 || (isfinite(NR + NB) == 0) || n < 0 || n > NR + NB {
+        return (0.0/0.0)
+    }
+    if x * (NR + NB) > n * NR {
+        oldNB: double = NB
+        NB = NR
+        NR = oldNB
+        x = n - x - 1
+        lower_tail = (lower_tail == 0)
+    }
+    if x < 0 {
+        return (lower_tail != 0 ? 0.0 : 1.0)
+    }
+    if x >= NR || x >= n {
+        return (lower_tail != 0 ? 1.0 : 0.0)
+    }
+    d  = dhyper (x, NR, NB, n, log_p)
+    pd = pdhyper(x, NR, NB, n, log_p)
+    return log_p != 0 ? (lower_tail != 0 ? (d + pd) : swap_log_tail(d + pd)) : (d * pd)
+}
+
+/* == dhyper == */
+dhyper :: (x: double, r: double, b: double, n: double, give_log: int) -> double {
+    p: double = 0
+    q: double = 0
+    p1: double = 0
+    p2: double = 0
+    p3: double = 0
+    if (x) != (x) || (r) != (r) || (b) != (b) || (n) != (n) {
+        return x + r + b + n
+    }
+    if (r < 0 || r != floor(r)) || (b < 0 || b != floor(b)) || (n < 0 || n != floor(n)) || n > r+b {
+        return (0.0/0.0)
+    }
+    if x < 0 {
+        return(0.0)
+    }
+    
+    x = round(x)
+    r = round(r)
+    b = round(b)
+    n = round(n)
+    if n < x || r < x || n - x > b {
+        return(0.0)
+    }
+    if n == 0 {
+        return((x == 0) ? 1.0 : 0.0)
+    }
+    p = (n)/((r+b))
+    q = ((r+b-n))/((r+b))
+    p1 = dbinom_raw(x,	r, p,q,give_log)
+    p2 = dbinom_raw(n-x,b, p,q,give_log)
+    p3 = dbinom_raw(n,r+b, p,q,give_log)
+    return( (give_log) ? p1 + p2 - p3 : p1*p2/p3 )
+}
+
+StatAggArgs :: (args: Val *, count: int, marks: int *, xs: double *, ys: double *, xn: int *, yn: int *, need_y: int) -> int {
+    list: NumList = {0}
+    list2: NumList = {0}
+    gx: int = 0
+    gl: int = 0
+    hx: int = 0
+    hl: int = 0
+    CollectNumbers(args,count,&list)
+    xn[0] = list.count
+    if need_y != 0 {
+        if GroupBounds(marks,count,0,&gx,&gl) == 0 { return 0 }
+        if GroupBounds(marks,count,1,&hx,&hl) == 0 { return 0 }
+        gx2: int = 0
+        gl2: int = 0
+        gx2 = gx
+        gl2 = gl
+        xn[0] = CashList(args + gx2,gl2,xs)
+        yn[0] = CashList(args + hx,hl,ys)
+        if (xn[0] != yn[0]) { return 0 }
+    }
+else {
+        i: int = 0
+        while i < xn[0] {
+            xs[i] = list.data[i]
+            i += 1
+        }
+    }
+    return 1
+}
+
+StatAverage :: (xs: double *, n: int) -> double {
+    acc: Qd = {0,0}
+    one: Qd = {1,0}
+    q: Qd = {0,0}
+    i: int = 0
+    while i < n {
+        Q_Init(&q,xs[i])
+        Q_Add(&acc,&acc,&q)
+        i += 1
+    }
+    qn: Qd = {0,0}
+    Q_Init(&qn,(double)n)
+    Q_Div(&acc,&acc,&qn)
+    return Q_Val(&acc)
+}
+
+StatDevsq :: (xs: double *, n: int) -> double {
+    sumh: double = 0
+    suml: double = 0
+    qavg: Qd = {0,0}
+    acc: Qd = {0,0}
+    q: Qd = {0,0}
+    i: int = 0
+    StatAccSum(xs,n,&sumh,&suml)
+    Q_Init(&qavg,sumh)
+    Q_Init(&q,suml)
+    Q_Add(&qavg,&qavg,&q)
+    qn: Qd = {0,0}
+    Q_Init(&qn,(double)n)
+    Q_Div(&qavg,&qavg,&qn)
+    i = 0
+    while i < n {
+        Q_Init(&q,xs[i])
+        Q_Sub(&q,&q,&qavg)
+        Q_Mul(&q,&q,&q)
+        Q_Add(&acc,&acc,&q)
+        i += 1
+    }
+    return Q_Val(&acc)
+}
+
+StatAccSum :: (xs: double *, n: int, sumh: double *, suml: double *) {
+    partials: [128] double = {0}
+    np: int = 0
+    i: int = 0
+    ui: int = 0
+    uj: int = 0
+    x: double = 0
+    y: double = 0
+    hi: double = 0
+    lo: double = 0
+    i = 0
+    while i < n {
+        x = xs[i]
+        ui = 0
+        uj = 0
+        while uj < np {
+            y = partials[uj]
+            if fabs(x) < fabs(y) {
+                t: double = x
+                x = y
+                y = t
+            }
+            hi = x + y
+            lo = y - (hi - x)
+            if lo != 0 {
+                partials[ui] = lo
+                ui += 1
+            }
+            x = hi
+            uj += 1
+        }
+        np = ui
+        if np < 128 {
+            partials[np] = x
+            np += 1
+        }
+        i += 1
+    }
+    total: double = 0
+    i = 0
+    while i < np {
+        total += partials[i]
+        i += 1
+    }
+    sumh[0] = total
+    suml[0] = 0
+}
+
+
+CollectRangeGroup :: (args: Val *, count: int, marks: int *, out: double *) -> int {
+    gx: int = 0
+    gl: int = 0
+    if GroupBounds(marks,count,0,&gx,&gl) != 0 {
+        return CashList(args + gx,gl,out)
+    }
+    return CashList(args,count,out)
+}
+
+FnCorrel :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    xn: int = 0
+    yn: int = 0
+    i: int = 0
+    if StatAggArgs(args,count,marks,xs,ys,&xn,&yn,1) == 0 { return ValError(ERR_VALUE) }
+    ux: double = StatAverage(xs,xn)
+    uy: double = StatAverage(ys,xn)
+    sxy: double = 0
+    sxx: double = 0
+    syy: double = 0
+    while i < xn {
+        sxy += (xs[i] - ux) * (ys[i] - uy)
+        sxx += (xs[i] - ux) * (xs[i] - ux)
+        syy += (ys[i] - uy) * (ys[i] - uy)
+        i += 1
+    }
+    den: double = sqrt(sxx) * sqrt(syy)
+    if den == 0 { return ValError(ERR_VALUE) }
+    c: double = sxy / den
+    if c > 1 { c = 1 }
+    if c < -1 { c = -1 }
+    return ValNumber(c)
+}
+
+FnCovar :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int) -> Val {
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    xn: int = 0
+    yn: int = 0
+    if StatAggArgs(args,count,marks,xs,ys,&xn,&yn,1) == 0 { return ValError(ERR_VALUE) }
+    ux: double = StatAverage(xs,xn)
+    uy: double = StatAverage(ys,xn)
+    s: double = 0
+    i: int = 0
+    while i < xn {
+        s += (xs[i] - ux) * (ys[i] - uy)
+        i += 1
+    }
+    if sample != 0 {
+        return ValNumber(s / (double)(xn - 1))
+    }
+    return ValNumber(s / (double)xn)
+}
+
+FnLinReg :: (st: EvalState *, args: Val *, count: int, marks: int *, which: int) -> Val {
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    tmp: [4096] double = {0}
+    xn: int = 0
+    yn: int = 0
+    i: int = 0
+    px_in: double = 0
+    if which == 3 {
+        px_in = CoerceNumber(&args[0])
+        if StatAggArgs(args + 1,count - 1,marks + 1,tmp,xs,&yn,&xn,1) == 0 { return ValError(ERR_VALUE) }
+    }
+else {
+        if StatAggArgs(args,count,marks,tmp,xs,&yn,&xn,1) == 0 { return ValError(ERR_VALUE) }
+    }
+    i = 0
+    while i < xn {
+        ys[i] = tmp[i]
+        i += 1
+    }
+    ux: double = StatAverage(xs,xn)
+    uy: double = StatAverage(ys,xn)
+    sxy: double = 0
+    sxx: double = 0
+    syy: double = 0
+    i = 0
+    while i < xn {
+        sxy += (xs[i] - ux) * (ys[i] - uy)
+        sxx += (xs[i] - ux) * (xs[i] - ux)
+        syy += (ys[i] - uy) * (ys[i] - uy)
+        i += 1
+    }
+    if sxx == 0 { return ValError(ERR_VALUE) }
+    slope: double = sxy / sxx
+    if which == 0 { return ValNumber(slope) }
+    if which == 1 { return ValNumber(uy - slope * ux) }
+    if which == 2 {
+        n2: double = xn
+        ssres: double = syy - slope * sxy
+        if ssres < 0 { ssres = 0 }
+        return ValNumber(sqrt(ssres / (n2 - 2)))
+    }
+    if which == 3 { return ValNumber(uy - slope * ux + slope * px_in) }
+    return ValNumber(0)
+}
+
+FnKurtSkew :: (st: EvalState *, args: Val *, count: int, marks: int *, which: int, pop: int) -> Val {
+    list: NumList = {0}
+    CollectNumbers(args,count,&list)
+    n: int = list.count
+    if (n < 4 && which == 0) || (n < 3 && which == 1) { return ValError(ERR_VALUE) }
+    m: double = StatAverage(list.data,n)
+    s2: double = 0
+    i: int = 0
+    while i < n {
+        d: double = list.data[i] - m
+        s2 += d * d
+        i += 1
+    }
+    if pop != 0 {
+        s2 /= (double)n
+    }
+else {
+        s2 = s2 / (double)(n - 1)
+    }
+    s: double = sqrt(s2)
+    if s == 0 { return ValError(ERR_VALUE) }
+    m3: double = 0
+    m4: double = 0
+    i = 0
+    while i < n {
+        d: double = list.data[i] - m
+        dxn: double = d / s
+        m3 += dxn * dxn * dxn
+        m4 += (dxn * dxn) * (dxn * dxn)
+        i += 1
+    }
+    if which == 1 {
+        if pop != 0 { return ValNumber(m3 / (double)n) }
+        return ValNumber((m3 * (double)n / (double)(n - 1)) / (double)(n - 2))
+    }
+    if pop != 0 { return ValNumber(m4 / (double)n - 3) }
+    common_den: double = (double)(n - 2) * (double)(n - 3)
+    nth: double = (double)n * (double)(n + 1) / ((double)(n - 1) * common_den)
+    three: double = 3.0 * (double)(n - 1) * (double)(n - 1) / common_den
+    return ValNumber(m4 * nth - three)
+}
+
+FnStandardize :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    x: double = 0
+    m: double = 0
+    sd: double = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    m = CoerceNumber(&args[1])
+    sd = CoerceNumber(&args[2])
+    if sd <= 0 { return ValError(ERR_NUM) }
+    return ValNumber((x - m) / sd)
+}
+
+FnFisher :: (st: EvalState *, args: Val *, count: int, marks: int *, inv: int) -> Val {
+    x: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    x = CoerceNumber(&args[0])
+    if inv != 0 { return ValNumber(tanh(x)) }
+    if (x <= -1 || x >= 1) { return ValError(ERR_NUM) }
+    return ValNumber(atanh(x))
+}
+
+FnVar :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int, stddev: int) -> Val {
+    list: NumList = {0}
+    CollectNumbers(args,count,&list)
+    n: int = list.count
+    if (sample != 0 && n < 2) || n < 1 { return ValError(ERR_VALUE) }
+    m: double = StatAverage(list.data,n)
+    s: double = 0
+    i: int = 0
+    while i < n {
+        d: double = list.data[i] - m
+        s += d * d
+        i += 1
+    }
+    v: double = 0
+    if sample != 0 {
+        v = s / (double)(n - 1)
+    }
+else {
+        v = s / (double)n
+    }
+    if stddev != 0 { return ValNumber(sqrt(v)) }
+    return ValNumber(v)
+}
+
+FnAveragA :: (st: EvalState *, args: Val *, count: int, marks: int *, op: int) -> Val {
+    list: NumList = {0}
+    i: int = 0
+    total: double = 0
+    n: int = 0
+    CollectNumbers(args,count,&list)
+    if op == 0 {
+        i = 0
+        while i < count {
+            if args[i].kind == VAL_FLOAT || args[i].kind == VAL_BOOL || args[i].kind == VAL_STRING {
+                n += 1
+            }
+            i += 1
+        }
+        if n == 0 { return ValError(ERR_VALUE) }
+        i = 0
+        while i < list.count {
+            total += list.data[i]
+            i += 1
+        }
+        return ValNumber(total / (double)n)
+    }
+    if op == 1 {
+        if list.count == 0 { return ValNumber(0) }
+        best: double = list.data[0]
+        i = 1
+        while i < list.count {
+            if op == 1 {
+                if list.data[i] > best { best = list.data[i] }
+            }
+            i += 1
+        }
+        return ValNumber(best)
+    }
+    if list.count == 0 { return ValNumber(0) }
+    best2: double = list.data[0]
+    i = 1
+    while i < list.count {
+        if list.data[i] < best2 { best2 = list.data[i] }
+        i += 1
+    }
+    return ValNumber(best2)
+}
+
+FnVarA :: (st: EvalState *, args: Val *, count: int, marks: int *, sample: int, stddev: int) -> Val {
+    list: NumList = {0}
+    CollectNumbers(args,count,&list)
+    n: int = list.count
+    if (sample != 0 && n < 2) || n < 1 { return ValError(ERR_VALUE) }
+    m: double = StatAverage(list.data,n)
+    s: double = 0
+    i: int = 0
+    while i < n {
+        d: double = list.data[i] - m
+        s += d * d
+        i += 1
+    }
+    if sample != 0 {
+        if stddev != 0 { return ValNumber(sqrt(s / (double)(n - 1))) }
+        return ValNumber(s / (double)(n - 1))
+    }
+    if stddev != 0 { return ValNumber(sqrt(s / (double)n)) }
+    return ValNumber(s / (double)n)
+}
+
+FnTrimmean :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    vals0: [4096] double = {0}
+    n0: int = CollectRangeGroup(args,count,marks,vals0)
+    i0: int = 0
+    while i0 < n0 {
+        list.data[i0] = vals0[i0]
+        i0 += 1
+    }
+    list.count = n0
+    n: int = list.count
+    p: double = 0
+    p = CoerceNumber(&args[count - 1])
+    if (p < 0 || p >= 1) { return ValError(ERR_NUM) }
+    SortDoubles(list.data,n)
+    tc: int = (int)floor((n * p) / 2)
+    c: int = n - 2 * tc
+    if c <= 0 { return ValError(ERR_VALUE) }
+    shifted: [4096] double = {0}
+    k2: int = 0
+    while k2 < c {
+        shifted[k2] = list.data[tc + k2]
+        k2 += 1
+    }
+    return ValNumber(StatAverage(shifted,c))
+}
+
+FractileInterSorted :: (xs: double *, n: int, f: double) -> double {
+    fpos: double = 0
+    pos: int = 0
+    residual: double = 0
+    if (n <= 0 || f < 0 || f > 1) {
+        return 0.0 / 0.0
+    }
+    fpos = (double)(n - 1) * f
+    pos = (int)fpos
+    residual = fpos - (double)pos
+    if (residual == 0 || pos + 1 >= n) {
+        return xs[pos]
+    }
+    return (1 - residual) * xs[pos] + residual * xs[pos + 1]
+}
+
+FnPercentile :: (st: EvalState *, args: Val *, count: int, marks: int *, exc: int) -> Val {
+    list: NumList = {0}
+    vals0: [4096] double = {0}
+    n0: int = CollectRangeGroup(args,count,marks,vals0)
+    i0: int = 0
+    while i0 < n0 {
+        list.data[i0] = vals0[i0]
+        i0 += 1
+    }
+    list.count = n0
+    n: int = list.count
+    p: double = CoerceNumber(&args[count - 1])
+    if n == 0 { return ValError(ERR_NUM) }
+    SortDoubles(list.data,n)
+    if exc != 0 {
+        if n <= 1 { return ValError(ERR_NUM) }
+        fr: double = (p * (double)(n + 1) - 1) / (double)(n - 1)
+        res: double = FractileInterSorted(list.data,n,fr)
+        if (res != res) { return ValError(ERR_NUM) }
+        return ValNumber(res)
+    }
+    res2: double = FractileInterSorted(list.data,n,p)
+    if (res2 != res2) { return ValError(ERR_NUM) }
+    return ValNumber(res2)
+}
+
+FnQuartile :: (st: EvalState *, args: Val *, count: int, marks: int *, exc: int) -> Val {
+    list: NumList = {0}
+    vals0: [4096] double = {0}
+    n0: int = CollectRangeGroup(args,count,marks,vals0)
+    i0: int = 0
+    while i0 < n0 {
+        list.data[i0] = vals0[i0]
+        i0 += 1
+    }
+    list.count = n0
+    n: int = list.count
+    q: double = floor(CoerceNumber(&args[count - 1]))
+    if n == 0 { return ValError(ERR_NUM) }
+    if (q < 0 || q > 4) { return ValError(ERR_NUM) }
+    SortDoubles(list.data,n)
+    if exc != 0 {
+        if n <= 1 { return ValError(ERR_NUM) }
+        fr: double = ((q / 4) * (double)(n + 1) - 1) / (double)(n - 1)
+        if (fr < 0 || fr > 1) { return ValError(ERR_NUM) }
+        return ValNumber(FractileInterSorted(list.data,n,fr))
+    }
+    return ValNumber(FractileInterSorted(list.data,n,q / 4))
+}
+
+FnPercentrank :: (st: EvalState *, args: Val *, count: int, marks: int *, exc: int) -> Val {
+    list: NumList = {0}
+    vals0: [4096] double = {0}
+    n0: int = CollectRangeGroup(args,count,marks,vals0)
+    i0: int = 0
+    while i0 < n0 {
+        list.data[i0] = vals0[i0]
+        i0 += 1
+    }
+    list.count = n0
+    n: int = list.count
+    x: double = CoerceNumber(&args[count - 1])
+    sig: double = count >= 3 ? CoerceNumber(&args[2]) : 3
+    n_equal: int = 0
+    n_smaller: int = 0
+    n_larger: int = 0
+    x_larger: double = 0
+    x_smaller: double = 0
+    i: int = 0
+    r: double = 0
+    if n == 0 { return ValError(ERR_NUM) }
+    i = 0
+    while i < n {
+        y: double = list.data[i]
+        if y < x {
+            if (n_smaller == 0 || x_smaller < y) { x_smaller = y }
+            n_smaller += 1
+        }
+else if y > x {
+            if (n_larger == 0 || x_larger > y) { x_larger = y }
+            n_larger += 1
+        }
+else {
+            n_equal += 1
+        }
+        i += 1
+    }
+    if (n_smaller + n_equal == 0 || n_larger + n_equal == 0) { return ValError(ERR_NA) }
+    if n == 1 {
+        r = 1
+    }
+else {
+        if exc != 0 {
+            if n_equal > 0 {
+                r = (double)(n_smaller + 1) / (double)(n + 1)
+            }
+else {
+                re1: double = (double)n_smaller / (double)(n + 1)
+                re2: double = (double)(n_smaller + 1) / (double)(n + 1)
+                r = (re1 * (x_larger - x) + re2 * (x - x_smaller)) / (x_larger - x_smaller)
+            }
+        }
+else if n_equal > 0 {
+            r = (double)n_smaller / (double)(n - 1)
+        }
+else {
+            r1: double = (double)(n_smaller - 1) / (double)(n - 1)
+            r2: double = (double)n_smaller / (double)(n - 1)
+            r = (r1 * (x_larger - x) + r2 * (x - x_smaller)) / (x_larger - x_smaller)
+        }
+        if sig < 1 { return ValError(ERR_NUM) }
+        s10: double = pow(10,-sig)
+        if s10 <= 0 { return ValError(ERR_DIV0) }
+        r = trunc(r / s10) * s10
+    }
+    return ValNumber(r)
+}
+
+FnRank :: (st: EvalState *, args: Val *, count: int, marks: int *, avg: int) -> Val {
+    list: NumList = {0}
+    vals0: [4096] double = {0}
+    g1: int = 0
+    l1: int = 0
+    n0: int = 0
+    if GroupBounds(marks,count,1,&g1,&l1) != 0 {
+        n0 = CashList(args + g1,l1,vals0)
+    }
+    if n0 < 1 { return ValError(ERR_VALUE) }
+    i0: int = 0
+    while i0 < n0 {
+        list.data[i0] = vals0[i0]
+        i0 += 1
+    }
+    list.count = n0
+    n: int = list.count
+    x: double = CoerceNumber(&args[0])
+    increasing: int = count > n0 + 1 ? (CoerceNumber(&args[n0 + 1]) != 0 ? 1 : 0) : 0
+    r: int = 1
+    t: int = 0
+    i: int = 0
+    i = 0
+    while i < n {
+        y: double = list.data[i]
+        if (increasing != 0 ? y < x : y > x) {
+            r += 1
+        }
+        if x == y {
+            t += 1
+        }
+        i += 1
+    }
+    if avg != 0 {
+        s: double = (double)r
+        k: int = 1
+        while k < t {
+            s += (double)(r + k)
+            k += 1
+        }
+        return ValNumber(s / (double)t)
+    }
+    return ValNumber((double)r)
+}
+
+FnModeMult :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    CollectNumbers(args,count,&list)
+    n: int = list.count
+    if n <= 1 { return ValError(ERR_NA) }
+    SortDoubles(list.data,n)
+    best: double = 0
+    bestrun: int = 0
+    i: int = 0
+    while i < n {
+        j: int = i
+        while (j + 1 < n && list.data[j + 1] == list.data[i]) {
+            j += 1
+        }
+        run: int = j - i + 1
+        if run > bestrun {
+            bestrun = run
+            best = list.data[i]
+        }
+        i = j + 1
+    }
+    if bestrun <= 1 { return ValError(ERR_NA) }
+    return ValNumber(best)
+}
+
+FnFrequency :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    data: [4096] double = {0}
+    bins: [4096] double = {0}
+    gx: int = 0
+    gl: int = 0
+    bx: int = 0
+    bl: int = 0
+    rest: int = 0
+    nd: int = 0
+    nb: int = 0
+    if GroupBounds(marks,count,0,&gx,&gl) == 0 {
+        gx = 0
+        gl = count
+    }
+    nd = CashList(args + gx,gl,data)
+    if nd < 0 { return FirstError(args,count) }
+    if GroupBounds(marks,count,1,&bx,&bl) != 0 {
+        nb = CashList(args + bx,bl,bins)
+    }
+else {
+        rest = gx + gl
+        nb = CashList(args + rest,count - rest,bins)
+    }
+    if nb < 0 { return FirstError(args,count) }
+    if nb == 0 { return ValNumber(nd) }
+    SortDoubles(bins,nb)
+    firstcount: int = 0
+    i: int = 0
+    while i < nd {
+        v: double = data[i]
+        j: int = 0
+        while j < nb {
+            if v <= bins[j] { break }
+            j += 1
+        }
+        if j == 0 { firstcount += 1 }
+        i += 1
+    }
+    return ValNumber(firstcount)
+}
+
+FnZtest :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    list: NumList = {0}
+    vals0: [4096] double = {0}
+    n0: int = CollectRangeGroup(args,count,marks,vals0)
+    i0: int = 0
+    while i0 < n0 {
+        list.data[i0] = vals0[i0]
+        i0 += 1
+    }
+    list.count = n0
+    n: int = list.count
+    x: double = CoerceNumber(&args[n])
+    s: double = 0
+    m: double = 0
+    if n == 0 { return ValError(ERR_DIV0) }
+    m = StatAverage(list.data,n)
+    if count > n + 1 {
+        s = CoerceNumber(&args[n + 1])
+    }
+else {
+        if n < 2 { return ValError(ERR_DIV0) }
+        s = sqrt(StatDevsq(list.data,n) / (double)(n - 1))
+    }
+    if s <= 0 { return ValError(ERR_DIV0) }
+    return ValNumber(pnorm(x,m,s / sqrt((double)n),1,0))
+}
+
+FnTtest :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    xs: [4096] double = {0}
+    ys: [4096] double = {0}
+    xn: int = 0
+    yn: int = 0
+    tails: double = 0
+    typ: double = 0
+    mx: double = 0
+    vx: double = 0
+    my: double = 0
+    vy: double = 0
+    dof: double = 0
+    t: double = 0
+    if count < 4 { return ValError(ERR_VALUE) }
+    tails = CoerceNumber(&args[count - 2])
+    typ = CoerceNumber(&args[count - 1])
+    if (tails != 1 && tails != 2) { return ValError(ERR_NUM) }
+    if (typ != 1 && typ != 2 && typ != 3) { return ValError(ERR_NUM) }
+    g0: int = 0
+    l0: int = 0
+    g1: int = 0
+    l1: int = 0
+    if GroupBounds(marks,count,0,&g0,&l0) == 0 { return ValError(ERR_VALUE) }
+    if GroupBounds(marks,count,1,&g1,&l1) == 0 { return ValError(ERR_VALUE) }
+    xn = CashList(args + g0,l0,xs)
+    yn = CashList(args + g1,l1,ys)
+    if (xn < 0 || yn < 0) { return ValError(ERR_VALUE) }
+    if typ == 1 {
+        if xn != yn { return ValError(ERR_NA) }
+        zm: double = 0
+        zs: double = 0
+        zs2: double = 0
+        i: int = 0
+        while i < xn {
+            d: double = xs[i] - ys[i]
+            zm += d
+            zs2 += d * d
+            i += 1
+        }
+        zm /= (double)xn
+        zs2 = zs2 - (double)xn * zm * zm
+        zs = sqrt(zs2 / (double)(xn - 1))
+        if zs == 0 { return ValError(ERR_DIV0) }
+        t = sqrt((double)xn) * (zm / zs)
+        dof = (double)(xn - 1)
+        return ValNumber(tails * pt(fabs(t),dof,0,0))
+    }
+    mx = StatAverage(xs,xn)
+    vx = StatDevsq(xs,xn) / (double)(xn - 1)
+    my = StatAverage(ys,yn)
+    vy = StatDevsq(ys,yn) / (double)(yn - 1)
+    if (vx == 0 && vy == 0) { return ValError(ERR_DIV0) }
+    if typ == 3 {
+        S: double = vx / (double)xn + vy / (double)yn
+        c: double = (vx / (double)xn) / S
+        cC: double = (vy / (double)yn) / S
+        dof = 1 / (c * c / (double)(xn - 1) + cC * cC / (double)(yn - 1))
+        t = fabs(mx - my) / sqrt(S)
+    }
+else {
+        dof = (double)(xn + yn - 2)
+        t = fabs(mx - my) * sqrt(dof * (double)xn * (double)yn / ((double)(xn + yn) * ((double)(xn - 1) * vx + (double)(yn - 1) * vy)))
+    }
+    return ValNumber(tails * pt(t,dof,0,0))
+}
+
+SubEpsilon :: (x: double) -> double {
+    e: int = 0
+    mant: double = 0
+    ax: double = 0
+    if isfinite(x) == 0 || x == 0 { return x }
+    ax = fabs(x)
+    mant = frexp(ax,&e)
+    if x < 0 {
+        return 0 - ldexp(mant + 2.220446049250313e-16 / 2,e)
+    }
+    return ldexp(mant - 2.220446049250313e-16 / 2,e)
+}
+
+AddEpsilon :: (x: double) -> double {
+    e: int = 0
+    mant: double = 0
+    ax: double = 0
+    if isfinite(x) == 0 || x == 0 { return x }
+    ax = fabs(x)
+    mant = frexp(ax,&e)
+    if x < 0 {
+        return 0 - ldexp(mant - 2.220446049250313e-16 / 2,e)
+    }
+    return ldexp(mant + 2.220446049250313e-16 / 2,e)
+}
+
+FakeFloor :: (x: double) -> double {
+    if x == floor(x) { return x }
+    return floor(AddEpsilon(x))
+}
+
+FakeRound :: (x: double) -> double {
+    y: double = 0
+    if x == floor(x) { return x }
+    y = FakeFloor(fabs(x) + 0.5)
+    if x < 0 { return 0 - y }
+    return y
+}
+
+FakeTrunc :: (x: double) -> double {
+    if x == floor(x) { return x }
+    if x >= 0 {
+        return floor(AddEpsilon(x))
+    }
+    return 0 - floor(AddEpsilon(0 - x))
+}
+
+FakeCeil :: (x: double) -> double {
+    if x == floor(x) { return x }
+    return ceil(SubEpsilon(x))
+}
+
+FnConfidence :: (st: EvalState *, args: Val *, count: int, marks: int *, t_based: int) -> Val {
+    alpha: double = 0
+    sd: double = 0
+    n: double = 0
+    if count < 3 { return ValError(ERR_VALUE) }
+    alpha = CoerceNumber(&args[0])
+    sd = CoerceNumber(&args[1])
+    n = FakeFloor(CoerceNumber(&args[2]))
+    if t_based != 0 {
+        if n == 1 { return ValError(ERR_DIV0) }
+        if (n <= 1 || sd <= 0) { return ValError(ERR_NUM) }
+        return ValNumber(0 - qt(alpha / 2,n - 1,1,0) * (sd / sqrt(n)))
+    }
+    if n == 0 { return ValError(ERR_DIV0) }
+    if (n <= 0 || sd <= 0) { return ValError(ERR_NUM) }
+    return ValNumber(0 - qnorm(alpha / 2,0,1,1,0) * (sd / sqrt(n)))
+}
+
+FnDistr3 :: (which: int, args: Val *, count: int) -> Val {
+    a: double = 0
+    b: double = 0
+    c: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    a = CoerceNumber(&args[0])
+    b = CoerceNumber(&args[1])
+    c = count >= 3 ? CoerceNumber(&args[2]) : 0
+    if which == 0 { return ValNumber(pnorm(a,b,c,1,0)) }
+    if which == 1 { return ValNumber(qnorm(a,b,c,1,0)) }
+    if which == 2 { return ValNumber(pchisq(a,b,1,0)) }
+    if which == 3 { return ValNumber(qchisq(a,b,1,0)) }
+    if which == 4 { return ValNumber(pf(a,b,c,1,0)) }
+    if which == 5 { return ValNumber(qf(a,b,c,1,0)) }
+    if which == 6 { return ValNumber(pt(a,b,1,0)) }
+    if which == 7 { return ValNumber(qt(a,b,1,0)) }
+    if which == 8 { return ValNumber(pgamma(a,b,c,1,0)) }
+    if which == 9 { return ValNumber(qgamma(a,b,c,1,0)) }
+    return ValNumber(0)
+}
+
+
+pexp_go :: (x: double, scale: double, lower_tail: int, log_p: int) -> double {
+    if (x <= 0) {
+        return lower_tail != 0 ? 0.0 : 1.0
+    }
+    if lower_tail != 0 {
+        return 1 - exp(0 - x / scale)
+    }
+    return exp(0 - x / scale)
+}
+
+dexp_go :: (x: double, scale: double) -> double {
+    if x <= 0 {
+        return 0.0
+    }
+    return exp(0 - x / scale) / scale
+}
+
+pweibull_go :: (x: double, shape: double, scale: double, lower_tail: int, log_p: int) -> double {
+    if x <= 0 {
+        return lower_tail != 0 ? 0.0 : 1.0
+    }
+    v: double = exp(0 - pow(x / scale,shape))
+    if lower_tail != 0 {
+        return 1 - v
+    }
+    return v
+}
+
+pow1p_plain :: (x: double, y: double) -> double {
+    if ((x + 1) - 1 == x || x > 0.5 || x < -0.5 || x != x || y != y) { return pow(1 + x,y) }
+    if (y < 0) { return 1 / pow1p_plain(x,-y) }
+    x1: double = round(x * 65536) / 65536
+    x2: double = x - x1
+    h: double = 0
+    l: double = 0
+    Ebd0(y,y * (x + 1),&h,&l)
+    PairAdd(0 - y * x1,&h,&l)
+    PairAdd(0 - y * x2,&h,&l)
+    return exp(0 - l) * exp(0 - h)
+}
+
+dweibull_go :: (x: double, shape: double, scale: double) -> double {
+    if x <= 0 {
+        return 0.0
+    }
+    xscal: double = pow(x / scale,shape - 1)
+    return shape * xscal * exp(0 - xscal * x / scale) / scale
 }
 
 DbCond :: struct {
@@ -9399,6 +13309,176 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"ilog") == 0 { return FnIlog(st,args,count,marks) }
     if strcmp(name,"lambertw") == 0 { return FnLambertw(st,args,count,marks) }
     if strcmp(name,"digamma") == 0 { return FnNotAvail(st,args,count,marks) }
+    if strcmp(name,"correl") == 0 { return FnCorrel(st,args,count,marks) }
+    if strcmp(name,"covar") == 0 { return FnCovar(st,args,count,marks,0) }
+    if strcmp(name,"covariance.s") == 0 { return FnCovar(st,args,count,marks,1) }
+    if strcmp(name,"slope") == 0 { return FnLinReg(st,args,count,marks,0) }
+    if strcmp(name,"intercept") == 0 { return FnLinReg(st,args,count,marks,1) }
+    if strcmp(name,"steyx") == 0 { return FnLinReg(st,args,count,marks,2) }
+    if strcmp(name,"forecast") == 0 { return FnLinReg(st,args,count,marks,3) }
+    if strcmp(name,"kurt") == 0 { return FnKurtSkew(st,args,count,marks,0,0) }
+    if strcmp(name,"kurtp") == 0 { return FnKurtSkew(st,args,count,marks,0,1) }
+    if strcmp(name,"skew") == 0 { return FnKurtSkew(st,args,count,marks,1,0) }
+    if strcmp(name,"skewp") == 0 { return FnKurtSkew(st,args,count,marks,1,1) }
+    if strcmp(name,"standardize") == 0 { return FnStandardize(st,args,count,marks) }
+    if strcmp(name,"fisher") == 0 { return FnFisher(st,args,count,marks,0) }
+    if strcmp(name,"fisherinv") == 0 { return FnFisher(st,args,count,marks,1) }
+    if strcmp(name,"varpa") == 0 { return FnVarA(st,args,count,marks,0,0) }
+    if strcmp(name,"varp") == 0 { return FnVar(st,args,count,marks,0,0) }
+    if strcmp(name,"vara") == 0 { return FnVarA(st,args,count,marks,1,0) }
+    if strcmp(name,"stdevpa") == 0 { return FnVarA(st,args,count,marks,0,1) }
+    if strcmp(name,"stdevp") == 0 { return FnVar(st,args,count,marks,0,1) }
+    if strcmp(name,"stdeva") == 0 { return FnVarA(st,args,count,marks,1,1) }
+    if strcmp(name,"averagea") == 0 { return FnAveragA(st,args,count,marks,0) }
+    if strcmp(name,"maxa") == 0 { return FnAveragA(st,args,count,marks,1) }
+    if strcmp(name,"mina") == 0 { return FnAveragA(st,args,count,marks,2) }
+    if strcmp(name,"trimmean") == 0 { return FnTrimmean(st,args,count,marks) }
+    if strcmp(name,"percentile") == 0 { return FnPercentile(st,args,count,marks,0) }
+    if strcmp(name,"percentile.exc") == 0 { return FnPercentile(st,args,count,marks,1) }
+    if strcmp(name,"quartile") == 0 { return FnQuartile(st,args,count,marks,0) }
+    if strcmp(name,"quartile.exc") == 0 { return FnQuartile(st,args,count,marks,1) }
+    if strcmp(name,"percentrank") == 0 { return FnPercentrank(st,args,count,marks,0) }
+    if strcmp(name,"percentrank.exc") == 0 { return FnPercentrank(st,args,count,marks,1) }
+    if strcmp(name,"rank.avg") == 0 { return FnRank(st,args,count,marks,1) }
+    if strcmp(name,"mode.mult") == 0 { return FnModeMult(st,args,count,marks) }
+    if strcmp(name,"frequency") == 0 { return FnFrequency(st,args,count,marks) }
+    if strcmp(name,"ztest") == 0 { return FnZtest(st,args,count,marks) }
+    if strcmp(name,"ttest") == 0 { return FnTtest(st,args,count,marks) }
+    if strcmp(name,"confidence") == 0 { return FnConfidence(st,args,count,marks,0) }
+    if strcmp(name,"confidence.t") == 0 { return FnConfidence(st,args,count,marks,1) }
+    if strcmp(name,"normsdist") == 0 { return ValNumber(pnorm(CoerceNumber(&args[0]),0,1,1,0)) }
+    if strcmp(name,"normsinv") == 0 { return ValNumber(qnorm(CoerceNumber(&args[0]),0,1,1,0)) }
+    if strcmp(name,"normdist") == 0 {
+        nd_c: int = CoerceNumber(&args[3]) != 0 ? 1 : 0
+        if nd_c != 0 {
+            return ValNumber(pnorm(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),1,0))
+        }
+        return ValNumber(dnorm_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0))
+    }
+    if strcmp(name,"norminv") == 0 { return ValNumber(qnorm(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),1,0)) }
+    if strcmp(name,"chidist") == 0 { return ValNumber(pchisq(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0,0)) }
+    if strcmp(name,"chiinv") == 0 { return ValNumber(qchisq(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0,0)) }
+    if strcmp(name,"fdist") == 0 { return ValNumber(pf(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0,0)) }
+    if strcmp(name,"finv") == 0 { return ValNumber(qf(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0,0)) }
+    if strcmp(name,"gammadist") == 0 {
+        gd_c: int = CoerceNumber(&args[3]) != 0 ? 1 : 0
+        if gd_c != 0 {
+            return ValNumber(pgamma(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),1,0))
+        }
+        return ValNumber(dgamma_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),0))
+    }
+    if strcmp(name,"gammainv") == 0 { return ValNumber(qgamma(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),1,0)) }
+    if strcmp(name,"gammaln") == 0 { return ValNumber(lgamma(CoerceNumber(&args[0]))) }
+    if strcmp(name,"betaln") == 0 { return ValNumber(lbeta_go(CoerceNumber(&args[0]),CoerceNumber(&args[1]))) }
+    if strcmp(name,"betadist") == 0 {
+        x1: double = CoerceNumber(&args[0])
+        al: double = CoerceNumber(&args[1])
+        be: double = CoerceNumber(&args[2])
+        aa: double = count >= 4 ? CoerceNumber(&args[3]) : 0
+        bb: double = count >= 5 ? CoerceNumber(&args[4]) : 1
+        if (x1 < aa || x1 > bb || aa >= bb || al <= 0 || be <= 0) { return ValError(ERR_NUM) }
+        return ValNumber(pbeta((x1 - aa) / (bb - aa),al,be,1,0))
+    }
+    if strcmp(name,"betainv") == 0 {
+        p1: double = CoerceNumber(&args[0])
+        al2: double = CoerceNumber(&args[1])
+        be2: double = CoerceNumber(&args[2])
+        aa2: double = count >= 4 ? CoerceNumber(&args[3]) : 0
+        bb2: double = count >= 5 ? CoerceNumber(&args[4]) : 1
+        if (p1 < 0 || p1 > 1 || aa2 >= bb2 || al2 <= 0 || be2 <= 0) { return ValError(ERR_NUM) }
+        return ValNumber(aa2 + (bb2 - aa2) * qbeta(p1,al2,be2,1,0))
+    }
+    if strcmp(name,"lognormdist") == 0 { return ValNumber(pnorm(log(CoerceNumber(&args[0])),CoerceNumber(&args[1]),CoerceNumber(&args[2]),1,0)) }
+    if strcmp(name,"loginv") == 0 { return ValNumber(exp(qnorm(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),1,0))) }
+    if strcmp(name,"expondist") == 0 {
+        xe: double = CoerceNumber(&args[0])
+        ye: double = CoerceNumber(&args[1])
+        cuml: int = CoerceNumber(&args[2]) != 0 ? 1 : 0
+        if (xe < 0 || ye <= 0) { return ValError(ERR_NUM) }
+        if cuml != 0 { return ValNumber(pexp_go(xe,1 / ye,1,0)) }
+        return ValNumber(dexp_go(xe,1 / ye))
+    }
+    if strcmp(name,"weibull") == 0 {
+        xw: double = CoerceNumber(&args[0])
+        aw: double = CoerceNumber(&args[1])
+        bw: double = CoerceNumber(&args[2])
+        cumw: int = CoerceNumber(&args[3]) != 0 ? 1 : 0
+        if (xw < 0 || aw <= 0 || bw <= 0) { return ValError(ERR_NUM) }
+        if cumw != 0 { return ValNumber(pweibull_go(xw,aw,bw,1,0)) }
+        return ValNumber(dweibull_go(xw,aw,bw))
+    }
+    if strcmp(name,"poisson") == 0 {
+        xp: double = floor(CoerceNumber(&args[0]))
+        mp: double = CoerceNumber(&args[1])
+        cump: int = CoerceNumber(&args[2]) != 0 ? 1 : 0
+        if (xp < 0 || mp <= 0) { return ValError(ERR_NUM) }
+        if cump != 0 { return ValNumber(ppois(xp,mp,1,0)) }
+        return ValNumber(dpois(xp,mp,0))
+    }
+    if strcmp(name,"hypgeomdist") == 0 {
+        xh: double = floor(CoerceNumber(&args[0]))
+        nh: double = floor(CoerceNumber(&args[1]))
+        Mh: double = floor(CoerceNumber(&args[2]))
+        Nh: double = floor(CoerceNumber(&args[3]))
+        cumh: int = count >= 5 ? (CoerceNumber(&args[4]) != 0 ? 1 : 0) : 0
+        if (Nh < Mh || nh > Nh) { return ValError(ERR_NUM) }
+        if cumh != 0 { return ValNumber(phyper(xh,Mh,Nh - Mh,nh,1,0)) }
+        return ValNumber(dhyper(xh,Mh,Nh - Mh,nh,0))
+    }
+    if strcmp(name,"negbinomdist") == 0 {
+        xn2: double = floor(CoerceNumber(&args[0]))
+        rn: double = floor(CoerceNumber(&args[1]))
+        pn: double = CoerceNumber(&args[2])
+        if (xn2 + rn - 1 <= 0 || pn < 0 || pn > 1) { return ValError(ERR_NUM) }
+        return ValNumber(dnbinom(xn2,rn,pn,0))
+    }
+    if strcmp(name,"critbinom") == 0 {
+        tn: double = floor(CoerceNumber(&args[0]))
+        pn2: double = CoerceNumber(&args[1])
+        an: double = CoerceNumber(&args[2])
+        if (tn < 0 || pn2 < 0 || pn2 > 1 || an < 0 || an > 1) { return ValError(ERR_NUM) }
+        return ValNumber(qbinom(an,tn,pn2,1,0))
+    }
+    if strcmp(name,"tdist") == 0 {
+        xt: double = CoerceNumber(&args[0])
+        dt: double = CoerceNumber(&args[1])
+        tl: double = CoerceNumber(&args[2])
+        pt_: double = 0
+        if dt < 1 { return ValError(ERR_NUM) }
+        if tl == 1 {
+            lt: int = 0
+            if xt < 0 {
+                lt = 1
+                xt = -xt
+            }
+            pt_ = pt(xt,dt,lt,0)
+        }
+else if tl == 2 {
+            if xt < 0 { return ValError(ERR_NUM) }
+            pt_ = 2 * pt(xt,dt,0,0)
+        }
+else {
+            return ValError(ERR_NUM)
+        }
+        return ValNumber(pt_)
+    }
+    if strcmp(name,"tinv") == 0 {
+        pt2: double = CoerceNumber(&args[0])
+        dt2: double = CoerceNumber(&args[1])
+        res: double = 0
+        if (pt2 < 0 || pt2 > 1 || dt2 < 1) { return ValError(ERR_NUM) }
+        res = qt(pt2 / 2,dt2,0,0)
+        if res < 0 { return ValError(ERR_NUM) }
+        return ValNumber(res)
+    }
+    if strcmp(name,"binom.dist.range") == 0 {
+        n2: double = floor(CoerceNumber(&args[0]))
+        p2: double = CoerceNumber(&args[1])
+        s: double = floor(CoerceNumber(&args[2]))
+        e: double = count >= 4 ? floor(CoerceNumber(&args[3])) : s
+        if (n2 < 0 || p2 < 0 || p2 > 1 || s < 0 || e < s || e > n2) { return ValError(ERR_NUM) }
+        return ValNumber(pbinom2(s,e,n2,p2))
+    }
     if strcmp(name,"daverage") == 0 { return FnDaverage(st,args,count,marks) }
     if strcmp(name,"dcounta") == 0 { return FnDcounta(st,args,count,marks) }
     if strcmp(name,"dcount") == 0 { return FnDcount(st,args,count,marks) }
@@ -9443,8 +13523,7 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"product") == 0 { return FnProduct(st,args,count,marks) }
     if strcmp(name,"devsq") == 0 { return FnSumSq(st,args,count,marks) }
     if strcmp(name,"median") == 0 { return FnMedian(st,args,count,marks) }
-    if strcmp(name,"var") == 0 { return FnVar(st,args,count,marks,1) }
-    if strcmp(name,"varp") == 0 { return FnVar(st,args,count,marks,0) }
+    if strcmp(name,"var") == 0 { return FnVar(st,args,count,marks,1,0) }
     if strcmp(name,"stdev") == 0 { return FnStdev(st,args,count,marks,1) }
     if strcmp(name,"stdevp") == 0 { return FnStdev(st,args,count,marks,0) }
     if strcmp(name,"large") == 0 { return FnLargeSmall(st,args,count,marks,1) }
