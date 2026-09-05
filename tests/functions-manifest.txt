@@ -453,7 +453,6 @@ yearfrac
 yield
 yielddisc
 yieldmat
-ztestabs
 char
 code
 cos
