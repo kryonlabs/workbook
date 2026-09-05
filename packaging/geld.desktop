@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Geld
+Comment=Finance workbook profile
+Exec=geld
+Terminal=false
+Categories=Office;Finance;

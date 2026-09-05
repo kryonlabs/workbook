@@ -4,10 +4,9 @@
 /cell
 /geld
 /workbook
+/build/
 /geld.json
 /workbook.json
-/geld.kry
-/workbook.kry
 *.tmp
 .env
 private/

@@ -2,4 +2,4 @@
 set -eu
 
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec -a geld "$dir/workbook" -profile geld "$@"
+WORKBOOK_PROFILE=geld exec -a geld "$dir/workbook" "$@"

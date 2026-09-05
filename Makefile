@@ -1,54 +1,70 @@
-GO ?= go
+CC ?= cc
 BIN ?= workbook
 BIN_DIR ?= $(HOME)/bin
-DATA_HOME ?= $(if $(XDG_DATA_HOME),$(XDG_DATA_HOME),$(HOME)/.local/share)
-DATA_DIR ?= $(DATA_HOME)/workbook
-GELD_DATA_DIR ?= $(DATA_HOME)/geld
 VERSION ?= 0.1.0
 DIST_DIR ?= dist
+BUILD_DIR ?= build
+CODEGEN_DIR := $(BUILD_DIR)/generated
 KRYON_DIR := vendor/kryon
-KRYON_LIB_TARGET := build/linux-x86_64/libkryon.a
-RAYLIB_LIB_TARGET := build/linux-x86_64/raylib/libraylib.a
-K2G_TARGET := build/linux-x86_64/bin/k2g
 
-.PHONY: all build run test install deb clean kryon-libs kryon-tools native-ui-smoke native-runtime-audit native-binary-audit
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+KRYON_ARCH := $(if $(filter amd64,$(UNAME_M)),x86_64,$(UNAME_M))
+KRYON_PLATFORM := $(if $(filter Linux,$(UNAME_S)),linux,$(shell printf '%s' '$(UNAME_S)' | tr A-Z a-z))
+KRYON_BUILD_DIR := $(KRYON_DIR)/build/$(KRYON_PLATFORM)-$(KRYON_ARCH)
+K2C := $(KRYON_BUILD_DIR)/bin/k2c
+KRYON_LIB := $(KRYON_BUILD_DIR)/libkryon.a
+RAYLIB_A := $(KRYON_BUILD_DIR)/raylib/libraylib.a
+
+PKG_CFLAGS := $(shell pkg-config --cflags sdl2 gl x11 gtk+-3.0 libdrm gbm egl glesv2 2>/dev/null)
+PKG_LIBS := $(shell pkg-config --libs sdl2 gl x11 gtk+-3.0 libdrm gbm egl glesv2 2>/dev/null)
+CFLAGS ?= -O2 -Wall -Wextra -std=gnu99
+CFLAGS += -I$(KRYON_DIR)/include -I$(CODEGEN_DIR) $(PKG_CFLAGS)
+LDLIBS := $(KRYON_LIB) $(RAYLIB_A) $(PKG_LIBS) -lm -lpthread -ldl -lrt
+
+.PHONY: all build run test install deb clean kryon-tools kryon-libs generate smoke
 
 all: build
 
-kryon-libs:
-	$(MAKE) -C $(KRYON_DIR) $(KRYON_LIB_TARGET) $(RAYLIB_LIB_TARGET)
+kryon-tools: $(K2C)
 
-kryon-tools:
-	$(MAKE) -C $(KRYON_DIR) $(K2G_TARGET)
+kryon-libs: $(KRYON_LIB) $(RAYLIB_A)
 
-build:
-	CGO_ENABLED=0 $(GO) build -mod=mod -buildvcs=false -o $(BIN) .
+$(K2C):
+	$(MAKE) -C $(KRYON_DIR) $(patsubst $(KRYON_DIR)/%,%,$@)
+
+$(KRYON_LIB) $(RAYLIB_A):
+	$(MAKE) -C $(KRYON_DIR) $(patsubst $(KRYON_DIR)/%,%,$@)
+
+$(CODEGEN_DIR)/.generated: workbook.kry $(K2C)
+	mkdir -p $(CODEGEN_DIR)
+	$(K2C) --root . -o $(CODEGEN_DIR) workbook.kry
+	touch $@
+
+generate: $(CODEGEN_DIR)/.generated
+
+build: $(BIN)
+
+$(BIN): $(CODEGEN_DIR)/.generated $(KRYON_LIB) $(RAYLIB_A)
+	$(CC) $(CFLAGS) -o $@ \
+		$(CODEGEN_DIR)/workbook.c $(CODEGEN_DIR)/kryon_project.c \
+		$(LDLIBS)
 
 run: build
 	./$(BIN)
 
-test: native-runtime-audit native-ui-smoke native-binary-audit
-	CGO_ENABLED=0 $(GO) test -mod=mod -buildvcs=false ./...
-
-native-ui-smoke: kryon-tools
-	scripts/native-ui-smoke.sh "$(KRYON_DIR)" "$(KRYON_DIR)/$(K2G_TARGET)" ui/workbook_native.kry
-
-native-runtime-audit:
-	scripts/native-runtime-audit.sh
-
-native-binary-audit: build
-	scripts/native-binary-audit.sh "$(BIN)"
+test: build
+	scripts/kry-source-audit.sh
+	scripts/native-ui-smoke.sh ./$(BIN)
 
 install: build
 	mkdir -p $(BIN_DIR)
 	install -m 0755 $(BIN) $(BIN_DIR)/$(BIN)
 	install -m 0755 scripts/cell $(BIN_DIR)/cell
-	$(GO) run ./cmd/profile-install -profiles profiles -bin-dir "$(BIN_DIR)" -binary "$(BIN)"
-	mkdir -p $(DATA_DIR)
-	mkdir -p $(GELD_DATA_DIR)
+	install -m 0755 scripts/geld $(BIN_DIR)/geld
 
 deb: build
 	packaging/deb/build-deb.sh "$(VERSION)" "$(DIST_DIR)"
 
 clean:
-	rm -f workbook cell geld
+	rm -rf $(BUILD_DIR) $(BIN)

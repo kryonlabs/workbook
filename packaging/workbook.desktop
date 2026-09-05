@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Workbook
+Comment=Kry spreadsheet-style workbook editor
+Exec=workbook
+Terminal=false
+Categories=Office;
