@@ -7435,14 +7435,82 @@ GoLogTaylor4 :: (x: double, k: int) -> double {
     return x - x * x / 2 + x * x * x / 3 - x * x * x * x / 4
 }
 
+TaylorLog1p :: (x: double, k_in: int) -> double {
+    xn: [100] double = {0}
+    lim: double = 0
+    term: double = 0
+    sum2: double = 0
+    i: int = 0
+    k: int = k_in
+    if fabs(x) > 0.58 { return 0.0 / 0.0 }
+    if k < 1 { k = 1 }
+    if k > 100 { k = 100 }
+    if k == 1 { return log1p(x) }
+    xn[1] = x
+    i = 2
+    while i < k {
+        xn[i] = xn[i / 2] * xn[(i + 1) / 2]
+        i += 1
+    }
+    i = k
+    while i < 100 {
+        xn[i] = xn[i / 2] * xn[(i + 1) / 2]
+        if (i & 1) != 0 {
+            term = xn[i] / i
+        }
+else {
+            term = xn[i] / (0 - i)
+        }
+        sum2 += term
+        if i == k {
+            lim = xn[i] * (2.2204460492503131e-16 / 100)
+        }
+else if fabs(term) <= lim {
+            break
+        }
+        i += 1
+    }
+    return sum2
+}
+
 log1px3 :: (x: double) -> double {
-    if x < -0.5 {
-        return log(1 + x)
+    c1: double = 0.6065306597126334
+    d1: double = 0.64872127070012814684865
+    c2: double = 0.6451311644197896784284
+    d2: double = 0.5500723808612904238765
+    l0: double = -0.5727756120801021849831095
+    l1: double = -0.643439019336053015559896
+    l2: double = -0.75
+    l3: double = -0.9423152993887941976504422
+    if x != x { return x }
+    if x >= 2 {
+        return log1p(x) + x * (x - 2) / 2
     }
-    if x < 0 {
-        return x - x * x / 2 + x * x * x / 3
+    if x >= d1 {
+        return log1p(c1 * (x - d1)) + (x - 1) * (x - 1) / 2
     }
-    return x
+    if x >= d2 {
+        return log1p(c2 * (x - d2)) + (x - d1) * (x - 1 - (1 - d1)) / 2
+    }
+    if x > l0 {
+        return TaylorLog1p(x,3)
+    }
+    if x > l1 {
+        r1: double = 2 - l1
+        f1: double = 2.3406903451108563844727
+        return log((1 + x) * f1) + (x - l1) * (x - r1) / 2
+    }
+    if x > l2 {
+        r2: double = 2 - l2
+        f2: double = 2.80456935623722661204591
+        return log((1 + x) * f2) + (x - l2) * (x - r2) / 2
+    }
+    if x > l3 {
+        r3: double = 2 - l3
+        f3: double = 4
+        return log((1 + x) * f3) + (x - l3) * (x - r3) / 2
+    }
+    return log1p(x) + x * (x - 2) / 2
 }
 
 Lgamma1p :: (a: double) -> double {
@@ -13529,6 +13597,40 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"nt_pi") == 0 { return FnNtFunc(st,args,count,marks,6) }
     if strcmp(name,"hdate") == 0 { return FnHdate(st,args,count,marks) }
     if strcmp(name,"hdate_julian") == 0 { return FnHdateJulian(st,args,count,marks) }
+    if strcmp(name,"hdate_day") == 0 {
+        hy: int = 0
+        hm: int = 0
+        hd: int = 0
+        jd: int = 0
+        if count < 3 { return ValError(ERR_VALUE) }
+        jd = HdateGdateToJd((int)CoerceNumber(&args[2]),(int)CoerceNumber(&args[1]),(int)CoerceNumber(&args[0]))
+        HdateJdToHdate(jd,&hd,&hm,&hy)
+        return ValNumber(hd + 1)
+    }
+    if strcmp(name,"hdate_month") == 0 {
+        hy2: int = 0
+        hm2: int = 0
+        hd2: int = 0
+        jd2: int = 0
+        if count < 3 { return ValError(ERR_VALUE) }
+        jd2 = HdateGdateToJd((int)CoerceNumber(&args[2]),(int)CoerceNumber(&args[1]),(int)CoerceNumber(&args[0]))
+        HdateJdToHdate(jd2,&hd2,&hm2,&hy2)
+        return ValNumber(hm2)
+    }
+    if strcmp(name,"hdate_year") == 0 {
+        hy3: int = 0
+        hm3: int = 0
+        hd3: int = 0
+        jd3: int = 0
+        if count < 3 { return ValError(ERR_VALUE) }
+        jd3 = HdateGdateToJd((int)CoerceNumber(&args[2]),(int)CoerceNumber(&args[1]),(int)CoerceNumber(&args[0]))
+        HdateJdToHdate(jd3,&hd3,&hm3,&hy3)
+        return ValNumber(hy3)
+    }
+    if strcmp(name,"probblock") == 0 { return FnProbblock(st,args,count,marks) }
+    if strcmp(name,"dimcirc") == 0 { return FnDimcirc(st,args,count,marks) }
+    if strcmp(name,"offcap") == 0 { return FnOffcap(st,args,count,marks) }
+    if strcmp(name,"offtraf") == 0 { return FnOfftraf(st,args,count,marks) }
     if strcmp(name,"g_duration") == 0 {
         gr: double = CoerceNumber(&args[0])
         gpv: double = CoerceNumber(&args[1])
@@ -18047,6 +18149,193 @@ else {
     hi = n
     if nr < hi { hi = nr }
     return DiscPFuncInverter(p,shape,lower_tail,log_p,lo,hi,y,0)
+}
+
+CalculateLoggos :: (traffic: double, circuits: double) -> double {
+    if traffic < 0 || circuits < 1 { return 0.0 / 0.0 }
+    return dgamma_go(traffic,circuits + 1,1,1) - pgamma(traffic,circuits + 1,1,0,1)
+}
+
+CalculateGos :: (traffic: double, circuits_in: double, comp: int) -> double {
+    circuits: double = circuits_in
+    gos: double = 0
+    cir_iter: double = 0
+    sum2: double = 0
+    term2: double = 0
+    n2: double = 0
+    circuits = floor(circuits)
+    if circuits < 1 || traffic < 0 { return -1 }
+    if traffic == 0 {
+        gos = comp != 0 ? 1 : 0
+    }
+else if circuits < 100 {
+        cir_iter = 1
+        gos = 1
+        while cir_iter <= circuits {
+            gos = (traffic * gos) / (cir_iter + (traffic * gos))
+            cir_iter += 1
+        }
+        if comp != 0 { gos = 1 - gos }
+    }
+else if (circuits / traffic < 0.9) {
+        sum2 = 0
+        term2 = 1
+        n2 = circuits
+        while n2 > 0 {
+            term2 *= n2 / traffic
+            if term2 < 2.2204460492503131e-16 * sum2 { break }
+            sum2 += term2
+            n2 -= 1
+        }
+        gos = comp != 0 ? sum2 / (1 + sum2) : 1 / (1 + sum2)
+    }
+else {
+        loggos: double = CalculateLoggos(traffic,circuits)
+        gos = comp != 0 ? 0 - expm1(loggos) : exp(loggos)
+    }
+    return gos
+}
+
+FnProbblock :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    gos: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    gos = CalculateGos(CoerceNumber(&args[0]),CoerceNumber(&args[1]),0)
+    if gos >= 0 { return ValNumber(gos) }
+    return ValError(ERR_VALUE)
+}
+
+FnDimcirc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    traffic: double = 0
+    des_gos: double = 0
+    low: double = 0
+    high: double = 0
+    mid: double = 0
+    gos: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    traffic = CoerceNumber(&args[0])
+    des_gos = CoerceNumber(&args[1])
+    if (des_gos > 0 && des_gos <= 1) == 0 || traffic < 0 { return ValError(ERR_VALUE) }
+    low = 1
+    high = 1
+    while CalculateGos(traffic,high,0) > des_gos {
+        low = high
+        if high >= 1.7976931348623157e308 / 2 { return ValError(ERR_NUM) }
+        high += high
+    }
+    while high - low > 1 {
+        mid = floor((high + low) / 2 + 0.1)
+        gos = CalculateGos(traffic,mid,0)
+        if gos > des_gos {
+            low = mid
+        }
+else {
+            high = mid
+        }
+    }
+    return ValNumber(high)
+}
+
+OffCapF :: (traffic: double, circuits: double, des_gos: double, y: double *) -> int {
+    gos: double = CalculateGos(traffic,circuits,0)
+    if gos >= 0 == 0 { return 1 }
+    y[0] = gos - des_gos
+    return 0
+}
+
+OffTrafF :: (off_traffic: double, circuits: double, traffic: double, y: double *) -> int {
+    comp_gos: double = CalculateGos(off_traffic,circuits,1)
+    if comp_gos >= 0 == 0 { return 1 }
+    y[0] = off_traffic * comp_gos - traffic
+    return 0
+}
+
+FnOffcap :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    circuits: double = 0
+    des_gos: double = 0
+    xmax: double = 0
+    xlo: double = 0
+    xhi: double = 0
+    ylo: double = 0
+    yhi: double = 0
+    y: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    circuits = CoerceNumber(&args[0])
+    des_gos = CoerceNumber(&args[1])
+    if (des_gos > 0 && des_gos < 1) == 0 || circuits < 1 { return ValError(ERR_VALUE) }
+    xmax = circuits / (1 - des_gos)
+    xlo = 0
+    xhi = xmax
+    if OffCapF(xlo,circuits,des_gos,&ylo) != 0 { return ValError(ERR_VALUE) }
+    if OffCapF(xhi,circuits,des_gos,&yhi) != 0 { return ValError(ERR_VALUE) }
+    {
+        i: int = 0
+        while i < 100 {
+            mid2: double = (xlo + xhi) / 2
+            if OffCapF(mid2,circuits,des_gos,&y) != 0 { return ValError(ERR_VALUE) }
+            if y == 0 { return ValNumber(mid2) }
+            if (ylo < 0) == (y < 0) {
+                xlo = mid2
+                ylo = y
+            }
+else {
+                xhi = mid2
+                yhi = y
+            }
+            if xhi - xlo < 2.2204460492503131e-16 * (fabs(xlo) + fabs(xhi)) {
+                return ValNumber((xlo + xhi) / 2)
+            }
+            i += 1
+        }
+    }
+    return ValNumber((xlo + xhi) / 2)
+}
+
+FnOfftraf :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    traffic: double = 0
+    circuits: double = 0
+    xlo: double = 0
+    xhi: double = 0
+    upper: double = 0
+    ylo: double = 0
+    yhi: double = 0
+    y: double = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    traffic = CoerceNumber(&args[0])
+    circuits = CoerceNumber(&args[1])
+    if (circuits >= 1) == 0 || traffic < 0 || traffic >= circuits { return ValError(ERR_VALUE) }
+    xlo = traffic
+    xhi = circuits
+    if OffTrafF(xlo,circuits,traffic,&ylo) != 0 { return ValError(ERR_VALUE) }
+    upper = circuits
+    if circuits < traffic * 2 { upper = traffic * 2 }
+    while upper < 1e308 * 10 {
+        if OffTrafF(upper,circuits,traffic,&yhi) != 0 { return ValError(ERR_VALUE) }
+        if ylo < 0 != yhi < 0 { break }
+        xlo = upper
+        ylo = yhi
+        upper *= 2
+    }
+    {
+        i: int = 0
+        while i < 200 {
+            mid2: double = (xlo + xhi) / 2
+            if OffTrafF(mid2,circuits,traffic,&y) != 0 { return ValError(ERR_VALUE) }
+            if y == 0 { return ValNumber(mid2) }
+            if (ylo < 0) == (y < 0) {
+                xlo = mid2
+                ylo = y
+            }
+else {
+                xhi = mid2
+                yhi = y
+            }
+            if xhi - xlo < 2.2204460492503131e-16 * (fabs(xlo) + fabs(xhi)) {
+                return ValNumber((xlo + xhi) / 2)
+            }
+            i += 1
+        }
+    }
+    return ValNumber((xlo + xhi) / 2)
 }
 
 NT_BITMAX :: () -> double {
