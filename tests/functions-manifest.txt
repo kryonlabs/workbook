@@ -570,3 +570,15 @@ r.dnbinom
 r.pnbinom
 r.dpois
 r.ppois
+dimcirc
+hdate_day
+hdate_month
+hdate_year
+offcap
+offtraf
+probblock
+r.dhyper
+r.dnorm
+r.dgumbel
+r.pgumbel
+r.qgumbel

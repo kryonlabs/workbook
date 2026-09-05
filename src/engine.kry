@@ -1495,6 +1495,85 @@ ValTextEquals :: (a: Val *, b: Val *) -> int {
     return strcasecmp(ta,tb) == 0
 }
 
+FnLookup :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    needle: Val * = NULL
+    table_start: int = 0
+    table_len: int = 0
+    result_start: int = 0
+    result_len: int = 0
+    ncols: int = 0
+    nrows: int = 0
+    vertical: int = 1
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    needle = &args[0]
+    GroupBounds(marks,count,1,&table_start,&table_len)
+    ncols = st->call_group_cols[table_start]
+    if ncols < 1 { ncols = 1 }
+    nrows = table_len / ncols
+    if ncols > nrows { vertical = 0 }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&result_start,&result_len)
+    }
+else {
+        result_start = table_start
+        result_len = table_len
+    }
+    {
+        rcols: int = st->call_group_cols[result_start]
+        if rcols < 1 { rcols = 1 }
+        rrows: int = result_len / rcols
+        best: int = -1
+        i: int = 0
+        n_scan: int = vertical != 0 ? nrows : ncols
+        while i < n_scan {
+            vidx: int = vertical != 0 ? table_start + i * ncols : table_start + i
+            first: Val * = &args[vidx]
+            hit2: int = 0
+            if needle->kind == VAL_STRING && first->kind == VAL_STRING {
+                hit2 = strcasecmp(needle->text,first->text) == 0
+            }
+else if needle->kind == VAL_FLOAT && first->kind == VAL_FLOAT {
+                hit2 = needle->number <= first->number && first->number <= needle->number
+                hit2 = needle->number == first->number
+            }
+else if needle->kind == VAL_BOOL && first->kind == VAL_BOOL {
+                hit2 = needle->number == first->number
+            }
+            if hit2 {
+                best = i
+                break
+            }
+            below: int = 0
+            if needle->kind == VAL_STRING && first->kind == VAL_STRING {
+                below = strcasecmp(needle->text,first->text) >= 0
+            }
+else if needle->kind == VAL_FLOAT && first->kind == VAL_FLOAT {
+                below = needle->number >= first->number
+            }
+            if below { best = i }
+            i += 1
+        }
+        if best < 0 { return ValError(ERR_NA) }
+        if vertical != 0 {
+            tx: int = rcols - 1
+            ty: int = best
+            if ty < rrows {
+                return ValCopy(&args[result_start + ty * rcols + tx])
+            }
+            return ValError(ERR_NA)
+        }
+        tx2: int = best
+        ty2: int = rrows - 1
+        if tx2 < rcols {
+            return ValCopy(&args[result_start + ty2 * rcols + tx2])
+        }
+        return ValError(ERR_NA)
+    }
+    return ValError(ERR_NA)
+}
+
 FnVlookupHlookup :: (st: EvalState *, args: Val *, count: int, marks: int *, vertical: int) -> Val {
     groups: int = ArgGroupCount(args,marks,count)
     needle: Val * = NULL
@@ -13631,6 +13710,14 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"dimcirc") == 0 { return FnDimcirc(st,args,count,marks) }
     if strcmp(name,"offcap") == 0 { return FnOffcap(st,args,count,marks) }
     if strcmp(name,"offtraf") == 0 { return FnOfftraf(st,args,count,marks) }
+    if strcmp(name,"lookup") == 0 { return FnLookup(st,args,count,marks) }
+    if strcmp(name,"log") == 0 {
+        t2: double = CoerceNumber(&args[0])
+        base2: double = count >= 2 ? CoerceNumber(&args[1]) : 10
+        res3: double = log(t2) / log(base2)
+        if isfinite(res3) == 0 { return ValError(ERR_NUM) }
+        return ValNumber(res3)
+    }
     if strcmp(name,"g_duration") == 0 {
         gr: double = CoerceNumber(&args[0])
         gpv: double = CoerceNumber(&args[1])
