@@ -747,43 +747,14 @@ TryParseReference :: (st: EvalState *, text: const char *, pos: int *, out_row: 
 
 ParseQuotedString :: (text: const char *, pos: int *) -> Val {
     buf: [WB_TEXT_MAX * 2] char = ""
-    n: int = 0
-    pos[0] += 1
-    while text[pos[0]] != 0 {
-        ch: char = text[pos[0]]
-        if ch == '"' {
-            if text[pos[0] + 1] == '"' {
-                if n < (int)sizeof(buf) - 1 { buf[n] = '"'; n += 1 }
-                pos[0] += 2
-                continue
-            }
-            pos[0] += 1
-            return ValString(wb_strndup(buf,n))
-        }
-        if ch == '\\' && text[pos[0] + 1] != 0 {
-            pos[0] += 1
-            ch = text[pos[0]]
-        }
-        if n < (int)sizeof(buf) - 1 { buf[n] = ch; n += 1 }
-        pos[0] += 1
+    if eval_parse_string_literal(text,pos,buf,(int)sizeof(buf)) != 0 {
+        return ValString(wb_strdup(buf))
     }
     return ValError(ERR_VALUE)
 }
 
 TryParseError :: (text: const char *, pos: int *) -> int {
-    here: int = pos[0]
-    names: [8] CString = {"#DIV/0!","#VALUE!","#REF!","#NAME?","#NUM!","#N/A","#NULL!","#CYCLE!"}
-    i: int = 0
-    if text[here] != '#' { return -1 }
-    while i < 8 {
-        len: int = (int)strlen(names[i])
-        if strncmp(text + here,names[i],len) == 0 {
-            pos[0] = here + len
-            return ErrFromText(names[i])
-        }
-        i += 1
-    }
-    return -1
+    return eval_scan_error_name(text,pos)
 }
 
 CellToValue :: (cell: Cell *) -> Val {
