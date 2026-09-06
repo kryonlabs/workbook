@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+<gnm:SheetNameIndex><gnm:SheetName>Catalog3</gnm:SheetName></gnm:SheetNameIndex>
+<gnm:Sheets><gnm:Sheet><gnm:Name>Catalog3</gnm:Name><gnm:MaxCol>4</gnm:MaxCol><gnm:MaxRow>102</gnm:MaxRow><gnm:Cells>
+<gnm:Cell Row="0" Col="0" ValueType="40">10</gnm:Cell>
+<gnm:Cell Row="1" Col="0" ValueType="40">20</gnm:Cell>
+<gnm:Cell Row="2" Col="0" ValueType="40">30</gnm:Cell>
+<gnm:Cell Row="3" Col="0" ValueType="40">40</gnm:Cell>
+<gnm:Cell Row="0" Col="1" ValueType="60">apple</gnm:Cell>
+<gnm:Cell Row="1" Col="1" ValueType="60">banana</gnm:Cell>
+<gnm:Cell Row="2" Col="1" ValueType="60">cherry</gnm:Cell>
+<gnm:Cell Row="3" Col="1" ValueType="60">date</gnm:Cell>
+<gnm:Cell Row="0" Col="2" ValueType="60">hello</gnm:Cell>
+<gnm:Cell Row="1" Col="2" ValueType="40">42</gnm:Cell>
+<gnm:Cell Row="4" Col="3">=REGEXTEST("abc123","[0-9]+")</gnm:Cell>
+<gnm:Cell Row="5" Col="3">=REGEXTEST("abcdef","[0-9]+")</gnm:Cell>
+<gnm:Cell Row="6" Col="3">=REGEXTEST("ABCDEF","[a-z]+",TRUE())</gnm:Cell>
+<gnm:Cell Row="7" Col="3">=REGEXEXTRACT("abc123def","[0-9]+")</gnm:Cell>
+<gnm:Cell Row="8" Col="3">=REGEXEXTRACT("ID: 42 items","[0-9]+")</gnm:Cell>
+<gnm:Cell Row="9" Col="3">=REGEXEXTRACT("abc123def","([a-z]+)([0-9]+)",2)</gnm:Cell>
+<gnm:Cell Row="10" Col="3">=REGEXEXTRACT("nope","x")</gnm:Cell>
+<gnm:Cell Row="11" Col="3">=REGEXREPLACE("ID: 12345","[0-9]+","*****")</gnm:Cell>
+<gnm:Cell Row="12" Col="3">=REGEXREPLACE("a1b2c3","[0-9]","-")</gnm:Cell>
+<gnm:Cell Row="13" Col="3">=REGEXREPLACE("a1b2c3","[0-9]","-",2)</gnm:Cell>
+<gnm:Cell Row="14" Col="3">=REGEXREPLACE("a1b2c3","[0-9]","-",-1)</gnm:Cell>
+<gnm:Cell Row="15" Col="3">=REGEXREPLACE("hello world","(o)","x\1y")</gnm:Cell>
+<gnm:Cell Row="16" Col="3">=REGEXREPLACE("abc123","([a-z]+)([0-9]+)","\2\1")</gnm:Cell>
+<gnm:Cell Row="17" Col="3">=TEXTBEFORE("Red-Fish-Blue-Fish","-")</gnm:Cell>
+<gnm:Cell Row="18" Col="3">=TEXTBEFORE("Red-Fish-Blue-Fish","-",2)</gnm:Cell>
+<gnm:Cell Row="19" Col="3">=TEXTBEFORE("Red-Fish-Blue-Fish","-",-1)</gnm:Cell>
+<gnm:Cell Row="20" Col="3">=TEXTBEFORE("Red-Fish-Blue-Fish","-",4,0,1)</gnm:Cell>
+<gnm:Cell Row="21" Col="3">=TEXTBEFORE("no-dash","-",1,0,0,"none")</gnm:Cell>
+<gnm:Cell Row="22" Col="3">=TEXTBEFORE("no-dash","-")</gnm:Cell>
+<gnm:Cell Row="23" Col="3">=TEXTBEFORE("abcXdef","x",1,1)</gnm:Cell>
+<gnm:Cell Row="24" Col="3">=TEXTAFTER("Red-Fish-Blue-Fish","-")</gnm:Cell>
+<gnm:Cell Row="25" Col="3">=TEXTAFTER("Red-Fish-Blue-Fish","-",2)</gnm:Cell>
+<gnm:Cell Row="26" Col="3">=TEXTAFTER("Red-Fish-Blue-Fish","-",-1)</gnm:Cell>
+<gnm:Cell Row="27" Col="3">=TEXTAFTER("Red-Fish-Blue-Fish","-",5,0,1)</gnm:Cell>
+<gnm:Cell Row="28" Col="3">=TEXTAFTER("nodash","-",1,0,0,"zzz")</gnm:Cell>
+<gnm:Cell Row="29" Col="3">=TEXTAFTER("ABC-x-def","x",1,1)</gnm:Cell>
+<gnm:Cell Row="30" Col="3">=TEXTSPLIT("a,b,c",",")</gnm:Cell>
+<gnm:Cell Row="31" Col="3">=TEXTSPLIT("a,b;;c",",",";")</gnm:Cell>
+<gnm:Cell Row="32" Col="3">=TEXTSPLIT("a,b,,c",",",,TRUE())</gnm:Cell>
+<gnm:Cell Row="33" Col="3">=TEXTSPLIT("a;b;c",";")</gnm:Cell>
+<gnm:Cell Row="34" Col="3">=XMATCH(20,A1:A4)</gnm:Cell>
+<gnm:Cell Row="35" Col="3">=XMATCH(25,A1:A4)</gnm:Cell>
+<gnm:Cell Row="36" Col="3">=XMATCH(25,A1:A4,-1)</gnm:Cell>
+<gnm:Cell Row="37" Col="3">=XMATCH(25,A1:A4,1)</gnm:Cell>
+<gnm:Cell Row="38" Col="3">=XMATCH("CHERRY",B1:B4)</gnm:Cell>
+<gnm:Cell Row="39" Col="3">=XMATCH(20,A1:A4,0,-1)</gnm:Cell>
+<gnm:Cell Row="40" Col="3">=XMATCH("b*",B1:B4,2)</gnm:Cell>
+<gnm:Cell Row="41" Col="3">=XMATCH(40,A1:A4)</gnm:Cell>
+<gnm:Cell Row="42" Col="3">=XMATCH(41,A1:A4)</gnm:Cell>
+<gnm:Cell Row="43" Col="3">=XLOOKUP(30,A1:A4,B1:B4)</gnm:Cell>
+<gnm:Cell Row="44" Col="3">=XLOOKUP(35,A1:A4,B1:B4)</gnm:Cell>
+<gnm:Cell Row="45" Col="3">=XLOOKUP(35,A1:A4,B1:B4,"nf")</gnm:Cell>
+<gnm:Cell Row="46" Col="3">=XLOOKUP(35,A1:A4,B1:B4,"nf",-1)</gnm:Cell>
+<gnm:Cell Row="47" Col="3">=XLOOKUP(35,A1:A4,B1:B4,"nf",1)</gnm:Cell>
+<gnm:Cell Row="48" Col="3">=XLOOKUP("banana",B1:B4,A1:A4)</gnm:Cell>
+<gnm:Cell Row="49" Col="3">=XLOOKUP(99,A1:A4,B1:B4)</gnm:Cell>
+<gnm:Cell Row="50" Col="3">=WORKDAY.INTL(DATE(2026,9,4),3)</gnm:Cell>
+<gnm:Cell Row="51" Col="3">=WORKDAY.INTL(DATE(2026,9,4),3,11)</gnm:Cell>
+<gnm:Cell Row="52" Col="3">=WORKDAY.INTL(DATE(2026,9,7),1,"0000000")</gnm:Cell>
+<gnm:Cell Row="53" Col="3">=WORKDAY.INTL(DATE(2026,9,4),-2,2)</gnm:Cell>
+<gnm:Cell Row="54" Col="3">=NETWORKDAYS.INTL(DATE(2026,9,1),DATE(2026,9,7))</gnm:Cell>
+<gnm:Cell Row="55" Col="3">=NETWORKDAYS.INTL(DATE(2026,9,1),DATE(2026,9,7),11)</gnm:Cell>
+<gnm:Cell Row="56" Col="3">=NETWORKDAYS.INTL(DATE(2026,9,1),DATE(2026,9,30),"0000011")</gnm:Cell>
+<gnm:Cell Row="57" Col="3">=NETWORKDAYS.INTL(DATE(2026,9,1),DATE(2026,9,7),1,DATE(2026,9,2))</gnm:Cell>
+<gnm:Cell Row="58" Col="3">=PARTITIONS(0)</gnm:Cell>
+<gnm:Cell Row="59" Col="3">=PARTITIONS(5)</gnm:Cell>
+<gnm:Cell Row="60" Col="3">=PARTITIONS(10)</gnm:Cell>
+<gnm:Cell Row="61" Col="3">=PARTITIONS(50)</gnm:Cell>
+<gnm:Cell Row="62" Col="3">=PARTITIONS(100)</gnm:Cell>
+<gnm:Cell Row="63" Col="3">=PARTITIONS(-1)</gnm:Cell>
+<gnm:Cell Row="64" Col="3">=PARTITIONS(100001)</gnm:Cell>
+<gnm:Cell Row="65" Col="3">=ASC("ＡＢＣ")</gnm:Cell>
+<gnm:Cell Row="66" Col="3">=ASC("ヨコハマ")</gnm:Cell>
+<gnm:Cell Row="67" Col="3">=ASC("ガギグ")</gnm:Cell>
+<gnm:Cell Row="68" Col="3">=JIS("abc")</gnm:Cell>
+<gnm:Cell Row="69" Col="3">=JIS("ﾖｺﾊﾏ")</gnm:Cell>
+<gnm:Cell Row="70" Col="3">=JIS("ｶﾞ")</gnm:Cell>
+<gnm:Cell Row="71" Col="3">=HDATE_HEB(2001,3,30)</gnm:Cell>
+<gnm:Cell Row="72" Col="3">=HDATE_HEB(2026,9,5)</gnm:Cell>
+<gnm:Cell Row="73" Col="3">=DATE2HDATE_HEB(DATE(2001,3,30))</gnm:Cell>
+<gnm:Cell Row="74" Col="3">=DATE2HDATE_HEB(40000)</gnm:Cell>
+<gnm:Cell Row="75" Col="3">=R.PTUKEY(3,4,10)</gnm:Cell>
+<gnm:Cell Row="76" Col="3">=R.PTUKEY(2,3,8)</gnm:Cell>
+<gnm:Cell Row="77" Col="3">=R.PTUKEY(4.5,5,20,2)</gnm:Cell>
+<gnm:Cell Row="78" Col="3">=R.PTUKEY(2.5,3,7)</gnm:Cell>
+<gnm:Cell Row="79" Col="3">=R.PTUKEY(5,6,30)</gnm:Cell>
+<gnm:Cell Row="80" Col="3">=R.PTUKEY(3,4,10,,FALSE())</gnm:Cell>
+<gnm:Cell Row="81" Col="3">=R.PTUKEY(1,2,3)</gnm:Cell>
+<gnm:Cell Row="82" Col="3">=R.PTUKEY(0,4,10)</gnm:Cell>
+<gnm:Cell Row="83" Col="3">=R.PTUKEY(3,1,10)</gnm:Cell>
+<gnm:Cell Row="84" Col="3">=R.QTUKEY(0.95,4,10)</gnm:Cell>
+<gnm:Cell Row="85" Col="3">=R.QTUKEY(0.5,2,5)</gnm:Cell>
+<gnm:Cell Row="86" Col="3">=R.QTUKEY(0.99,3,12)</gnm:Cell>
+<gnm:Cell Row="87" Col="3">=R.QTUKEY(0.9,3,7)</gnm:Cell>
+<gnm:Cell Row="88" Col="3">=R.QTUKEY(0.25,2,4)</gnm:Cell>
+<gnm:Cell Row="89" Col="3">=CELL("col",A1)</gnm:Cell>
+<gnm:Cell Row="90" Col="3">=CELL("row",A2)</gnm:Cell>
+<gnm:Cell Row="91" Col="3">=CELL("address",B2)</gnm:Cell>
+<gnm:Cell Row="92" Col="3">=CELL("sheetname",B2)</gnm:Cell>
+<gnm:Cell Row="93" Col="3">=CELL("contents",C1)</gnm:Cell>
+<gnm:Cell Row="94" Col="3">=CELL("type",C1)</gnm:Cell>
+<gnm:Cell Row="95" Col="3">=CELL("type",C2)</gnm:Cell>
+<gnm:Cell Row="96" Col="3">=CELL("prefix",C1)</gnm:Cell>
+<gnm:Cell Row="97" Col="3">=CELL("format",A1)</gnm:Cell>
+<gnm:Cell Row="98" Col="3">=CELL("color",A1)</gnm:Cell>
+<gnm:Cell Row="99" Col="3">=CELL("parentheses",A1)</gnm:Cell>
+<gnm:Cell Row="100" Col="3">=CELL("protect",A1)</gnm:Cell>
+<gnm:Cell Row="101" Col="3">=CELL("width",A1)</gnm:Cell>
+<gnm:Cell Row="102" Col="3">=CELL("bogus",A1)</gnm:Cell>
+</gnm:Cells></gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>

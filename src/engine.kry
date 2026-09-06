@@ -10,6 +10,7 @@
 #import "string.h"
 #import "strings.h"
 #import "time.h"
+#import "regex.h"
 
 state {
     RNG_NEXT: unsigned long = 1
@@ -758,6 +759,10 @@ ParseQuotedString :: (text: const char *, pos: int *) -> Val {
             }
             pos[0] += 1
             return ValString(wb_strndup(buf,n))
+        }
+        if ch == '\\' && text[pos[0] + 1] != 0 {
+            pos[0] += 1
+            ch = text[pos[0]]
         }
         if n < (int)sizeof(buf) - 1 { buf[n] = ch; n += 1 }
         pos[0] += 1
@@ -7073,20 +7078,11 @@ FnErfc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
 }
 
 FnHexrep :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
-    out: [20] char = ""
-    data: [8] unsigned char = {0}
-    hexd: CString = "0123456789abcdef"
+    out: [64] char = ""
     v: double = 0
-    i: int = 0
     if count < 1 { return ValError(ERR_VALUE) }
     v = CoerceNumber(&args[0])
-    memcpy(data,&v,8)
-    while i < 8 {
-        out[i * 2] = hexd[data[i] >> 4]
-        out[i * 2 + 1] = hexd[data[i] & 15]
-        i += 1
-    }
-    out[16] = 0
+    snprintf(out,sizeof(out),"%a",v)
     return ValString(wb_strdup(out))
 }
 
@@ -9401,6 +9397,9 @@ else {
             if which == 1 {
                 px = pbeta(x,shape[0],shape[1],lower_tail,log_p)
             }
+else if which == 2 {
+                px = PtukeyGo(x,shape[0],shape[1],shape[2],lower_tail,log_p)
+            }
 else {
                 px = pgamma(x,shape[0],1,lower_tail,log_p)
             }
@@ -9427,6 +9426,9 @@ else if e < 0 {
                     if which == 1 {
                         e = pbeta(x,shape[0],shape[1],lower_tail,log_p) - p
                     }
+else if which == 2 {
+                        e = PtukeyGo(x,shape[0],shape[1],shape[2],lower_tail,log_p) - p
+                    }
 else {
                         e = pgamma(x,shape[0],1,lower_tail,log_p) - p
                     }
@@ -9436,7 +9438,10 @@ else {
                 }
                 if (i % 3 < 2) && (i == 0 || prec < 0.05) {
                     d2: double = 0
-                    if which == 1 {
+                    if which == 2 {
+                        d2 = 0
+                    }
+else if which == 1 {
                         d2 = dbeta(x,shape[0],shape[1],0)
                     }
 else {
@@ -11736,7 +11741,7 @@ FnInfoFn :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     key: [32] char = ""
     if count < 1 { return ValError(ERR_VALUE) }
     if TextArg(args,count,0,key,sizeof(key)) < 0 { return ValError(ERR_VALUE) }
-    if strcmp(key,"release") == 0 { return ValString(wb_strdup("1.12.57")) }
+    if strcmp(key,"release") == 0 { return ValString(wb_strdup("1.12.62")) }
     if strcmp(key,"os-version") == 0 { return ValString(wb_strdup("Linux")) }
     if strcmp(key,"version") == 0 { return ValNumber(1) }
     return ValError(ERR_VALUE)
@@ -12212,10 +12217,6 @@ FnMidb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
     memcpy(out,txt + start,(size_t)(endp - start))
     out[endp - start] = 0
     return ValString(wb_strdup(out))
-}
-
-FnNumbervalue :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
-    return ValError(ERR_NA)
 }
 
 FnNumbervalueUnused :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
@@ -13711,6 +13712,23 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"offcap") == 0 { return FnOffcap(st,args,count,marks) }
     if strcmp(name,"offtraf") == 0 { return FnOfftraf(st,args,count,marks) }
     if strcmp(name,"lookup") == 0 { return FnLookup(st,args,count,marks) }
+    if strcmp(name,"regextest") == 0 { return FnRegexTest(st,args,count,marks) }
+    if strcmp(name,"regexextract") == 0 { return FnRegexExtract(st,args,count,marks) }
+    if strcmp(name,"regexreplace") == 0 { return FnRegexReplace(st,args,count,marks) }
+    if strcmp(name,"textbefore") == 0 { return FnTextBefore(st,args,count,marks) }
+    if strcmp(name,"textafter") == 0 { return FnTextAfter(st,args,count,marks) }
+    if strcmp(name,"textsplit") == 0 { return FnTextSplit(st,args,count,marks) }
+    if strcmp(name,"xmatch") == 0 { return FnXmatch(st,args,count,marks) }
+    if strcmp(name,"xlookup") == 0 { return FnXlookup(st,args,count,marks) }
+    if strcmp(name,"workday.intl") == 0 { return HintWrap(st,1,FnWorkdayIntl(st,args,count,marks)) }
+    if strcmp(name,"networkdays.intl") == 0 { return FnNetworkdaysIntl(st,args,count,marks) }
+    if strcmp(name,"partitions") == 0 { return FnPartitions(st,args,count,marks) }
+    if strcmp(name,"asc") == 0 { return FnAsc(st,args,count,marks) }
+    if strcmp(name,"jis") == 0 { return FnJis(st,args,count,marks) }
+    if strcmp(name,"hdate_heb") == 0 { return FnHdateHeb(st,args,count,marks) }
+    if strcmp(name,"date2hdate_heb") == 0 { return FnDate2HdateHeb(st,args,count,marks) }
+    if strcmp(name,"cell") == 0 { return FnCell(st,args,count,marks) }
+
     if strcmp(name,"log") == 0 {
         t2: double = CoerceNumber(&args[0])
         base2: double = count >= 2 ? CoerceNumber(&args[1]) : 10
@@ -13797,6 +13815,8 @@ CallFunction :: (st: EvalState *, name: const char *, args: Val *, count: int, m
     if strcmp(name,"r.qsnorm") == 0 { return ValNumber(QsnormGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),CoerceNumber(&args[3]),count < 5 || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
     if strcmp(name,"r.qst") == 0 { return ValNumber(QstGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
     if strcmp(name,"r.qt") == 0 { return ValNumber(qt(CoerceNumber(&args[0]),CoerceNumber(&args[1]),count < 3 || CoerceNumber(&args[2]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.ptukey") == 0 { return ValNumber(PtukeyGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || args[3].kind == VAL_EMPTY ? 1 : CoerceNumber(&args[3]),count < 5 || args[4].kind == VAL_EMPTY || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
+    if strcmp(name,"r.qtukey") == 0 { return ValNumber(QtukeyGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || args[3].kind == VAL_EMPTY ? 1 : CoerceNumber(&args[3]),count < 5 || args[4].kind == VAL_EMPTY || CoerceNumber(&args[4]) != 0 ? 1 : 0,0)) }
     if strcmp(name,"r.qweibull") == 0 { return ValNumber(QweibullGo(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
     if strcmp(name,"r.qbeta") == 0 { return ValNumber(qbeta(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
     if strcmp(name,"r.qbinom") == 0 { return ValNumber(qbinom(CoerceNumber(&args[0]),CoerceNumber(&args[1]),CoerceNumber(&args[2]),count < 4 || CoerceNumber(&args[3]) != 0 ? 1 : 0,0)) }
@@ -18675,6 +18695,1777 @@ GnmGd :: (x: double) -> double {
     return 2 * atan(tanh(x / 2))
 }
 
+RegexValid :: (pattern: const char *, case_insensitive: int, re: regex_t *) -> int {
+    cflags: int = 1
+    cflags = 1
+    if case_insensitive != 0 { cflags = 1 | 2 }
+    if regcomp(re,pattern,cflags) != 0 { return 0 }
+    return 1
+}
+
+FnRegexTest :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    pattern: [512] char = ""
+    ci: int = 0
+    re: regex_t = {0}
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    CoerceText(&args[1],pattern,sizeof(pattern))
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        ci = CoerceNumber(&args[2]) != 0 ? 1 : 0
+    }
+    if RegexValid(pattern,ci,&re) == 0 { return ValError(ERR_VALUE) }
+    {
+        pm: [10] regmatch_t = {0}
+        hit: int = regexec(&re,text,10,pm,0) == 0
+        regfree(&re)
+        return ValBool(hit)
+    }
+    return ValBool(0)
+}
+
+FnRegexExtract :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    pattern: [512] char = ""
+    mode: int = 0
+    ci: int = 0
+    re: regex_t = {0}
+    pm: [10] regmatch_t = {0}
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    CoerceText(&args[1],pattern,sizeof(pattern))
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        mode = (int)CoerceNumber(&args[2])
+    }
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        ci = CoerceNumber(&args[3]) != 0 ? 1 : 0
+    }
+    if RegexValid(pattern,ci,&re) == 0 { return ValError(ERR_VALUE) }
+    {
+        out: [512] char = ""
+        if mode == 0 {
+            if regexec(&re,text,10,pm,0) == 0 {
+                len: int = pm[0].rm_eo - pm[0].rm_so
+                if len < 0 { len = 0 }
+                if len > 500 { len = 500 }
+                memcpy(out,text + pm[0].rm_so,len)
+                out[len] = 0
+                regfree(&re)
+                return ValString(wb_strdup(out))
+            }
+            regfree(&re)
+            return ValError(ERR_NA)
+        }
+        if mode == 2 {
+            if regexec(&re,text,10,pm,0) == 0 {
+                len2: int = pm[1].rm_eo - pm[1].rm_so
+                if len2 < 0 { len2 = 0 }
+                if len2 > 500 { len2 = 500 }
+                memcpy(out,text + pm[1].rm_so,len2)
+                out[len2] = 0
+                regfree(&re)
+                return ValString(wb_strdup(out))
+            }
+            regfree(&re)
+            return ValError(ERR_NA)
+        }
+        regfree(&re)
+        return ValError(ERR_NA)
+    }
+    return ValError(ERR_NA)
+}
+
+RegexApplyReplacement :: (text: const char *, so: int, eo: int, repl: const char *, re: regex_t *, pm: [10] regmatch_t, out: char *) -> int {
+    n: int = 0
+    i: int = 0
+    while repl[i] != 0 && n < 480 {
+        c: int = repl[i]
+        if (c == '\\' || c == '$') && repl[i + 1] >= '0' && repl[i + 1] <= '9' {
+            g: int = repl[i + 1] - '0'
+            gs: int = pm[g].rm_so
+            ge: int = pm[g].rm_eo
+            if gs >= 0 && ge > gs {
+                k: int = gs
+                while k < ge && n < 500 {
+                    out[n] = text[k]
+                    n += 1
+                    k += 1
+                }
+            }
+            i += 2
+        }
+else {
+            out[n] = repl[i]
+            n += 1
+            i += 1
+        }
+    }
+    out[n] = 0
+    return n
+}
+
+FnRegexReplace :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    pattern: [512] char = ""
+    repl: [512] char = ""
+    occ: int = 0
+    ci: int = 0
+    re: regex_t = {0}
+    pm: [10] regmatch_t = {0}
+    if count < 3 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    CoerceText(&args[1],pattern,sizeof(pattern))
+    CoerceText(&args[2],repl,sizeof(repl))
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        occ = (int)CoerceNumber(&args[3])
+    }
+    if count >= 5 {
+        if args[4].kind == VAL_ERROR { return ValError(args[4].err) }
+        ci = CoerceNumber(&args[4]) != 0 ? 1 : 0
+    }
+    if RegexValid(pattern,ci,&re) == 0 { return ValError(ERR_VALUE) }
+    {
+        out: [2048] char = ""
+        n: int = 0
+        tlen: int = strlen(text)
+        pos: int = 0
+        inst: int = 0
+        if occ == 0 {
+            while pos <= tlen {
+                probe: [512] char = ""
+                plen: int = tlen - pos
+                if plen < 0 { plen = 0 }
+                if plen > 500 { plen = 500 }
+                memcpy(probe,text + pos,plen)
+                probe[plen] = 0
+                if regexec(&re,probe,10,pm,0) != 0 { break }
+                so: int = pos + pm[0].rm_so
+                eo: int = pos + pm[0].rm_eo
+                if eo == so {
+                    if so < tlen && n < 2000 {
+                        out[n] = text[so]
+                        n += 1
+                    }
+                    pos = so + 1
+                }
+else {
+                    k: int = pos
+                    while k < so && n < 2000 {
+                        out[n] = text[k]
+                        n += 1
+                        k += 1
+                    }
+                    rep: [512] char = ""
+                    RegexApplyReplacement(text,pm[0].rm_so + pos,pm[0].rm_eo + pos,repl,&re,pm,rep)
+                    rl: int = strlen(rep)
+                    ri: int = 0
+                    while ri < rl && n < 2000 {
+                        out[n] = rep[ri]
+                        n += 1
+                        ri += 1
+                    }
+                    pos = eo
+                }
+            }
+            k2: int = pos
+            while k2 < tlen && n < 2000 {
+                out[n] = text[k2]
+                n += 1
+                k2 += 1
+            }
+            out[n] = 0
+            regfree(&re)
+            return ValString(wb_strdup(out))
+        }
+        {
+            mstart: [64] int = {0}
+            mend: [64] int = {0}
+            nmatch: int = 0
+            scan: int = 0
+            while scan <= tlen && nmatch < 64 {
+                probe2: [512] char = ""
+                plen2: int = tlen - scan
+                if plen2 < 0 { plen2 = 0 }
+                if plen2 > 500 { plen2 = 500 }
+                memcpy(probe2,text + scan,plen2)
+                probe2[plen2] = 0
+                if regexec(&re,probe2,10,pm,0) != 0 { break }
+                so2: int = scan + pm[0].rm_so
+                eo2: int = scan + pm[0].rm_eo
+                if eo2 == so2 {
+                    scan = so2 + 1
+                }
+else {
+                    mstart[nmatch] = so2
+                    mend[nmatch] = eo2
+                    nmatch += 1
+                    scan = eo2
+                }
+            }
+            target: int = -1
+            if occ > 0 && occ <= nmatch { target = occ - 1 }
+            if occ < 0 && 0 - occ <= nmatch { target = nmatch + occ }
+            if target < 0 {
+                regfree(&re)
+                return ValString(wb_strdup(text))
+            }
+            n = 0
+            k3: int = 0
+            while k3 < mstart[target] && n < 2000 {
+                out[n] = text[k3]
+                n += 1
+                k3 += 1
+            }
+            {
+                pm2: [10] regmatch_t = {0}
+                probe3: [512] char = ""
+                plen3: int = mend[target] - mstart[target]
+                if plen3 > 500 { plen3 = 500 }
+                memcpy(probe3,text + mstart[target],plen3)
+                probe3[plen3] = 0
+                regexec(&re,probe3,10,pm2,0)
+                rep2: [512] char = ""
+                RegexApplyReplacement(text,mstart[target],mend[target],repl,&re,pm2,rep2)
+                rl2: int = strlen(rep2)
+                ri2: int = 0
+                while ri2 < rl2 && n < 2000 {
+                    out[n] = rep2[ri2]
+                    n += 1
+                    ri2 += 1
+                }
+            }
+            k4: int = mend[target]
+            while k4 < tlen && n < 2000 {
+                out[n] = text[k4]
+                n += 1
+                k4 += 1
+            }
+            out[n] = 0
+            regfree(&re)
+            return ValString(wb_strdup(out))
+        }
+    }
+    return ValError(ERR_VALUE)
+}
+
+# --- textbefore / textafter / textsplit (gnumeric fn-string master) ---
+
+FoldAsciiInto :: (s: const char *, out: char *) {
+    i: int = 0
+    while s[i] != 0 && i < 500 {
+        c: int = (unsigned char)s[i]
+        if c >= 65 && c <= 90 { c += 32 }
+        out[i] = (char)c
+        i += 1
+    }
+    out[i] = 0
+}
+
+TextAddDelimMatches :: (hay: const char *, needle: const char *, orig_len: int, is_row: int, moff: int *, mlen: int *, mrow: int *, mn: int *) -> int {
+    nlen: int = strlen(needle)
+    p: int = 0
+    if nlen == 0 { return 1 }
+    while hay[p] != 0 {
+        q: const char * = strstr(hay + p, needle)
+        if q == NULL { return 1 }
+        off: int = (int)(q - hay)
+        if *mn >= 256 { return 0 }
+        moff[*mn] = off
+        mlen[*mn] = orig_len
+        mrow[*mn] = is_row
+        *mn += 1
+        p = off + nlen
+    }
+    return 1
+}
+
+TextSortDelimMatches :: (moff: int *, mlen: int *, mrow: int *, mn: int *) {
+    i: int = 1
+    while i < *mn {
+        o: int = moff[i]
+        l: int = mlen[i]
+        r: int = mrow[i]
+        j: int = i - 1
+        while j >= 0 && moff[j] > o {
+            moff[j + 1] = moff[j]
+            mlen[j + 1] = mlen[j]
+            mrow[j + 1] = mrow[j]
+            j -= 1
+        }
+        moff[j + 1] = o
+        mlen[j + 1] = l
+        mrow[j + 1] = r
+        i += 1
+    }
+    w: int = 0
+    i = 0
+    last_pos: int = 0
+    while i < *mn {
+        if moff[i] >= last_pos {
+            moff[w] = moff[i]
+            mlen[w] = mlen[i]
+            mrow[w] = mrow[i]
+            last_pos = moff[i] + mlen[i]
+            w += 1
+        }
+        i += 1
+    }
+    *mn = w
+}
+
+TextCollectDelims :: (st: EvalState *, args: Val *, count: int, marks: int *, group: int, hay_folded: const char *, match_mode: int, moff: int *, mlen: int *, mrow: int *, mn: int *) -> int {
+    dstart: int = 0
+    dlen: int = 0
+    dbuf: [512] char = ""
+    dfold: [512] char = ""
+    i: int = 0
+    GroupBounds(marks,count,group,&dstart,&dlen)
+    i = 0
+    while i < dlen {
+        CoerceText(&args[dstart + i],dbuf,sizeof(dbuf))
+        if match_mode == 1 {
+            FoldAsciiInto(dbuf,dfold)
+            if TextAddDelimMatches(hay_folded,dfold,(int)strlen(dbuf),0,moff,mlen,mrow,mn) == 0 { return 0 }
+        }
+    else {
+            if TextAddDelimMatches(hay_folded,dbuf,(int)strlen(dbuf),0,moff,mlen,mrow,mn) == 0 { return 0 }
+        }
+        i += 1
+    }
+    return 1
+}
+
+FnTextBefore :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    tfold: [512] char = ""
+    moff: [256] int = {0}
+    mlen: [256] int = {0}
+    mrow: [256] int = {0}
+    mn: int = 0
+    inst: int = 1
+    match_mode: int = 0
+    match_end: int = 0
+    n: int = 0
+    target: int = -1
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        if args[2].kind == VAL_STRING { return ValError(ERR_VALUE) }
+        inst = (int)CoerceNumber(&args[2])
+    }
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        if args[3].kind == VAL_STRING { return ValError(ERR_VALUE) }
+        match_mode = CoerceNumber(&args[3]) != 0 ? 1 : 0
+    }
+    if count >= 5 {
+        if args[4].kind == VAL_ERROR { return ValError(args[4].err) }
+        if args[4].kind == VAL_STRING { return ValError(ERR_VALUE) }
+        match_end = CoerceNumber(&args[4]) != 0 ? 1 : 0
+    }
+    if count >= 6 && args[5].kind == VAL_STRING { return ValError(ERR_VALUE) }
+    if inst == 0 { return ValError(ERR_VALUE) }
+    if match_mode == 1 {
+        FoldAsciiInto(text,tfold)
+        if TextCollectDelims(st,args,count,marks,1,tfold,match_mode,moff,mlen,mrow,&mn) == 0 { return ValError(ERR_VALUE) }
+    }
+else {
+        if TextCollectDelims(st,args,count,marks,1,text,match_mode,moff,mlen,mrow,&mn) == 0 { return ValError(ERR_VALUE) }
+    }
+    TextSortDelimMatches(moff,mlen,mrow,&mn)
+    n = mn
+    if inst > 0 {
+        if inst <= n {
+            target = inst - 1
+        }
+    else if match_end == 1 {
+            return ValString(wb_strdup(text))
+        }
+    }
+else {
+        ai: int = 0 - inst
+        if ai <= n {
+            target = n - ai
+        }
+    else if match_end == 1 {
+            return ValString(wb_strdup(""))
+        }
+    }
+    if target != -1 {
+        out: [512] char = ""
+        cp: int = moff[target]
+        if cp > 500 { cp = 500 }
+        memcpy(out,text,cp)
+        out[cp] = 0
+        return ValString(wb_strdup(out))
+    }
+    if count >= 6 { return ValCopy(&args[5]) }
+    return ValError(ERR_NA)
+}
+
+FnTextAfter :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    tfold: [512] char = ""
+    moff: [256] int = {0}
+    mlen: [256] int = {0}
+    mrow: [256] int = {0}
+    mn: int = 0
+    inst: int = 1
+    match_mode: int = 0
+    match_end: int = 0
+    n: int = 0
+    target: int = -1
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        if args[2].kind == VAL_STRING { return ValError(ERR_VALUE) }
+        inst = (int)CoerceNumber(&args[2])
+    }
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        if args[3].kind == VAL_STRING { return ValError(ERR_VALUE) }
+        match_mode = CoerceNumber(&args[3]) != 0 ? 1 : 0
+    }
+    if count >= 5 {
+        if args[4].kind == VAL_ERROR { return ValError(args[4].err) }
+        if args[4].kind == VAL_STRING { return ValError(ERR_VALUE) }
+        match_end = CoerceNumber(&args[4]) != 0 ? 1 : 0
+    }
+    if count >= 6 && args[5].kind == VAL_STRING { return ValError(ERR_VALUE) }
+    if inst == 0 { return ValError(ERR_VALUE) }
+    if match_mode == 1 {
+        FoldAsciiInto(text,tfold)
+        if TextCollectDelims(st,args,count,marks,1,tfold,match_mode,moff,mlen,mrow,&mn) == 0 { return ValError(ERR_VALUE) }
+    }
+else {
+        if TextCollectDelims(st,args,count,marks,1,text,match_mode,moff,mlen,mrow,&mn) == 0 { return ValError(ERR_VALUE) }
+    }
+    TextSortDelimMatches(moff,mlen,mrow,&mn)
+    n = mn
+    if inst > 0 {
+        if inst <= n {
+            target = inst - 1
+        }
+    else if match_end == 1 {
+            return ValString(wb_strdup(""))
+        }
+    }
+else {
+        ai: int = 0 - inst
+        if ai <= n {
+            target = n - ai
+        }
+    else if match_end == 1 {
+            return ValString(wb_strdup(text))
+        }
+    }
+    if target != -1 {
+        from: int = moff[target] + mlen[target]
+        if from > 500 { from = 500 }
+        return ValString(wb_strdup(text + from))
+    }
+    if count >= 6 { return ValCopy(&args[5]) }
+    return ValError(ERR_NA)
+}
+
+FnTextSplit :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    tfold: [512] char = ""
+    moff: [256] int = {0}
+    mlen: [256] int = {0}
+    mrow: [256] int = {0}
+    mn: int = 0
+    ignore_empty: int = 0
+    match_mode: int = 0
+    last_pos: int = 0
+    first: [512] char = ""
+    have_first: int = 0
+    hay: const char * = NULL
+    i: int = 0
+    tlen: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    tlen = (int)strlen(text)
+    if count >= 4 {
+        if args[3].kind == VAL_ERROR { return ValError(args[3].err) }
+        ignore_empty = CoerceNumber(&args[3]) != 0 ? 1 : 0
+    }
+    if count >= 5 {
+        if args[4].kind == VAL_ERROR { return ValError(args[4].err) }
+        match_mode = CoerceNumber(&args[4]) != 0 ? 1 : 0
+    }
+    if match_mode == 1 {
+        FoldAsciiInto(text,tfold)
+        hay = tfold
+    }
+else {
+        hay = text
+    }
+    if count >= 2 {
+        dstart: int = 0
+        dlen: int = 0
+        dbuf: [512] char = ""
+        dfold: [512] char = ""
+        GroupBounds(marks,count,1,&dstart,&dlen)
+        i = 0
+        while i < dlen {
+            CoerceText(&args[dstart + i],dbuf,sizeof(dbuf))
+            if match_mode == 1 {
+                FoldAsciiInto(dbuf,dfold)
+                TextAddDelimMatches(hay,dfold,(int)strlen(dbuf),0,moff,mlen,mrow,&mn)
+            }
+        else {
+                TextAddDelimMatches(hay,dbuf,(int)strlen(dbuf),0,moff,mlen,mrow,&mn)
+            }
+            i += 1
+        }
+    }
+    if count >= 3 {
+        dstart2: int = 0
+        dlen2: int = 0
+        dbuf2: [512] char = ""
+        dfold2: [512] char = ""
+        GroupBounds(marks,count,2,&dstart2,&dlen2)
+        i = 0
+        while i < dlen2 {
+            CoerceText(&args[dstart2 + i],dbuf2,sizeof(dbuf2))
+            if match_mode == 1 {
+                FoldAsciiInto(dbuf2,dfold2)
+                TextAddDelimMatches(hay,dfold2,(int)strlen(dbuf2),1,moff,mlen,mrow,&mn)
+            }
+        else {
+                TextAddDelimMatches(hay,dbuf2,(int)strlen(dbuf2),1,moff,mlen,mrow,&mn)
+            }
+            i += 1
+        }
+    }
+    TextSortDelimMatches(moff,mlen,mrow,&mn)
+    i = 0
+    while i < mn {
+        if ignore_empty == 0 || moff[i] > last_pos {
+            if have_first == 0 {
+                plen: int = moff[i] - last_pos
+                if plen < 0 { plen = 0 }
+                if plen > 500 { plen = 500 }
+                memcpy(first,text + last_pos,plen)
+                first[plen] = 0
+                have_first = 1
+            }
+        }
+        last_pos = moff[i] + mlen[i]
+        i += 1
+    }
+    if ignore_empty == 0 || last_pos < tlen {
+        if have_first == 0 {
+            cp: int = last_pos
+            if cp > 500 { cp = 500 }
+            memcpy(first,text + cp,tlen - cp > 500 ? 500 : tlen - cp)
+            first[tlen - cp > 500 ? 500 : tlen - cp] = 0
+            have_first = 1
+        }
+    }
+    if have_first == 0 { return ValEmpty() }
+    return ValString(wb_strdup(first))
+}
+
+# --- xmatch / xlookup ---
+
+WildXlMatch :: (pat: const char *, txt: const char *) -> int {
+    pc: [128] int = {0}
+    pl: [128] int = {0}
+    pn: int = 0
+    i: int = 0
+    while pat[i] != 0 && pn < 126 {
+        c: int = (unsigned char)pat[i]
+        lit: int = 0
+        if c == '~' && (pat[i + 1] == '*' || pat[i + 1] == '?' || pat[i + 1] == '~') {
+            i += 1
+            c = (unsigned char)pat[i]
+            lit = 1
+        }
+        pc[pn] = c
+        pl[pn] = lit
+        pn += 1
+        i += 1
+    }
+    p: int = 0
+    t: int = 0
+    star: int = -1
+    mark: int = -1
+    while txt[t] != 0 {
+        tc: int = (unsigned char)txt[t]
+        if p < pn && pl[p] == 0 && pc[p] == '*' {
+            star = p
+            p += 1
+            mark = t
+        }
+    else if p < pn && pl[p] == 0 && pc[p] == '?' {
+            p += 1
+            t += 1
+        }
+    else if p < pn && (pl[p] != 0 || pc[p] != '*') && pc[p] == tc {
+            p += 1
+            t += 1
+        }
+    else if star >= 0 {
+            p = star + 1
+            mark += 1
+            t = mark
+        }
+    else {
+            return 0
+        }
+    }
+    while p < pn && pl[p] == 0 && pc[p] == '*' { p += 1 }
+    if p >= pn { return 1 }
+    return 0
+}
+
+XVectorCollect :: (st: EvalState *, args: Val *, count: int, marks: int *, group: int, find: Val *, cidx: int *, cnum: double *, cstr: char *, cstrn: int *, n_out: int *) -> int {
+    start: int = 0
+    len: int = 0
+    i: int = 0
+    w: int = 0
+    GroupBounds(marks,count,group,&start,&len)
+    i = 0
+    while i < len && w < 128 {
+        v: Val * = &args[start + i]
+        ok: int = 0
+        if find->kind == VAL_STRING && v->kind == VAL_STRING { ok = 1 }
+        if find->kind == VAL_FLOAT && v->kind == VAL_FLOAT { ok = 1 }
+        if find->kind == VAL_BOOL && v->kind == VAL_BOOL { ok = 1 }
+        if ok != 0 {
+            cidx[w] = i
+            if find->kind == VAL_STRING {
+                sbuf: [128] char = ""
+                fbuf: [128] char = ""
+                snprintf(sbuf,sizeof(sbuf),"%s",v->text)
+                FoldAsciiInto(sbuf,fbuf)
+                snprintf(cstr + w * 128,128,"%s",fbuf)
+                cstrn[w] = (int)strlen(fbuf)
+            }
+        else {
+                cnum[w] = v->kind == VAL_FLOAT ? v->number : v->number
+            }
+            w += 1
+        }
+        i += 1
+    }
+    *n_out = w
+    return 1
+}
+
+XCompare :: (find: Val *, fnum: double, fstr: const char *, cnum: double, cstr: const char *) -> int {
+    if find->kind == VAL_STRING { return strcmp(fstr,cstr) }
+    if fnum < cnum { return -1 }
+    if fnum > cnum { return 1 }
+    return 0
+}
+
+XFindIndex :: (st: EvalState *, args: Val *, count: int, marks: int *, group: int, find: Val *, match_mode: int, search_mode: int) -> int {
+    cidx: [128] int = {0}
+    cnum: [128] double = {0}
+    cstr: [128][128] char
+    cstrn: [128] int = {0}
+    n: int = 0
+    fnum: double = 0
+    fbuf: [128] char = ""
+    ffold: [128] char = ""
+    low: int = 0
+    high: int = 0
+    lastlow: int = -1
+    i: int = 0
+    XVectorCollect(st,args,count,marks,group,find,cidx,cnum,&cstr[0][0],cstrn,&n)
+    if n == 0 { return -1 }
+    if find->kind == VAL_STRING {
+        snprintf(fbuf,sizeof(fbuf),"%s",find->text)
+        FoldAsciiInto(fbuf,ffold)
+    }
+else {
+        fnum = CoerceNumber(find)
+    }
+    if search_mode == 2 || search_mode == -2 {
+        tp: int = search_mode == 2 ? 1 : -1
+        lastlow = -1
+        low = 0
+        high = n - 1
+        while low <= high {
+            mid: int = (low + high) / 2
+            c: int = XCompare(find,fnum,ffold,cnum[mid],cstr[mid])
+            if c == 0 { return cidx[mid] }
+            if tp < 0 { c = 0 - c }
+            if c > 0 {
+                lastlow = mid
+                low = mid + 1
+            }
+        else {
+                high = mid - 1
+            }
+        }
+        if match_mode == 0 { return -1 }
+        if match_mode == -1 {
+            if lastlow >= 0 { return cidx[lastlow] }
+            return -1
+        }
+        if match_mode == 1 {
+            if lastlow + 1 < n { return cidx[lastlow + 1] }
+            return -1
+        }
+        return -1
+    }
+    sstart: int = search_mode == -1 ? n - 1 : 0
+    send: int = search_mode == -1 ? -1 : n
+    step: int = search_mode == -1 ? -1 : 1
+    if match_mode == 2 && find->kind == VAL_STRING {
+        pat: [128] char = ""
+        snprintf(pat,sizeof(pat),"%s",find->text)
+        i = sstart
+        while i != send {
+            if WildXlMatch(pat,cstr[i]) != 0 { return cidx[i] }
+            i += step
+        }
+        return -1
+    }
+    i = sstart
+    while i != send {
+        if XCompare(find,fnum,ffold,cnum[i],cstr[i]) == 0 { return cidx[i] }
+        i += step
+    }
+    if match_mode == 0 || match_mode == 2 { return -1 }
+    best: int = -1
+    i = sstart
+    while i != send {
+        c: int = XCompare(find,fnum,ffold,cnum[i],cstr[i])
+        if match_mode == -1 && c > 0 {
+            if best == -1 { best = i }
+        else if find->kind == VAL_STRING {
+                if strcmp(cstr[i],cstr[best]) > 0 { best = i }
+            }
+        else {
+                if cnum[i] > cnum[best] { best = i }
+            }
+        }
+    else if match_mode == 1 && c < 0 {
+            if best == -1 { best = i }
+        else if find->kind == VAL_STRING {
+                if strcmp(cstr[i],cstr[best]) < 0 { best = i }
+            }
+        else {
+                if cnum[i] < cnum[best] { best = i }
+            }
+        }
+        i += step
+    }
+    if best != -1 { return cidx[best] }
+    return -1
+}
+
+FnXmatch :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    match_mode: int = 0
+    search_mode: int = 1
+    idx: int = 0
+    ga: int = 0
+    gl: int = 0
+    if groups < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if groups >= 3 {
+        GroupBounds(marks,count,2,&ga,&gl)
+        if args[ga].kind == VAL_ERROR { return ValError(args[ga].err) }
+        match_mode = (int)CoerceNumber(&args[ga])
+    }
+    if groups >= 4 {
+        GroupBounds(marks,count,3,&ga,&gl)
+        if args[ga].kind == VAL_ERROR { return ValError(args[ga].err) }
+        search_mode = (int)CoerceNumber(&args[ga])
+    }
+    idx = XFindIndex(st,args,count,marks,1,&args[0],match_mode,search_mode)
+    if idx >= 0 { return ValNumber(idx + 1) }
+    return ValError(ERR_NA)
+}
+
+FnXlookup :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    groups: int = ArgGroupCount(args,marks,count)
+    match_mode: int = 0
+    search_mode: int = 1
+    idx: int = 0
+    rstart: int = 0
+    rlen: int = 0
+    ga: int = 0
+    gl: int = 0
+    if groups < 3 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if groups >= 5 {
+        GroupBounds(marks,count,4,&ga,&gl)
+        if args[ga].kind == VAL_ERROR { return ValError(args[ga].err) }
+        match_mode = (int)CoerceNumber(&args[ga])
+    }
+    if groups >= 6 {
+        GroupBounds(marks,count,5,&ga,&gl)
+        if args[ga].kind == VAL_ERROR { return ValError(args[ga].err) }
+        search_mode = (int)CoerceNumber(&args[ga])
+    }
+    idx = XFindIndex(st,args,count,marks,1,&args[0],match_mode,search_mode)
+    if idx >= 0 {
+        GroupBounds(marks,count,2,&rstart,&rlen)
+        if idx >= rlen { return ValError(ERR_REF) }
+        return ValCopy(&args[rstart + idx])
+    }
+    if groups >= 4 {
+        GroupBounds(marks,count,3,&ga,&gl)
+        return ValCopy(&args[ga])
+    }
+    return ValError(ERR_NA)
+}
+
+# --- workday.intl / networkdays.intl ---
+
+IntlWeekendDecode :: (args: Val *, count: int, weekend_index: int, weekends: int *, nwork: int *) -> int {
+    i: int = 0
+    i = 0
+    while i < 7 {
+        weekends[i] = 0
+        i += 1
+    }
+    *nwork = 0
+    if weekend_index >= count {
+        weekends[0] = 1
+        weekends[6] = 1
+        *nwork = 5
+        return 1
+    }
+    v: Val * = &args[weekend_index]
+    if v->kind == VAL_ERROR { return 0 }
+    if v->kind == VAL_FLOAT || v->kind == VAL_BOOL {
+        id: int = (int)CoerceNumber(v)
+        if id == 1 { weekends[6] = 1; weekends[0] = 1 }
+    else if id == 2 { weekends[0] = 1; weekends[1] = 1 }
+    else if id == 3 { weekends[1] = 1; weekends[2] = 1 }
+    else if id == 4 { weekends[2] = 1; weekends[3] = 1 }
+    else if id == 5 { weekends[3] = 1; weekends[4] = 1 }
+    else if id == 6 { weekends[4] = 1; weekends[5] = 1 }
+    else if id == 7 { weekends[5] = 1; weekends[6] = 1 }
+    else if id == 11 { weekends[0] = 1 }
+    else if id == 12 { weekends[1] = 1 }
+    else if id == 13 { weekends[2] = 1 }
+    else if id == 14 { weekends[3] = 1 }
+    else if id == 15 { weekends[4] = 1 }
+    else if id == 16 { weekends[5] = 1 }
+    else if id == 17 { weekends[6] = 1 }
+    else { return 0 }
+    }
+else if v->kind == VAL_STRING {
+        sbuf: [32] char = ""
+        CoerceText(v,sbuf,sizeof(sbuf))
+        if strlen(sbuf) != 7 { return 0 }
+        i = 0
+        while i < 7 {
+            if sbuf[i] == '1' { weekends[(i + 1) % 7] = 1 }
+        else if sbuf[i] == '0' { weekends[(i + 1) % 7] = 0 }
+        else { return 0 }
+            i += 1
+        }
+    }
+else {
+        return 0
+    }
+    *nwork = 0
+    i = 0
+    while i < 7 {
+        if weekends[i] == 0 { *nwork += 1 }
+        i += 1
+    }
+    return 1
+}
+
+IntlWeekendHit :: (serial: int, weekends: int *) -> int {
+    wd: int = WeekdayMon0(serial)
+    return weekends[(wd + 1) % 7]
+}
+
+FnWorkdayIntl :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    serial: int = 0
+    days: double = 0
+    idays: int = 0
+    weekends: [7] int = {0}
+    nwork: int = 0
+    hol: [256] int = {0}
+    nhol: int = 0
+    step: int = 0
+    moved: int = 0
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    serial = (int)CoerceNumber(&args[0])
+    days = CoerceNumber(&args[1])
+    idays = (int)days
+    if IntlWeekendDecode(args,count,2,weekends,&nwork) == 0 { return ValError(ERR_VALUE) }
+    nhol = CollectHolidays(args,count,3,hol,256)
+    if nwork == 0 && idays != 0 { return ValError(ERR_VALUE) }
+    if idays == 0 { return ValNumber((double)serial) }
+    step = idays > 0 ? 1 : -1
+    while moved < (idays > 0 ? idays : 0 - idays) {
+        serial += step
+        if IntlWeekendHit(serial,weekends) == 0 {
+            ishol: int = 0
+            k: int = 0
+            while k < nhol {
+                if hol[k] == serial { ishol = 1 }
+                k += 1
+            }
+            if ishol == 0 { moved += 1 }
+        }
+    }
+    CivilFromDays(serial + SerialEpoch(),&y,&m,&d)
+    if y < 1900 || y > 9999 { return ValError(ERR_NUM) }
+    return ValNumber((double)serial)
+}
+
+FnNetworkdaysIntl :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    start_s: int = 0
+    end_s: int = 0
+    total: int = 0
+    weekends: [7] int = {0}
+    nwork: int = 0
+    hol: [256] int = {0}
+    nhol: int = 0
+    s: int = 0
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    start_s = (int)CoerceNumber(&args[0])
+    end_s = (int)CoerceNumber(&args[1])
+    if start_s > end_s {
+        t: int = start_s
+        start_s = end_s
+        end_s = t
+    }
+    if IntlWeekendDecode(args,count,2,weekends,&nwork) == 0 { return ValError(ERR_VALUE) }
+    if nwork == 0 { return ValNumber(0) }
+    nhol = CollectHolidays(args,count,3,hol,256)
+    s = start_s
+    while s <= end_s {
+        if IntlWeekendHit(s,weekends) == 0 {
+            ishol: int = 0
+            k: int = 0
+            while k < nhol {
+                if hol[k] == s { ishol = 1 }
+                k += 1
+            }
+            if ishol == 0 { total += 1 }
+        }
+        s += 1
+    }
+    return ValNumber((double)total)
+}
+
+# --- partitions (gnumeric fn-numtheory master) ---
+
+PartSigma :: (k: int) -> double {
+    total: double = k + 1
+    d: int = 2
+    if k <= 1 { return 1 }
+    while d * d <= k {
+        if k % d == 0 {
+            other: int = k / d
+            total += d
+            if other != d { total += other }
+        }
+        d += 1
+    }
+    return total
+}
+
+FnPartitions :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    n: int = 0
+    m: int = 0
+    k: int = 0
+    cache: [100001] double = {0}
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    n = (int)floor(CoerceNumber(&args[0]))
+    if n < 0 { return ValError(ERR_NUM) }
+    if n > 100000 { return ValError(ERR_VALUE) }
+    cache[0] = 1
+    m = 1
+    while m <= n {
+        sum2: double = 0
+        k = 1
+        while k <= m {
+            sum2 += PartSigma(k) * cache[m - k]
+            k += 1
+        }
+        cache[m] = sum2 / m
+        m += 1
+    }
+    return ValNumber(cache[n])
+}
+
+# --- r.ptukey / r.qtukey (gnumeric mathfunc.c) ---
+
+PtukyWprob :: (w: double, rr: double, cc: double) -> double {
+    xleg: [6] double = {0.0}
+    xleg[0] = 0.981560634246719250690549090149
+    xleg[1] = 0.904117256370474856678465866119
+    xleg[2] = 0.769902674194304687036893833213
+    xleg[3] = 0.587317954286617447296702418941
+    xleg[4] = 0.367831498998180193752691536644
+    xleg[5] = 0.125233408511468915472441369464
+    aleg: [6] double = {0.0}
+    aleg[0] = 0.047175336386511827194615961485
+    aleg[1] = 0.106939325995318430960254718194
+    aleg[2] = 0.160078328543346226334652529543
+    aleg[3] = 0.203167426723065921749064455810
+    aleg[4] = 0.233492536538354808760849898925
+    aleg[5] = 0.249147045813402785000562436043
+    nleg: int = 12
+    qsqz: double = w * 0.5
+    pr_w: double = 0
+    blb: double = 0
+    binc: double = 0
+    i: int = 0
+    if qsqz > 1 {
+        pr_w = Pow1p(0 - 2 * pnorm(qsqz,0,1,0,0),cc)
+    }
+else {
+        pr_w = pow(erf(qsqz / 1.414213562373095048801688724209),cc)
+    }
+    if pr_w >= 1 { return 1.0 }
+    blb = qsqz
+    binc = 3 / log1p(cc)
+    i = 1
+    while 1 {
+        C: double = blb + binc * 0.5
+        elsum: double = 0
+        jj: int = 0
+        while jj < nleg {
+            xx: double = 0
+            aa: double = 0
+            if nleg / 2 <= jj {
+                xx = xleg[nleg - 1 - jj]
+                aa = aleg[nleg - 1 - jj]
+            }
+        else {
+                xx = 0 - xleg[jj]
+                aa = aleg[jj]
+            }
+            v: double = C + binc * 0.5 * xx
+            rinsum: double = Pnorm2(v - w,v)
+            elsum += pow(rinsum,cc - 1) * aa * exp(0 - v * v * 0.5)
+            jj += 1
+        }
+        elsum *= binc * cc * 0.398942280401432677939946059934
+        pr_w += elsum
+        if pr_w >= 1 {
+            pr_w = 1
+            break
+        }
+        if elsum <= pr_w * (2.2204460492503131e-16 / 2) {
+            break
+        }
+        blb += binc
+        i += 1
+    }
+    return pow(pr_w,rr)
+}
+
+PtukyOtsum :: (u0: double, u1: double, f2: double, f2lf: double, q: double, rr: double, cc: double) -> double {
+    xlegq: [8] double = {0.0}
+    xlegq[0] = 0.989400934991649932596154173450
+    xlegq[1] = 0.944575023073232576077988415535
+    xlegq[2] = 0.865631202387831743880467897712
+    xlegq[3] = 0.755404408355003033895101194847
+    xlegq[4] = 0.617876244402643748446671764049
+    xlegq[5] = 0.458016777657227386342419442984
+    xlegq[6] = 0.281603550779258913230460501460
+    xlegq[7] = 0.0950125098376374401853193354250
+    alegq: [8] double = {0.0}
+    alegq[0] = 0.0271524594117540948517805724560
+    alegq[1] = 0.0622535239386478928628438369944
+    alegq[2] = 0.0951585116824927848099251076022
+    alegq[3] = 0.124628971255533872052476282192
+    alegq[4] = 0.149595988816576732081501730547
+    alegq[5] = 0.169156519395002538189312079030
+    alegq[6] = 0.182603415044923588866763667969
+    alegq[7] = 0.189450610455068496285396723208
+    nlegq: int = 16
+    C: double = 0.5 * (u0 + u1)
+    L: double = u1 - u0
+    otsum: double = 0
+    jj: int = 0
+    while jj < nlegq {
+        xx: double = 0
+        aa: double = 0
+        if nlegq / 2 <= jj {
+            xx = xlegq[nlegq - 1 - jj]
+            aa = alegq[nlegq - 1 - jj]
+        }
+    else {
+            xx = 0 - xlegq[jj]
+            aa = alegq[jj]
+        }
+        u: double = xx * (0.5 * L) + C
+        t1: double = f2lf + (f2 - 1) * log(u) - u * f2
+        wprb: double = PtukyWprob(q * sqrt(u),rr,cc)
+        otsum += aa * (wprb * (0.5 * L) * exp(t1))
+        jj += 1
+    }
+    return otsum
+}
+
+RPtukey :: (q: double, rr: double, cc: double, df: double, lower_tail: int, log_p: int) -> double {
+    dhaf: double = 100.0
+    dquar: double = 800.0
+    deigh: double = 5000.0
+    dlarg: double = 25000.0
+    ulen: double = 0
+    ans: double = 0
+    f2: double = 0
+    f2lf: double = 0
+    u0: double = 0
+    u1: double = 0
+    i: int = 0
+    if q != q || rr != rr || cc != cc || df != df { return 0.0 / 0.0 }
+    if q <= 0 {
+        if log_p != 0 {
+            return lower_tail != 0 ? -1e308 * 10 : 0.0
+        }
+        return lower_tail != 0 ? 0.0 : 1.0
+    }
+    if df < 2 || rr < 1 || cc < 2 { return 0.0 / 0.0 }
+    if isfinite(q) == 0 {
+        if log_p != 0 {
+            return lower_tail != 0 ? 0.0 : 1e308 * 10
+        }
+        return lower_tail != 0 ? 1.0 : 0.0
+    }
+    if df > dlarg {
+        wv: double = PtukyWprob(q,rr,cc)
+        if log_p != 0 { return log(lower_tail != 0 ? wv : 1 - wv) }
+        return lower_tail != 0 ? wv : 1 - wv
+    }
+    f2 = df * 0.5
+    f2lf = f2 * log(f2) - lgamma(f2)
+    if df <= dhaf { ulen = 1.0 }
+    else if df <= dquar { ulen = 0.5 }
+    else if df <= deigh { ulen = 0.25 }
+    else { ulen = 0.125 }
+    ans = 0.0
+    u1 = ulen / 2
+    i = 1
+    while 1 {
+        u0 = u1 / (i + 1)
+        otsum: double = PtukyOtsum(u0,u1,f2,f2lf,q,rr,cc)
+        ans += otsum
+        if otsum <= ans * (2.2204460492503131e-16 / 2) { break }
+        if i == 20 { break }
+        u1 = u0
+        i += 1
+    }
+    u0 = ulen / 2
+    i = 1
+    while 1 {
+        u1 = u0 + ulen
+        otsum2: double = PtukyOtsum(u0,u1,f2,f2lf,q,rr,cc)
+        ans += otsum2
+        if otsum2 < ans * 2.2204460492503131e-16 {
+            if ans > 0 || u0 > 2 { break }
+        }
+        if i == 150 { break }
+        if otsum2 < ans / 1000 { ulen *= 2 }
+        u0 = u1
+        i += 1
+    }
+    if ans > 1 { ans = 1 }
+    if log_p != 0 { return log(lower_tail != 0 ? ans : 1 - ans) }
+    return lower_tail != 0 ? ans : 1 - ans
+}
+
+PtukeyGo :: (x: double, nmeans: double, df: double, nranges: double, lower_tail: int, log_p: int) -> double {
+    return RPtukey(x,nranges,nmeans,df,lower_tail,log_p)
+}
+
+QtukeyGo :: (p: double, nmeans: double, df: double, nranges: double, lower_tail: int, log_p: int) -> double {
+    x0: double = 0
+    shape: [3] double = {0.0}
+    if log_p == 0 && p > 0.9 {
+        p = 1 - p
+        lower_tail = lower_tail != 0 ? 0 : 1
+    }
+    x0 = 1.414213562373095048801688724209 * qt((1 + p) / 2,df,lower_tail,log_p)
+    shape[0] = nmeans
+    shape[1] = df
+    shape[2] = nranges
+    return PFuncInverter(2,p,shape,lower_tail,log_p,0,1e308 * 10,x0)
+}
+
+# --- asc / jis (gnumeric fn-string master) ---
+
+AscMapHalf :: (c: int, extra: int *) -> int {
+    extra[0] = 0
+    if c == 0x2015 { return 0xff70 }
+    if c == 0x2018 { return 0x60 }
+    if c == 0x2019 { return 0x27 }
+    if c == 0x201d { return 0x22 }
+    if c == 0x3001 { return 0xff64 }
+    if c == 0x3002 { return 0xff61 }
+    if c == 0x300c { return 0xff62 }
+    if c == 0x300d { return 0xff63 }
+    if c == 0x309b { return 0xff9e }
+    if c == 0x309c { return 0xff9f }
+    if c == 0x30fb { return 0xff65 }
+    if c == 0x30fc { return 0xff70 }
+    if c == 0xffe5 { return 0x5c }
+    if c == 0x30a1 { return 0xff67 }
+    if c == 0x30a2 { return 0xff71 }
+    if c == 0x30a3 { return 0xff68 }
+    if c == 0x30a4 { return 0xff72 }
+    if c == 0x30a5 { return 0xff69 }
+    if c == 0x30a6 { return 0xff73 }
+    if c == 0x30a7 { return 0xff6a }
+    if c == 0x30a8 { return 0xff74 }
+    if c == 0x30a9 { return 0xff6b }
+    if c == 0x30aa { return 0xff75 }
+    if c == 0x30ab { return 0xff76 }
+    if c == 0x30ad { return 0xff77 }
+    if c == 0x30af { return 0xff78 }
+    if c == 0x30b1 { return 0xff79 }
+    if c == 0x30b3 { return 0xff7a }
+    if c == 0x30b5 { return 0xff7b }
+    if c == 0x30b7 { return 0xff7c }
+    if c == 0x30b9 { return 0xff7d }
+    if c == 0x30bb { return 0xff7e }
+    if c == 0x30bd { return 0xff7f }
+    if c == 0x30bf { return 0xff80 }
+    if c == 0x30c1 { return 0xff81 }
+    if c == 0x30c3 { return 0xff6f }
+    if c == 0x30c4 { return 0xff82 }
+    if c == 0x30c6 { return 0xff83 }
+    if c == 0x30c8 { return 0xff84 }
+    if c == 0x30ca { return 0xff85 }
+    if c == 0x30cb { return 0xff86 }
+    if c == 0x30cc { return 0xff87 }
+    if c == 0x30cd { return 0xff88 }
+    if c == 0x30ce { return 0xff89 }
+    if c == 0x30cf { return 0xff8a }
+    if c == 0x30d2 { return 0xff8b }
+    if c == 0x30d5 { return 0xff8c }
+    if c == 0x30d8 { return 0xff8d }
+    if c == 0x30db { return 0xff8e }
+    if c == 0x30de { return 0xff8f }
+    if c == 0x30df { return 0xff90 }
+    if c == 0x30e0 { return 0xff91 }
+    if c == 0x30e1 { return 0xff92 }
+    if c == 0x30e2 { return 0xff93 }
+    if c == 0x30e3 { return 0xff6c }
+    if c == 0x30e4 { return 0xff94 }
+    if c == 0x30e5 { return 0xff6d }
+    if c == 0x30e6 { return 0xff95 }
+    if c == 0x30e7 { return 0xff6e }
+    if c == 0x30e8 { return 0xff96 }
+    if c == 0x30e9 { return 0xff97 }
+    if c == 0x30ea { return 0xff98 }
+    if c == 0x30eb { return 0xff99 }
+    if c == 0x30ec { return 0xff9a }
+    if c == 0x30ed { return 0xff9b }
+    if c == 0x30ef { return 0xff9c }
+    if c == 0x30f2 { return 0xff66 }
+    if c == 0x30f3 { return 0xff9d }
+    if c == 0x30ac { extra[0] = 0xff76; return 0xff9e }
+    if c == 0x30ae { extra[0] = 0xff77; return 0xff9e }
+    if c == 0x30b0 { extra[0] = 0xff78; return 0xff9e }
+    if c == 0x30b2 { extra[0] = 0xff79; return 0xff9e }
+    if c == 0x30b4 { extra[0] = 0xff7a; return 0xff9e }
+    if c == 0x30b6 { extra[0] = 0xff7b; return 0xff9e }
+    if c == 0x30b8 { extra[0] = 0xff7c; return 0xff9e }
+    if c == 0x30ba { extra[0] = 0xff7d; return 0xff9e }
+    if c == 0x30bc { extra[0] = 0xff7e; return 0xff9e }
+    if c == 0x30be { extra[0] = 0xff7f; return 0xff9e }
+    if c == 0x30c0 { extra[0] = 0xff80; return 0xff9e }
+    if c == 0x30c2 { extra[0] = 0xff81; return 0xff9e }
+    if c == 0x30c5 { extra[0] = 0xff82; return 0xff9e }
+    if c == 0x30c7 { extra[0] = 0xff83; return 0xff9e }
+    if c == 0x30c9 { extra[0] = 0xff84; return 0xff9e }
+    if c == 0x30d0 { extra[0] = 0xff8a; return 0xff9e }
+    if c == 0x30d3 { extra[0] = 0xff8b; return 0xff9e }
+    if c == 0x30d6 { extra[0] = 0xff8c; return 0xff9e }
+    if c == 0x30d9 { extra[0] = 0xff8d; return 0xff9e }
+    if c == 0x30dc { extra[0] = 0xff8e; return 0xff9e }
+    if c == 0x30d1 { extra[0] = 0xff8a; return 0xff9f }
+    if c == 0x30d4 { extra[0] = 0xff8b; return 0xff9f }
+    if c == 0x30d7 { extra[0] = 0xff8c; return 0xff9f }
+    if c == 0x30da { extra[0] = 0xff8d; return 0xff9f }
+    if c == 0x30dd { extra[0] = 0xff8e; return 0xff9f }
+    if c >= 0xff01 && c <= 0xff5e { return c - 0xff01 + 0x21 }
+    return c
+}
+
+JisMapFull :: (c: int, fc: int) -> int {
+    if c == 0x22 { return 0x201d }
+    if c == 0x27 { return 0x2019 }
+    if c == 0x5c { return 0xffe5 }
+    if c == 0x60 { return 0x2018 }
+    if c == 0xff61 { return 0x3002 }
+    if c == 0xff62 { return 0x300c }
+    if c == 0xff63 { return 0x300d }
+    if c == 0xff64 { return 0x3001 }
+    if c == 0xff65 { return 0x30fb }
+    if c == 0xff66 { return 0x30f2 }
+    if c == 0xff67 { return 0x30a1 }
+    if c == 0xff68 { return 0x30a3 }
+    if c == 0xff69 { return 0x30a5 }
+    if c == 0xff6a { return 0x30a7 }
+    if c == 0xff6b { return 0x30a9 }
+    if c == 0xff6c { return 0x30e3 }
+    if c == 0xff6d { return 0x30e5 }
+    if c == 0xff6e { return 0x30e7 }
+    if c == 0xff6f { return 0x30c3 }
+    if c == 0xff70 { return 0x30fc }
+    if c == 0xff71 { return 0x30a2 }
+    if c == 0xff72 { return 0x30a4 }
+    if c == 0xff73 { return 0x30a6 }
+    if c == 0xff74 { return 0x30a8 }
+    if c == 0xff75 { return 0x30aa }
+    if c == 0xff76 { return fc == 0xff9e ? 0x30ac : 0x30ab }
+    if c == 0xff77 { return fc == 0xff9e ? 0x30ae : 0x30ad }
+    if c == 0xff78 { return fc == 0xff9e ? 0x30b0 : 0x30af }
+    if c == 0xff79 { return fc == 0xff9e ? 0x30b2 : 0x30b1 }
+    if c == 0xff7a { return fc == 0xff9e ? 0x30b4 : 0x30b3 }
+    if c == 0xff7b { return fc == 0xff9e ? 0x30b6 : 0x30b5 }
+    if c == 0xff7c { return fc == 0xff9e ? 0x30b8 : 0x30b7 }
+    if c == 0xff7d { return fc == 0xff9e ? 0x30ba : 0x30b9 }
+    if c == 0xff7e { return fc == 0xff9e ? 0x30bc : 0x30bb }
+    if c == 0xff7f { return fc == 0xff9e ? 0x30be : 0x30bd }
+    if c == 0xff80 { return fc == 0xff9e ? 0x30c0 : 0x30bf }
+    if c == 0xff81 { return fc == 0xff9e ? 0x30c2 : 0x30c1 }
+    if c == 0xff82 { return fc == 0xff9e ? 0x30c5 : 0x30c4 }
+    if c == 0xff83 { return fc == 0xff9e ? 0x30c7 : 0x30c6 }
+    if c == 0xff84 { return fc == 0xff9e ? 0x30c9 : 0x30c8 }
+    if c == 0xff85 { return 0x30ca }
+    if c == 0xff86 { return 0x30cb }
+    if c == 0xff87 { return 0x30cc }
+    if c == 0xff88 { return 0x30cd }
+    if c == 0xff89 { return 0x30ce }
+    if c == 0xff8a {
+        if fc == 0xff9e { return 0x30d0 }
+        if fc == 0xff9f { return 0x30d1 }
+        return 0x30cf
+    }
+    if c == 0xff8b {
+        if fc == 0xff9e { return 0x30d3 }
+        if fc == 0xff9f { return 0x30d4 }
+        return 0x30d2
+    }
+    if c == 0xff8c {
+        if fc == 0xff9e { return 0x30d6 }
+        if fc == 0xff9f { return 0x30d7 }
+        return 0x30d5
+    }
+    if c == 0xff8d {
+        if fc == 0xff9e { return 0x30d9 }
+        if fc == 0xff9f { return 0x30da }
+        return 0x30d8
+    }
+    if c == 0xff8e {
+        if fc == 0xff9e { return 0x30dc }
+        if fc == 0xff9f { return 0x30dd }
+        return 0x30db
+    }
+    if c == 0xff8f { return 0x30de }
+    if c == 0xff90 { return 0x30df }
+    if c == 0xff91 { return 0x30e0 }
+    if c == 0xff92 { return 0x30e1 }
+    if c == 0xff93 { return 0x30e2 }
+    if c == 0xff94 { return 0x30e4 }
+    if c == 0xff95 { return 0x30e6 }
+    if c == 0xff96 { return 0x30e8 }
+    if c == 0xff97 { return 0x30e9 }
+    if c == 0xff98 { return 0x30ea }
+    if c == 0xff99 { return 0x30eb }
+    if c == 0xff9a { return 0x30ec }
+    if c == 0xff9b { return 0x30ed }
+    if c == 0xff9c { return 0x30ef }
+    if c == 0xff9d { return 0x30f3 }
+    if c == 0xff9e { return 0x309b }
+    if c == 0xff9f { return 0x309c }
+    if c >= 0x21 && c <= 0x7e { return c - 0x21 + 0xff01 }
+    return c
+}
+
+Utf8Advance :: (s: const char *, i: int) -> int {
+    b: int = (unsigned char)s[i]
+    if b == 0 { return i }
+    if b < 128 { return i + 1 }
+    if (b & 224) == 192 { return i + 2 }
+    if (b & 240) == 224 { return i + 3 }
+    if (b & 248) == 240 { return i + 4 }
+    return i + 1
+}
+
+FnNumbervalue :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    norm: [512] char = ""
+    sepbuf: [16] char = ""
+    grpbuf: [16] char = ""
+    sep: CString = "."
+    grp: CString = ","
+    i: int = 0
+    n: int = 0
+    start: int = 0
+    end: char * = NULL
+    v: double = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[0].kind == VAL_EMPTY || args[0].kind == VAL_FLOAT || args[0].kind == VAL_BOOL {
+        return ValCopy(&args[0])
+    }
+    if count >= 2 {
+        if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+        CoerceText(&args[1],sepbuf,sizeof(sepbuf))
+        if strlen(sepbuf) != 1 { return ValError(ERR_VALUE) }
+        sep = sepbuf
+    }
+    if count >= 3 {
+        if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+        CoerceText(&args[2],grpbuf,sizeof(grpbuf))
+        if strlen(grpbuf) != 1 { return ValError(ERR_VALUE) }
+        grp = grpbuf
+    }
+    if strcmp(sep,grp) == 0 { return ValError(ERR_VALUE) }
+    CoerceText(&args[0],text,sizeof(text))
+    start = 0
+    while text[start] == ' ' || text[start] == 9 { start += 1 }
+    i = start
+    n = 0
+    while text[i] != 0 && n < 500 {
+        c: char = text[i]
+        if c == grp[0] {
+            i += 1
+            continue
+        }
+        if c == sep[0] { c = '.' }
+        norm[n] = c
+        n += 1
+        i += 1
+    }
+    while n > 0 && (norm[n - 1] == ' ' || norm[n - 1] == 9) { n -= 1 }
+    norm[n] = 0
+    if n == 0 { return ValError(ERR_VALUE) }
+    v = strtod(norm,&end)
+    if end == norm || end[0] != 0 { return ValError(ERR_VALUE) }
+    return ValNumber(v)
+}
+
+FnAsc :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    out: [512] char = ""
+    n: int = 0
+    i: int = 0
+    w: [8] char = ""
+    wl: int = 0
+    extra: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    i = 0
+    while text[i] != 0 && n < 500 {
+        cp: int = Utf8Decode1(text + i)
+        i = Utf8Advance(text,i)
+        hc: int = AscMapHalf(cp,&extra)
+        if extra != 0 && n < 499 {
+            wl = Utf8Encode(extra,w)
+            memcpy(out + n,w,wl)
+            n += wl
+        }
+        wl = Utf8Encode(hc,w)
+        if n + wl > 500 { break }
+        memcpy(out + n,w,wl)
+        n += wl
+    }
+    out[n] = 0
+    return ValString(wb_strdup(out))
+}
+
+FnJis :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    text: [512] char = ""
+    out: [512] char = ""
+    n: int = 0
+    i: int = 0
+    w: [8] char = ""
+    wl: int = 0
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    CoerceText(&args[0],text,sizeof(text))
+    i = 0
+    while text[i] != 0 && n < 500 {
+        cp: int = Utf8Decode1(text + i)
+        j: int = Utf8Advance(text,i)
+        fc: int = text[j] != 0 ? Utf8Decode1(text + j) : 0
+        i = j
+        fc2: int = JisMapFull(cp,fc)
+        wl = Utf8Encode(fc2,w)
+        if n + wl > 500 { break }
+        memcpy(out + n,w,wl)
+        n += wl
+    }
+    out[n] = 0
+    return ValString(wb_strdup(out))
+}
+
+# --- hdate_heb / date2hdate_heb (gnumeric fn-hebrew-date) ---
+
+HdateMonthNameHeb :: (month: int, out: char *) {
+    if month == 0 { snprintf(out,64,"\xd7\xaa\xd6\xbc\xd6\xb4\xd7\xa9\xd7\x81\xd6\xb0\xd7\xa8\xd6\xb5\xd7\x99"); return }
+    if month == 1 { snprintf(out,64,"\xd7\x97\xd6\xb6\xd7\xa9\xd7\x81\xd6\xb0\xd7\x95\xd7\x87\xd7\x9f"); return }
+    if month == 2 { snprintf(out,64,"\xd7\x9b\xd6\xbc\xd6\xb4\xd7\xa1\xd6\xb0\xd7\x9c\xd6\xb5\xd7\x95"); return }
+    if month == 3 { snprintf(out,64,"\xd7\x98\xd6\xb5\xd7\x91\xd6\xb5\xd7\xaa"); return }
+    if month == 4 { snprintf(out,64,"\xd7\xa9\xd7\x81\xd6\xb0\xd7\x91\xd7\x87\xd7\x98"); return }
+    if month == 5 { snprintf(out,64,"\xd7\x90\xd6\xb7\xd7\x93\xd7\x87\xd7\xa8"); return }
+    if month == 6 { snprintf(out,64,"\xd7\xa0\xd6\xb4\xd7\x99\xd7\xa1\xd7\x87\xd7\x9f"); return }
+    if month == 7 { snprintf(out,64,"\xd7\x90\xd6\xb4\xd7\x99\xd7\x87\xd7\x99\xd7\xa8"); return }
+    if month == 8 { snprintf(out,64,"\xd7\xa1\xd6\xb4\xd7\x99\xd7\x95\xd7\x87\xd7\x9f"); return }
+    if month == 9 { snprintf(out,64,"\xd7\xaa\xd6\xbc\xd7\x87\xd7\x9e\xd7\x95\xd6\xbc\xd7\x96"); return }
+    if month == 10 { snprintf(out,64,"\xd7\x90\xd6\xb8\xd7\x91"); return }
+    if month == 11 { snprintf(out,64,"\xd7\x90\xd6\xb1\xd7\x9c\xd7\x95\xd6\xbc\xd7\x9c"); return }
+    if month == 12 { snprintf(out,64,"\xd7\x90\xd6\xb7\xd7\x93\xd7\x87\xd7\xa8\x20\xd7\x90\xd7\xb3"); return }
+    if month == 13 { snprintf(out,64,"\xd7\x90\xd6\xb7\xd7\x93\xd7\x87\xd7\xa8\x20\xd7\x91\xd7\xb3"); return }
+    out[0] = 0
+}
+
+HdateAppendDigit :: (out: char *, n: int *, cp: int) {
+    w: [8] char = ""
+    wl: int = Utf8Encode(cp,w)
+    memcpy(out + *n,w,wl)
+    *n += wl
+}
+
+HdateIntToHebrew :: (num: int, out: char *) {
+    digs0: [10] int = {0}
+    digs1: [10] int = {0}
+    digs2: [5] int = {0}
+    buf: [128] char = ""
+    bn: int = 0
+    n: int = num
+    chars: int = 0
+    i: int = 0
+    laststart: int = 0
+    digs0[0] = 32
+    digs0[1] = 0x5d0
+    digs0[2] = 0x5d1
+    digs0[3] = 0x5d2
+    digs0[4] = 0x5d3
+    digs0[5] = 0x5d4
+    digs0[6] = 0x5d5
+    digs0[7] = 0x5d6
+    digs0[8] = 0x5d7
+    digs0[9] = 0x5d8
+    digs1[0] = 0x5d8
+    digs1[1] = 0x5d9
+    digs1[2] = 0x5db
+    digs1[3] = 0x5dc
+    digs1[4] = 0x5de
+    digs1[5] = 0x5e0
+    digs1[6] = 0x5e1
+    digs1[7] = 0x5e2
+    digs1[8] = 0x5e4
+    digs1[9] = 0x5e6
+    digs2[0] = 32
+    digs2[1] = 0x5e7
+    digs2[2] = 0x5e8
+    digs2[3] = 0x5e9
+    digs2[4] = 0x5ea
+    out[0] = 0
+    if n < 1 || n > 9999 { return }
+    if n >= 1000 {
+        HdateAppendDigit(buf,&bn,digs0[n / 1000])
+        n = n % 1000
+    }
+    while n >= 400 {
+        HdateAppendDigit(buf,&bn,digs2[4])
+        n -= 400
+    }
+    if n >= 100 {
+        HdateAppendDigit(buf,&bn,digs2[n / 100])
+        n = n % 100
+    }
+    if n >= 10 {
+        if n == 15 || n == 16 { n -= 9 }
+        HdateAppendDigit(buf,&bn,digs1[n / 10])
+        n = n % 10
+    }
+    if n > 0 {
+        HdateAppendDigit(buf,&bn,digs0[n])
+    }
+    buf[bn] = 0
+    chars = 0
+    i = 0
+    while buf[i] != 0 {
+        if (buf[i] & 192) != 128 { chars += 1 }
+        i += 1
+    }
+    if chars < 2 {
+        memcpy(out,buf,bn)
+        out[bn] = 0
+        HdateAppendDigit(out,&bn,0x5f3)
+        out[bn] = 0
+        return
+    }
+    laststart = bn
+    i = bn - 1
+    while i >= 0 {
+        if (buf[i] & 192) != 128 {
+            laststart = i
+            break
+        }
+        i -= 1
+    }
+    i = 0
+    while i < laststart {
+        out[i] = buf[i]
+        i += 1
+    }
+    w2n: int = i
+    HdateAppendDigit(out,&w2n,0x5f4)
+    i = laststart
+    while buf[i] != 0 {
+        out[w2n] = buf[i]
+        w2n += 1
+        i += 1
+    }
+    out[w2n] = 0
+}
+
+HdateBuildHeb :: (hyear: int, hmonth: int, hday: int, out: char *) {
+    daybuf: [128] char = ""
+    yearbuf: [128] char = ""
+    mname: [64] char = ""
+    HdateIntToHebrew(hday + 1,daybuf)
+    HdateMonthNameHeb(hmonth,mname)
+    HdateIntToHebrew(hyear,yearbuf)
+    snprintf(out,512,"%s בְּ%s %s",daybuf,mname,yearbuf)
+}
+
+FnHdateHeb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    jd: int = 0
+    hy: int = 0
+    hm: int = 0
+    hd: int = 0
+    out: [512] char = ""
+    if count < 3 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    if args[2].kind == VAL_ERROR { return ValError(args[2].err) }
+    y = (int)CoerceNumber(&args[0])
+    m = (int)CoerceNumber(&args[1])
+    d = (int)CoerceNumber(&args[2])
+    jd = HdateGdateToJd(d,m,y)
+    HdateJdToHdate(jd,&hd,&hm,&hy)
+    HdateBuildHeb(hy,hm,hd,out)
+    return ValString(wb_strdup(out))
+}
+
+FnDate2HdateHeb :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    serial: double = 0
+    y: int = 0
+    m: int = 0
+    d: int = 0
+    jd: int = 0
+    hy: int = 0
+    hm: int = 0
+    hd: int = 0
+    out: [512] char = ""
+    if count < 1 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    serial = CoerceNumber(&args[0])
+    if serial < 1 { return ValError(ERR_NUM) }
+    days2: int = (int)serial
+    if days2 < 61 { days2 += 1 }
+    CivilFromDays(days2 + SerialEpoch(),&y,&m,&d)
+    jd = HdateGdateToJd(d,m,y)
+    HdateJdToHdate(jd,&hd,&hm,&hy)
+    HdateBuildHeb(hy,hm,hd,out)
+    return ValString(wb_strdup(out))
+}
+
+# --- cell (gnumeric fn-info master) ---
+
+FnCell :: (st: EvalState *, args: Val *, count: int, marks: int *) -> Val {
+    info: [64] char = ""
+    letters: [8] char = ""
+    out: [128] char = ""
+    ref: SlotRef = {0}
+    if count < 2 { return ValError(ERR_VALUE) }
+    if args[0].kind == VAL_ERROR { return ValError(args[0].err) }
+    if args[1].kind == VAL_ERROR { return ValError(args[1].err) }
+    CoerceText(&args[0],info,sizeof(info))
+    ref = st->call_refs[1]
+    if ref.kind == 0 { return ValError(ERR_VALUE) }
+    if strcasecmp(info,"address") == 0 || strcasecmp(info,"coord") == 0 {
+        eval_col_name(ref.col,letters)
+        snprintf(out,sizeof(out),"$%s$%d",letters,ref.row + 1)
+        return ValString(wb_strdup(out))
+    }
+    if strcasecmp(info,"sheetname") == 0 {
+        snprintf(out,sizeof(out),"%s",st->sheet->name)
+        return ValString(wb_strdup(out))
+    }
+    if strcasecmp(info,"col") == 0 || strcasecmp(info,"column") == 0 {
+        return ValNumber(ref.col + 1)
+    }
+    if strcasecmp(info,"row") == 0 {
+        return ValNumber(ref.row + 1)
+    }
+    if strcasecmp(info,"color") == 0 { return ValNumber(0) }
+    if strcasecmp(info,"contents") == 0 || strcasecmp(info,"value") == 0 {
+        return ValCopy(&args[1])
+    }
+    if strcasecmp(info,"filename") == 0 {
+        return ValString(wb_strdup(""))
+    }
+    if strcasecmp(info,"format") == 0 {
+        return ValString(wb_strdup("G"))
+    }
+    if strcasecmp(info,"parentheses") == 0 { return ValNumber(0) }
+    if strcasecmp(info,"prefix") == 0 || strcasecmp(info,"prefixcharacter") == 0 {
+        if args[1].kind == VAL_STRING { return ValString(wb_strdup("'")) }
+        return ValString(wb_strdup(""))
+    }
+    if strcasecmp(info,"locked") == 0 || strcasecmp(info,"protect") == 0 {
+        return ValNumber(1)
+    }
+    if strcasecmp(info,"type") == 0 || strcasecmp(info,"datatype") == 0 || strcasecmp(info,"formulatype") == 0 {
+        if args[1].kind == VAL_EMPTY { return ValString(wb_strdup("b")) }
+        if args[1].kind == VAL_STRING { return ValString(wb_strdup("l")) }
+        return ValString(wb_strdup("v"))
+    }
+    if strcasecmp(info,"width") == 0 || strcasecmp(info,"columnwidth") == 0 {
+        return ValNumber(8)
+    }
+    return ValError(ERR_VALUE)
+}
+
 Random01 :: () -> double {
     RNG_NEXT = RNG_NEXT * 6364136223846793005 + 1442695040888963407
     v: unsigned long = (RNG_NEXT >> 11) & 0x1fffffffffffff
@@ -18890,8 +20681,10 @@ Pnorm2 :: (x1: double, x2: double) -> double {
     if x1 == 0 { return erf(x2 / 1.414213562373095048801688724209) / 2 }
     if x2 == 0 { return erf(x1 / -1.414213562373095048801688724209) / 2 }
     if x1 <= 0 && x2 >= 0 {
-        p1: double = Pnorm2(0,x1 < -x2 ? -x1 : x2)
-        p2: double = Pnorm2(x1 < -x2 ? -x1 : x2,x1 < -x2 ? -x1 : x2)
+        mn: double = 0 - x1 < x2 ? 0 - x1 : x2
+        mx: double = 0 - x1 < x2 ? x2 : 0 - x1
+        p1: double = Pnorm2(0,mn)
+        p2: double = Pnorm2(mn,mx)
         return 2 * p1 + p2
     }
 else if x1 < 0 {
@@ -20382,7 +22175,7 @@ WorkbookWriteGnumeric :: (wb: Workbook *, path: const char *) -> int {
     sheet_index: int = 0
     kry_xml_buf_raw(&buf,"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
     kry_xml_buf_raw(&buf,"<gnm:Workbook xmlns:gnm=\"http://www.gnumeric.org/v10.dtd\">\n")
-    kry_xml_buf_raw(&buf,"  <gnm:Version Epoch=\"1\" Major=\"12\" Minor=\"57\" Full=\"1.12.57\"/>\n")
+    kry_xml_buf_raw(&buf,"  <gnm:Version Epoch=\"1\" Major=\"12\" Minor=\"62\" Full=\"1.12.62\"/>\n")
     kry_xml_buf_raw(&buf,"  <gnm:SheetNameIndex>\n")
     sheet_index = 0
     while sheet_index < wb->sheet_count {
@@ -20589,9 +22382,9 @@ WorkbookExportCsv :: (wb: Workbook *, path: const char *) -> int {
     }
     r = min_row
     while r <= max_row {
-        c = min_col
+        c = 0
         while c <= max_col {
-            if c > min_col { kry_xml_buf_raw(&buf,",") }
+            if c > 0 { kry_xml_buf_raw(&buf,",") }
             cell: Cell * = CellAt(sheet,r,c)
             display: [WB_TEXT_MAX] char = ""
             v: Val = {0}

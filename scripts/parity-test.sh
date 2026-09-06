@@ -11,9 +11,18 @@ cell_bin=${CELL_BIN:-$root/cell}
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT INT TERM
 
-if ! command -v ssconvert >/dev/null 2>&1; then
-    echo "parity: ssconvert not found; install gnumeric to run 1:1 tests" >&2
-    exit 1
+# Reference ssconvert. Prefer an explicit override, then a locally built
+# gnumeric master (has the newest catalog functions), then the system one.
+ssconvert_ref=${GNUMERIC_SSCONVERT:-}
+if [ -z "$ssconvert_ref" ] && [ -x "$HOME/Tools/gnumeric-1.12.62/bin/ssconvert-master" ]; then
+    ssconvert_ref="$HOME/Tools/gnumeric-1.12.62/bin/ssconvert-master"
+fi
+if [ -z "$ssconvert_ref" ]; then
+    if ! command -v ssconvert >/dev/null 2>&1; then
+        echo "parity: ssconvert not found; install gnumeric to run 1:1 tests" >&2
+        exit 1
+    fi
+    ssconvert_ref=ssconvert
 fi
 if [ ! -x "$cell_bin" ]; then
     echo "parity: cell binary not found at $cell_bin (run make cell)" >&2
@@ -45,7 +54,7 @@ EOF
 
 for fixture in "$root"/tests/fixtures/*.gnumeric; do
     name=$(basename "$fixture" .gnumeric)
-    LC_ALL=C ssconvert "$fixture" "$work/$name.gnm.csv" >/dev/null 2>&1
+    LC_ALL=C "$ssconvert_ref" "$fixture" "$work/$name.gnm.csv" >/dev/null 2>&1
     "$cell_bin" eval "$fixture" -o "$work/$name.cell.csv" >/dev/null 2>&1
     norm_csv "$work/$name.gnm.csv" "$work/$name.gnm.norm"
     norm_csv "$work/$name.cell.csv" "$work/$name.cell.norm"
@@ -66,7 +75,7 @@ for fixture in "$root"/tests/fixtures/*.gnumeric; do
     name=$(basename "$fixture" .gnumeric)
     "$cell_bin" eval "$fixture" -o "$work/$name.cells.csv" >/dev/null 2>&1
     "$cell_bin" copy "$fixture" "$work/$name.ours.gnumeric" >/dev/null 2>&1
-    LC_ALL=C ssconvert "$work/$name.ours.gnumeric" "$work/$name.back.csv" >/dev/null 2>&1
+    LC_ALL=C "$ssconvert_ref" "$work/$name.ours.gnumeric" "$work/$name.back.csv" >/dev/null 2>&1
     norm_csv "$work/$name.cells.csv" "$work/$name.cells.norm"
     norm_csv "$work/$name.back.csv" "$work/$name.back.norm"
     if ! diff -u "$work/$name.cells.norm" "$work/$name.back.norm" > "$work/$name.rt.diff" 2>&1; then
