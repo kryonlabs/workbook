@@ -98,7 +98,6 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
         HandleGridKeys(key, typed[:], typed_length)
     }
     DrawGrid(session, viewport)
-    DrawStatus(session, viewport)
     return 0
 }
 
@@ -256,6 +255,16 @@ LegacyCell :: (text: string, value: s32, is_expression: bool, cell: []u8) {
     }
 }
 
+// The id column holds a ticker: the file names a coin by its market id, so
+// that becomes the coin's ticker, as EUR and PYG already are.
+LegacyTicker :: (cell: []u8) {
+    id: string = TextUntilNul(cell)
+    if id == "monero" { SetText(cell, "XMR") }
+    if id == "bitcoin" { SetText(cell, "BTC") }
+    if id == "ethereum" { SetText(cell, "ETH") }
+    if id == "litecoin" { SetText(cell, "LTC") }
+}
+
 // Imports a legacy workbook.json: the rows, then the pending and final total
 // rows. The file is only read.
 LoadLegacyJson :: (path: *u8) -> bool {
@@ -281,6 +290,7 @@ LoadLegacyJson :: (path: *u8) -> bool {
             } else {
                 LegacyCell(text, Json.FieldAt(text, item, LegacyColumn(column)), false, cell[:])
             }
+            if column == 2 { LegacyTicker(cell[:]) }
             if cell[0] != 0 {
                 Engine.WorkbookSetCell(workbook, 0, row, column, cast(*s8)*cell[0])
             }
@@ -463,40 +473,26 @@ AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
 // --------------------------------------------------------------------- view
 
 DrawToolbar :: (session: Session, viewport: Rectangle) {
-    title: TextProps
-    title.key = cast(u64)1
-    title.text = "Workbook"
-    title.font = Text24
-    title.bounds = Rectangle.{Margin, 16.0, 120.0, 30.0}
-    Text(session, title)
-    if dirty {
-        marker: TextProps
-        marker.key = cast(u64)2
-        marker.text = "unsaved"
-        marker.font = Text14
-        marker.disabled = true
-        marker.bounds = Rectangle.{150.0, 23.0, 80.0, 20.0}
-        Text(session, marker)
-    }
-    x: float32 = 250.0
-    if ToolbarButton(session, 1001, "Save", 64.0, *x, true) { SaveWorkbook() }
-    if ToolbarButton(session, 1002, "Insert row", 96.0, *x, false) {
+    x: float32 = Margin
+    if ToolbarButton(session, 1001, "Save", 64.0, *x, dirty) { SaveWorkbook() }
+    if ToolbarButton(session, 1002, "+ Row", 64.0, *x, false) {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
         Changed("Row inserted")
     }
-    if ToolbarButton(session, 1003, "Delete row", 96.0, *x, false) {
+    if ToolbarButton(session, 1003, "- Row", 64.0, *x, false) {
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
         Changed("Row deleted")
     }
-    if ToolbarButton(session, 1004, "Insert column", 116.0, *x, false) {
+    if ToolbarButton(session, 1004, "+ Col", 64.0, *x, false) {
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
         Changed("Column inserted")
     }
-    if ToolbarButton(session, 1005, "Delete column", 116.0, *x, false) {
+    if ToolbarButton(session, 1005, "- Col", 64.0, *x, false) {
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed("Column deleted")
     }
 }
+
 
 ToolbarButton :: (session: Session, id: s32, label: string, width: float32,
     x: *float32, primary: bool) -> bool {
@@ -687,6 +683,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
             display: [256]u8
             Engine.WorkbookCellDisplay(workbook, sheet_index, row, column,
                 cast(*s8)*display[0], 256)
+            Engine.RoundForDisplay(cast(*s8)*display[0], 256)
             fill: u32 = CellBackground
             if row == selected_row && column == selected_column { fill = SelectedBackground }
             GridSquare(session, 1000 + row * 64 + column,
@@ -749,26 +746,6 @@ GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: u32, text: s
     Text(session, label)
 }
 
-DrawStatus :: (session: Session, viewport: Rectangle) {
-    left: TextProps
-    left.key = cast(u64)5
-    left.text = TextUntilNul(status[:])
-    left.font = Text14
-    left.wrap = cast(TextWrap)TextWrapNone
-    left.disabled = true
-    left.bounds = Rectangle.{Margin, viewport.height - 36.0,
-        viewport.width / 2.0 - Margin, 20.0}
-    Text(session, left)
-    hint: TextProps
-    hint.key = cast(u64)6
-    hint.text = "Enter edits · Ctrl+S saves · formulas start with ="
-    hint.font = Text14
-    hint.wrap = cast(TextWrap)TextWrapNone
-    hint.disabled = true
-    hint.bounds = Rectangle.{viewport.width / 2.0, viewport.height - 36.0,
-        viewport.width / 2.0 - Margin, 20.0}
-    Text(session, hint)
-}
 
 // ----------------------------------------------------------------- text
 
