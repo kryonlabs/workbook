@@ -1,0 +1,195 @@
+// 1:1 parity test: evaluate every fixture with Gnumeric (ssconvert) and with
+// the workbook engine (the cell command) and compare every output cell.
+// Ground truth is Gnumeric itself. Run it from the repository root.
+//
+// The reference is $GNUMERIC_SSCONVERT, else a local Gnumeric master build at
+// ~/Tools/gnumeric-1.12.62 (it has the newest catalog functions), else the
+// ssconvert on the path. The cell command is $CELL_BIN, else build/cell.
+#load "test_support.zi";
+#load "csv_table.zi";
+
+fixtures: DirectoryEntries;
+reference_buffer: [4096]u8;
+cell_buffer: [4096]u8;
+output_buffer: [262144]u8;
+work_buffer: [4096]u8;
+
+FixtureSuffix :: ".gnumeric";
+
+// The ssconvert to compare against; "" when none can be run.
+ChooseReference :: () -> string {
+    chosen: string = Environment("GNUMERIC_SSCONVERT")
+    if chosen.count > 0 {
+        SetText(reference_buffer[:], chosen)
+        return TextUntilNul(reference_buffer[:])
+    }
+    home: string = Environment("HOME")
+    if home.count > 0 {
+        SetText(reference_buffer[:], home)
+        AppendText(reference_buffer[:], "/Tools/gnumeric-1.12.62/bin/ssconvert-master")
+        if IsExecutable(TextUntilNul(reference_buffer[:])) {
+            return TextUntilNul(reference_buffer[:])
+        }
+    }
+    if !OnPath("ssconvert") { return "" }
+    SetText(reference_buffer[:], "ssconvert")
+    return TextUntilNul(reference_buffer[:])
+}
+
+// Builds work/name+suffix into a caller-owned buffer.
+WorkPath :: (buffer: []u8, work: string, name: string, suffix: string) -> string {
+    SetText(buffer, work)
+    AppendText(buffer, "/")
+    AppendText(buffer, name)
+    AppendText(buffer, suffix)
+    return TextUntilNul(buffer)
+}
+
+// Reads a CSV file into a table; false when it is missing or too large.
+LoadCsv :: (which: s32, path: string) -> bool {
+    length: s32 = ReadWholeFile(path, output_buffer[:])
+    if length < 0 || length >= cast(s32)output_buffer.count { return false }
+    return ParseCsv(which, TextView(output_buffer[0:length]))
+}
+
+// Compares the reference's output for a workbook file with another CSV and
+// reports the result under the given label. Returns whether they match.
+Compare :: (label: string, expected_path: string, actual_path: string) -> bool {
+    if !LoadCsv(0, expected_path) || !LoadCsv(1, actual_path) {
+        SayWith("FAIL ", label)
+        Say("  cannot read or parse the CSV output")
+        return false
+    }
+    heading: [1024]u8
+    SetText(heading[:], "FAIL ")
+    AppendText(heading[:], label)
+    if CompareCsv(0, "gnumeric", "cell", TextUntilNul(heading[:])) {
+        SayWith("ok   ", label)
+        return true
+    }
+    return false
+}
+
+#program_export
+main :: () -> s32 {
+    reference: string = ChooseReference()
+    if reference.count == 0 {
+        WriteText(2, "parity: ssconvert not found; install gnumeric to run 1:1 tests\n")
+        return 1
+    }
+    cell: string = Environment("CELL_BIN")
+    if cell.count > 0 {
+        SetText(cell_buffer[:], cell)
+    } else {
+        SetText(cell_buffer[:], "build/cell")
+    }
+    cell = TextUntilNul(cell_buffer[:])
+    if !IsExecutable(cell) {
+        WriteText(2, "parity: cell binary not found at ")
+        WriteText(2, cell)
+        WriteText(2, " (run make cell)\n")
+        return 1
+    }
+    // Gnumeric formats numbers by locale; the reference runs in the C locale.
+    SetEnvironment("LC_ALL", "C")
+
+    if !ListDirectory("tests/fixtures", *fixtures) {
+        WriteText(2, "parity: cannot read tests/fixtures\n")
+        return 1
+    }
+    template: [4096]u8
+    parent: string = Environment("TMPDIR")
+    if parent.count == 0 { parent = "/tmp" }
+    SetText(template[:], parent)
+    AppendText(template[:], "/workbook-parity-XXXXXX")
+    work: string = MakeTemporaryDirectory(template[:])
+    if work.count == 0 {
+        WriteText(2, "parity: cannot create a temporary directory\n")
+        return 1
+    }
+    SetText(work_buffer[:], work)
+    work = TextUntilNul(work_buffer[:])
+
+    failures: s32 = 0
+    checked: s32 = 0
+    path: [4096]u8
+    expected_path: [4096]u8
+    actual_path: [4096]u8
+
+    // Every fixture, evaluated by both engines.
+    index: s32 = 0
+    while index < fixtures.count {
+        file: string = TextUntilNul(fixtures.names[index].bytes[:])
+        index += 1
+        if !EndsWith(file, FixtureSuffix) { continue }
+        name: string = file[0:cast(s32)file.count - cast(s32)FixtureSuffix.count]
+        SetText(path[:], "tests/fixtures/")
+        AppendText(path[:], file)
+        fixture: string = TextUntilNul(path[:])
+        reference_csv: string = WorkPath(expected_path[:], work, name, ".gnm.csv")
+        cell_csv: string = WorkPath(actual_path[:], work, name, ".cell.csv")
+        convert: [3]string = .{reference, fixture, reference_csv}
+        evaluate: [5]string = .{cell, "eval", fixture, "-o", cell_csv}
+        first: s32 = RunQuiet(convert[:])
+        second: s32 = RunQuiet(evaluate[:])
+        if first != 0 || second != 0 {
+            SayWith("FAIL ", name)
+            if first != 0 { Say("  the reference could not convert the fixture") }
+            if second != 0 { Say("  the cell command could not evaluate the fixture") }
+            failures += 1
+        } else if Compare(name, reference_csv, cell_csv) {
+            checked += 1
+        } else {
+            failures += 1
+        }
+    }
+
+    // Round trip: a .gnumeric written by our engine must be readable by
+    // Gnumeric with the same evaluated values.
+    index = 0
+    while index < fixtures.count {
+        file: string = TextUntilNul(fixtures.names[index].bytes[:])
+        index += 1
+        if !EndsWith(file, FixtureSuffix) || EndsWith(file, "_gzip.gnumeric") { continue }
+        name: string = file[0:cast(s32)file.count - cast(s32)FixtureSuffix.count]
+        SetText(path[:], "tests/fixtures/")
+        AppendText(path[:], file)
+        fixture: string = TextUntilNul(path[:])
+        cells_csv: string = WorkPath(expected_path[:], work, name, ".cells.csv")
+        ours: [4096]u8
+        back: [4096]u8
+        ours_path: string = WorkPath(ours[:], work, name, ".ours.gnumeric")
+        back_csv: string = WorkPath(back[:], work, name, ".back.csv")
+        label: [1024]u8
+        SetText(label[:], name)
+        AppendText(label[:], " (round-trip)")
+        evaluate: [5]string = .{cell, "eval", fixture, "-o", cells_csv}
+        copy: [4]string = .{cell, "copy", fixture, ours_path}
+        convert: [3]string = .{reference, ours_path, back_csv}
+        evaluated: s32 = RunQuiet(evaluate[:])
+        written: s32 = RunQuiet(copy[:])
+        converted: s32 = RunQuiet(convert[:])
+        if evaluated != 0 || written != 0 || converted != 0 {
+            SayWith("FAIL ", TextUntilNul(label[:]))
+            failures += 1
+        } else if !Compare(TextUntilNul(label[:]), cells_csv, back_csv) {
+            failures += 1
+        }
+    }
+
+    RemoveTree(work)
+    if failures != 0 {
+        line: [256]u8
+        SetText(line[:], "parity: ")
+        AppendNumber(line[:], failures)
+        AppendText(line[:], " failing case(s)")
+        Say(TextUntilNul(line[:]))
+        return 1
+    }
+    line: [256]u8
+    SetText(line[:], "parity: ")
+    AppendNumber(line[:], checked)
+    AppendText(line[:], " fixture(s) 1:1 with gnumeric")
+    Say(TextUntilNul(line[:]))
+    return 0
+}

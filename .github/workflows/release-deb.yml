@@ -23,13 +23,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential pkg-config xvfb xdotool python3 dpkg-dev \
+            build-essential pkg-config xvfb xdotool dpkg-dev \
             libsdl2-dev libcairo2-dev
 
       - name: Install the locked Ziran toolchain
         run: |
           set -eu
-          commit=$(python3 -c 'import json; print(json.load(open("ziran.lock"))["toolchain"]["commit"])')
+          commit=$(awk '/"toolchain"/ { found = 1 } found && /"commit"/ { gsub(/[",]/, "", $2); print $2; exit }' ziran.lock)
           git clone https://github.com/ziranlang/ziran.git "$RUNNER_TEMP/ziran"
           git -C "$RUNNER_TEMP/ziran" checkout "$commit"
           make -C "$RUNNER_TEMP/ziran" -j"$(nproc)" install-user

@@ -18,6 +18,9 @@ libc :: #system_library "libc";
 EnvironmentValue :: (name: *u8) -> *u8 #foreign libc "getenv";
 PathAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
 MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
+OpenFile :: (path: *u8, flags: s32, mode: ..any) -> s32 #foreign libc "open";
+ReadFileBytes :: (descriptor: s32, output: *u8, count: u64) -> s64 #foreign libc "read";
+CloseFile :: (descriptor: s32) -> s32 #foreign libc "close";
 FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
 
 MaxRows :: 200;
@@ -108,7 +111,7 @@ LoadWorkbook :: () {
     application: string = "workbook"
     override: *u8 = EnvironmentValue(CPath("WORKBOOK_DIR"))
     profile: *u8 = EnvironmentValue(CPath("WORKBOOK_PROFILE"))
-    if profile != null && TextFromCString(profile) == "geld" {
+    if (profile != null && TextFromCString(profile) == "geld") || StartedAs("geld") {
         application = "geld"
         override = EnvironmentValue(CPath("GELD_DIR"))
     }
@@ -804,6 +807,22 @@ HexValue :: (text: string, at: s32) -> s32 {
         index += 1
     }
     return value
+}
+
+// Whether the program was started under the given name. `geld` is a link to
+// workbook, and it opens the geld profile because of the name it was run as.
+StartedAs :: (name: string) -> bool {
+    command: [4096]u8
+    descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
+    if descriptor < 0 { return false }
+    length: s64 = ReadFileBytes(descriptor, *command[0], 4095)
+    CloseFile(descriptor)
+    if length <= 0 { return false }
+    // The command line is NUL-separated words; the first one is how the
+    // program was started.
+    end: s32 = 0
+    while end < cast(s32)length && command[end] != 0 { end += 1 }
+    return FileName(TextView(command[0:end])) == name
 }
 
 // The part of a path after its last slash.

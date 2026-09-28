@@ -1,0 +1,116 @@
+// Workbook is authored in Ziran: no Kry source, no code in another language
+// (C, Go, Python, shell, JavaScript), no vendored runtime, and no SSH package
+// URL may come back. Run it from the repository root.
+#load "test_support.zi";
+
+RequiredFiles :: 8;
+
+RequiredFile :: (index: s32) -> string {
+    if index == 0 { return "ziran.toml" }
+    if index == 1 { return "ziran.lock" }
+    if index == 2 { return "src/app.zi" }
+    if index == 3 { return "src/engine.zi" }
+    if index == 4 { return "src/cell.zi" }
+    if index == 5 { return "workbook.example.json" }
+    if index == 6 { return "profiles/geld.json" }
+    return "tests/test_support.zi"
+}
+
+// A file that names a retired format or code in another language.
+ForbiddenFile :: (name: string) -> bool {
+    return EndsWith(name, ".kry") || EndsWith(name, ".krb") || EndsWith(name, ".kir") ||
+        EndsWith(name, ".c") || EndsWith(name, ".h") || EndsWith(name, ".go") ||
+        EndsWith(name, ".py") || EndsWith(name, ".sh") || EndsWith(name, ".bash") ||
+        EndsWith(name, ".js") || EndsWith(name, ".mjs") || EndsWith(name, ".ts")
+}
+
+// Reports every forbidden file under path and returns how many it found.
+// Build outputs and the git directory at the top of the tree are skipped.
+Walk :: (path: string, top: bool) -> s32 {
+    entries: DirectoryEntries
+    found: s32 = 0
+    if !ListDirectory(path, *entries) { return 0 }
+    index: s32 = 0
+    while index < entries.count {
+        name: string = TextUntilNul(entries.names[index].bytes[:])
+        skip: bool = top && (name == ".git" || name == "build" || name == "dist")
+        if !skip {
+            child: [4096]u8
+            SetText(child[:], path)
+            AppendText(child[:], "/")
+            AppendText(child[:], name)
+            if entries.is_directory[index] {
+                found += Walk(TextUntilNul(child[:]), false)
+            } else if ForbiddenFile(name) {
+                WriteText(2, "forbidden file: ")
+                WriteText(2, TextUntilNul(child[:]))
+                WriteText(2, "\n")
+                found += 1
+            }
+        }
+        index += 1
+    }
+    return found
+}
+
+// Every `git = "..."` line in ziran.toml must be a public HTTPS URL.
+CheckPackageUrls :: () -> s32 {
+    contents: [16384]u8
+    length: s32 = ReadWholeFile("ziran.toml", contents[:])
+    Check(length > 0, "cannot read ziran.toml")
+    text: string = TextView(contents[0:length])
+    bad: s32 = 0
+    at: s32 = 0
+    while at < length {
+        end: s32 = at
+        while end < length && text[end] != 10 { end += 1 }
+        line: string = text[at:end]
+        start: s32 = 0
+        while start < cast(s32)line.count && (line[start] == 32 || line[start] == 9) {
+            start += 1
+        }
+        rest: string = line[start:cast(s32)line.count]
+        if StartsWith(rest, "git") {
+            equals: s32 = 0
+            while equals < cast(s32)rest.count && rest[equals] != 61 { equals += 1 }
+            value: s32 = equals + 1
+            while value < cast(s32)rest.count && rest[value] == 32 { value += 1 }
+            if equals < cast(s32)rest.count &&
+               !StartsWith(rest[value:cast(s32)rest.count], "\"https://") {
+                WriteText(2, "package URL must be public HTTPS: ")
+                WriteText(2, line)
+                WriteText(2, "\n")
+                bad += 1
+            }
+        }
+        at = end + 1
+    }
+    return bad
+}
+
+#program_export
+main :: () -> s32 {
+    failures: s32 = 0
+    failures += Walk(".", true)
+    if failures > 0 {
+        WriteText(2, "code in another language or legacy Kry source remains; Workbook is Ziran (.zi)\n")
+    }
+    if PathExists(".gitmodules") || PathExists("vendor") {
+        WriteText(2, "dependencies are Ziran packages in ziran.toml, not submodules or vendor/\n")
+        failures += 1
+    }
+    index: s32 = 0
+    while index < RequiredFiles {
+        if !PathExists(RequiredFile(index)) {
+            WriteText(2, "missing ")
+            WriteText(2, RequiredFile(index))
+            WriteText(2, "\n")
+            failures += 1
+        }
+        index += 1
+    }
+    failures += CheckPackageUrls()
+    if failures > 0 { return 1 }
+    Say("{\"workbook_source_audit\":\"ok\"}")
+    return 0
+}

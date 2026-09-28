@@ -2,16 +2,17 @@
 
 Native spreadsheet editor written in [Ziran](https://github.com/ziranlang/ziran)
 with [Kryon](https://github.com/kryonlabs/kryon), compatible with Gnumeric file
-formats and expressions. `src/app.zi` is the desktop application and
+formats and expressions. Everything in the repository is Ziran (`.zi`) apart
+from the Makefile and configuration. `src/app.zi` is the desktop application and
 `src/engine.zi` is the spreadsheet engine (grid model, formula evaluator,
 function library, .gnumeric/CSV I/O). `src/cell.zi` is the headless driver
-built on the same engine.
+built on the same engine, and `tests/*.zi` are the test programs.
 
 The engine reads and writes `.gnumeric` (Gnumeric XML, gzipped or plain),
 evaluates the Gnumeric expression language (references, ranges, sheets,
 operators, 120+ functions with Gnumeric semantics including errors and
 date serials), and is verified 1:1 against the installed Gnumeric by
-`scripts/parity-test.sh` — every fixture is evaluated by both engines and
+`tests/parity_test.zi` — every fixture is evaluated by both engines and
 compared cell by cell, including round-trips through our own
 `.gnumeric` writer. Format notes: `docs/GNUMERIC_PARITY.md`.
 
@@ -30,7 +31,7 @@ development packages installed.
 
     make              # build ./build/workbook-desktop and ./build/cell
     make cell         # build only the headless engine driver
-    make check        # type-check the application and the driver
+    make check        # type-check the application, the driver, and the tests
     make run          # open the editor
     make test         # source audit, desktop test on a private display, gnumeric parity
     make test-ci      # the same without parity, which is what CI runs
@@ -39,7 +40,7 @@ development packages installed.
     make deb          # build a Debian package
 
     cell eval FILE    # evaluate a .gnumeric/.csv file and print CSV
-    geld              # installed finance profile wrapper
+    geld              # the finance profile: a link to workbook
 
 Update the pinned dependencies with `ziran update Kryon` or `ziran update ziran`
 and commit the new `ziran.lock`. To build against sibling checkouts while
@@ -50,8 +51,9 @@ developing Kryon or Ziran, put their paths in an ignored `ziran.local.toml`:
     ziran = "../ziran"
 
 `make test` needs `xvfb-run`, `xdotool`, and `gnumeric` (for `ssconvert`). The
-desktop test runs the editor only on a private Xvfb display; it never opens a
-window on your desktop. Parity compares against the `ssconvert` on your path, or
+desktop test (`tests/desktop_test.zi`) runs the editor only on a private Xvfb
+display; it never opens a window on your desktop. Parity compares against the
+`ssconvert` on your path, or
 against `GNUMERIC_SSCONVERT`, or a local master build at
 `~/Tools/gnumeric-1.12.62`; the newest catalog functions exist only in a
 Gnumeric master build, so an older distribution Gnumeric reports those fixtures
@@ -76,8 +78,10 @@ formulas in the Gnumeric expression language.
 
 ## profiles
 
-`workbook` is the generic profile. `geld` uses an independent data directory
-for finance rows. Both run the same application:
+`workbook` is the generic profile. `geld` is a link to the same program; it
+opens the finance profile, with an independent data directory, because of the
+name it is started under (`WORKBOOK_PROFILE=geld workbook` does the same). Both
+run the same application:
 
     D = units
     E = rate
