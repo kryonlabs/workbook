@@ -143,10 +143,24 @@ LoadWorkbook :: () {
     }
     path: string = TextUntilNul(data_path[:])
     loaded: bool = false
-    if PathAccess(*data_path[0], 0) == 0 {
+    imported: bool = false
+    legacy: [4096]u8
+    if PathAccess(*data_path[0], 0) != 0 && EndsWith(path, "/workbook.gnumeric") {
+        // No workbook yet: import the older workbook.json beside it. It is
+        // only read; the first save writes workbook.gnumeric.
+        SetText(legacy[:], path[0:cast(s32)path.count - 8])
+        AppendText(legacy[:], "json")
+        if PathAccess(*legacy[0], 0) == 0 {
+            Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+            loaded = LoadLegacyJson(*legacy[0])
+            imported = loaded
+        }
+    }
+    if imported {
+    } else if PathAccess(*data_path[0], 0) == 0 {
         if EndsWith(path, ".json") {
             Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
-            loaded = LoadLegacyJson()
+            loaded = LoadLegacyJson(*data_path[0])
         } else {
             loaded = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) != 0
         }
@@ -154,6 +168,12 @@ LoadWorkbook :: () {
     // A file supplies its own sheets; a new workbook starts with one.
     if Engine.WorkbookSheetCount(workbook) == 0 {
         Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+    }
+    if imported {
+        SetText(status[:], "Imported ")
+        AppendText(status[:], "workbook.json")
+        dirty = false
+        return
     }
     if loaded {
         SetText(status[:], "Loaded ")
@@ -196,12 +216,55 @@ LegacyColumn :: (column: s32) -> string {
     return "dusd"
 }
 
-LoadLegacyJson :: () -> bool {
+// The expression field that carries a column's formula, when it has one. The
+// text has no leading "=".
+LegacyExpression :: (column: s32) -> string {
+    if column == 3 { return "units_expr" }
+    if column == 6 { return "usd_expr" }
+    if column == 7 { return "dusd_expr" }
+    return ""
+}
+
+// Reads one legacy value into cell text: a string, a number, or a formula
+// (an expression field, or an object with an "expr" field).
+LegacyCell :: (text: string, value: s32, is_expression: bool, cell: []u8) {
+    scratch: [256]u8
+    at: s32 = value
+    formula: bool = is_expression
+    scratch[0] = 0
+    cell[0] = 0
+    if at >= 0 && text[at] == 123 {
+        at = Json.FieldAt(text, at, "expr")
+        formula = true
+    }
+    if at < 0 { return }
+    if text[at] == 34 {
+        span: Json.JsonSpan = Json.ReadString(text, at)
+        if span.valid { DecodeJsonString(text, span, scratch[:]) }
+    } else {
+        number: Json.JsonNumber = Json.ReadNumber(text, at)
+        if number.valid {
+            FormatBytes(*scratch[0], 256, cast(*u8)Engine.CText("%.15g"), number.value)
+        }
+    }
+    if scratch[0] == 0 { return }
+    if formula && scratch[0] != 61 {
+        SetText(cell, "=")
+        AppendText(cell, TextUntilNul(scratch[:]))
+    } else {
+        SetText(cell, TextUntilNul(scratch[:]))
+    }
+}
+
+// Imports a legacy workbook.json: the rows, then the pending and final total
+// rows. The file is only read.
+LoadLegacyJson :: (path: *u8) -> bool {
     size: s32 = 0
-    bytes: *u8 = Engine.ReadFileBytes(cast(*s8)*data_path[0], *size)
+    bytes: *u8 = Engine.ReadFileBytes(cast(*s8)path, *size)
     if bytes == null { return false }
     text: string = TextFromBytes(BytesFromPointer(bytes, cast(u64)size))
-    rows: s32 = Json.FieldAt(text, Json.Space(text, 0), "rows")
+    top: s32 = Json.Space(text, 0)
+    rows: s32 = Json.FieldAt(text, top, "rows")
     count: s32 = 0
     if rows >= 0 { count = Json.ArrayCount(text, rows) }
     row: s32 = 0
@@ -209,16 +272,14 @@ LoadLegacyJson :: () -> bool {
         item: s32 = Json.ElementAt(text, rows, row)
         column: s32 = 0
         while item >= 0 && column < 8 {
-            value: s32 = Json.FieldAt(text, item, LegacyColumn(column))
             cell: [256]u8
-            if value >= 0 && text[value] == 34 {
-                span: Json.JsonSpan = Json.ReadString(text, value)
-                if span.valid { DecodeJsonString(text, span, cell[:]) }
-            } else if value >= 0 {
-                number: Json.JsonNumber = Json.ReadNumber(text, value)
-                if number.valid {
-                    FormatBytes(*cell[0], 256, cast(*u8)Engine.CText("%.15g"), number.value)
-                }
+            expression: string = LegacyExpression(column)
+            found: s32 = -1
+            if expression.count > 0 { found = Json.FieldAt(text, item, expression) }
+            if found >= 0 {
+                LegacyCell(text, found, true, cell[:])
+            } else {
+                LegacyCell(text, Json.FieldAt(text, item, LegacyColumn(column)), false, cell[:])
             }
             if cell[0] != 0 {
                 Engine.WorkbookSetCell(workbook, 0, row, column, cast(*s8)*cell[0])
@@ -226,6 +287,23 @@ LoadLegacyJson :: () -> bool {
             column += 1
         }
         row += 1
+    }
+    pass: s32 = 0
+    while pass < 2 {
+        totals: s32 = Json.FieldAt(text, top, ifx pass == 0 then "total_pending_cells" else "total_cells")
+        if totals >= 0 {
+            column: s32 = 0
+            while column < 8 {
+                cell: [256]u8
+                LegacyCell(text, Json.ElementAt(text, totals, column), false, cell[:])
+                if cell[0] != 0 {
+                    Engine.WorkbookSetCell(workbook, 0, row, column, cast(*s8)*cell[0])
+                }
+                column += 1
+            }
+            row += 1
+        }
+        pass += 1
     }
     Engine.FreeFileBytes(bytes)
     Engine.WorkbookEvaluate(workbook)
