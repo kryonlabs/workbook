@@ -1,0 +1,689 @@
+XmlNode :: struct {
+    name: *s8
+    attrs: **s8
+    attr_values: **s8
+    attr_count: s32
+    text: *s8
+    children: **XmlNode
+    count: s32
+}
+
+XmlBuffer :: struct {
+    buf: *s8
+    len: u64
+    cap: u64
+}
+
+Parser :: struct {
+    p: *s8
+    depth: s32
+    failed: s32
+}
+
+#scope_file
+
+node_new :: (name: *s8, name_len: u64) -> *XmlNode {
+    n: *XmlNode = cast(*XmlNode)MemoryAllocateZeroed(1, cast(u64)size_of(XmlNode))
+    if n == null {
+        return null
+    }
+    n.name = cast(*s8)MemoryAllocate(name_len + 1)
+    if n.name == null {
+        MemoryFree(cast(*void)n)
+        return null
+    }
+    MemoryCopy(cast(*void)n.name, cast(*void)name, name_len)
+    n.name[name_len] = 0
+    n.text = null
+    return n
+}
+
+#scope_export
+
+XmlFree :: (node: *XmlNode) {
+    i: s32
+    if node == null {
+        return
+    }
+    {
+        i = 0
+        while i < node.count {
+            XmlFree(node.children[i])
+            i += 1
+        }
+    }
+    {
+        i = 0
+        while i < node.attr_count {
+            MemoryFree(cast(*void)node.attrs[i])
+            MemoryFree(cast(*void)node.attr_values[i])
+            i += 1
+        }
+    }
+    MemoryFree(cast(*void)node.children)
+    MemoryFree(cast(*void)node.attrs)
+    MemoryFree(cast(*void)node.attr_values)
+    MemoryFree(cast(*void)node.text)
+    MemoryFree(cast(*void)node.name)
+    MemoryFree(cast(*void)node)
+}
+
+XmlName :: (node: *XmlNode) -> *s8 {
+    return ifx node != null then node.name else null
+}
+
+XmlNameLocal :: (node: *XmlNode) -> *s8 {
+    name: *s8 = XmlName(node)
+    colon: *s8
+    if name == null {
+        return null
+    }
+    colon = TextFindByte(name, 58)
+    return ifx colon != null then (*colon[1]) else name
+}
+
+XmlAttr :: (node: *XmlNode, name: *s8) -> *s8 {
+    i: s32
+    if node == null || name == null {
+        return null
+    }
+    {
+        i = 0
+        while i < node.attr_count {
+            if TextCompare(node.attrs[i], name) == 0 {
+                return node.attr_values[i]
+            }
+            i += 1
+        }
+    }
+    return null
+}
+
+XmlAttrLong :: (node: *XmlNode, name: *s8, fallback: s64) -> s64 {
+    v: *s8 = XmlAttr(node, name)
+    end: *s8
+    parsed: s64
+    if v == null || v.* == 0 {
+        return fallback
+    }
+    parsed = ParseLong(v, *end, 10)
+    if end == v {
+        return fallback
+    }
+    return parsed
+}
+
+XmlText :: (node: *XmlNode) -> *s8 {
+    return ifx node != null && node.text != null then node.text else CText("")
+}
+
+XmlChild :: (node: *XmlNode, index: s32) -> *XmlNode {
+    if node == null || index < 0 || index >= node.count {
+        return null
+    }
+    return node.children[index]
+}
+
+#scope_file
+
+local_part :: (name: *s8) -> *s8 {
+    colon: *s8 = TextFindByte(name, 58)
+    return ifx colon != null then (*colon[1]) else name
+}
+
+#scope_export
+
+XmlFindLocal :: (node: *XmlNode, local_name: *s8) -> *XmlNode {
+    i: s32
+    if node == null || local_name == null {
+        return null
+    }
+    {
+        i = 0
+        while i < node.count {
+            if TextCompare(local_part(node.children[i].name), local_name) == 0 {
+                return node.children[i]
+            }
+            i += 1
+        }
+    }
+    return null
+}
+
+#scope_file
+
+skip_ws :: (pp: **s8) {
+    while pp.*.* == 32 || pp.*.* == 9 || pp.*.* == 10 || pp.*.* == 13 {
+        pp.* = *pp.*[1]
+    }
+}
+
+is_name_char :: (c: s8) -> s32 {
+    return cast(s32)((c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c == 95 || c == 45 || c == 46 || c == 58 || cast(u8)c >= 0x80)
+}
+
+TextAcc :: struct {
+    buf: *s8
+    len: u64
+    cap: u64
+}
+
+acc_push :: (a: *TextAcc, c: s8) -> s32 {
+    if (a.len + 1) >= a.cap {
+        ncap: u64 = ifx a.cap != 0 then (a.cap * 2) else 32
+        nbuf: *s8 = cast(*s8)MemoryResize(cast(*void)a.buf, ncap)
+        if nbuf == null {
+            return 0
+        }
+        a.buf = nbuf
+        a.cap = ncap
+    }
+    a.buf[a.len] = c
+    a.len += 1
+    a.buf[a.len] = 0
+    return 1
+}
+
+acc_utf8 :: (a: *TextAcc, cp: u64) -> s32 {
+    if cp < 0x80 {
+        return acc_push(a, cast(s8)cp)
+    }
+    if cp < 0x800 {
+        return cast(s32)(acc_push(a, cast(s8)(0xC0 | (cp >> 6))) != 0 && acc_push(a, cast(s8)(0x80 | (cp & 0x3F))) != 0)
+    }
+    if cp < 0x10000 {
+        return cast(s32)(acc_push(a, cast(s8)(0xE0 | (cp >> 12))) != 0 && acc_push(a, cast(s8)(0x80 | ((cp >> 6) & 0x3F))) != 0 && acc_push(a, cast(s8)(0x80 | (cp & 0x3F))) != 0)
+    }
+    return cast(s32)(acc_push(a, cast(s8)(0xF0 | (cp >> 18))) != 0 && acc_push(a, cast(s8)(0x80 | ((cp >> 12) & 0x3F))) != 0 && acc_push(a, cast(s8)(0x80 | ((cp >> 6) & 0x3F))) != 0 && acc_push(a, cast(s8)(0x80 | (cp & 0x3F))) != 0)
+}
+
+hex_digit :: (c: s8) -> s32 {
+    if c >= 48 && c <= 57 {
+        return cast(s32)c - 48
+    }
+    if c >= 97 && c <= 102 {
+        return cast(s32)c - 97 + 10
+    }
+    if c >= 65 && c <= 70 {
+        return cast(s32)c - 65 + 10
+    }
+    return -1
+}
+
+decode_entity :: (a: *TextAcc, pp: **s8) -> s32 {
+    p: *s8 = *pp.*[1]
+    semi: *s8 = TextFindByte(p, 59)
+    cp: u64
+    h: s32
+    c: s8
+    if semi == null || cast(s64)(cast(u64)semi - cast(u64)p) > 10 {
+        return 0
+    }
+    if cast(s64)(cast(u64)semi - cast(u64)p) == 2 && p[0] == 108 && p[1] == 116 {
+        c = 60
+    } else if cast(s64)(cast(u64)semi - cast(u64)p) == 2 && p[0] == 103 && p[1] == 116 {
+        c = 62
+    } else if cast(s64)(cast(u64)semi - cast(u64)p) == 3 && p[0] == 97 && p[1] == 109 && p[2] == 112 {
+        c = 38
+    } else if cast(s64)(cast(u64)semi - cast(u64)p) == 4 && p[0] == 113 && p[1] == 117 && p[2] == 111 && p[3] == 116 {
+        c = 34
+    } else if cast(s64)(cast(u64)semi - cast(u64)p) == 4 && p[0] == 97 && p[1] == 112 && p[2] == 111 && p[3] == 115 {
+        c = 39
+    } else if p[0] == 35 {
+        d: *s8 = *p[1]
+        radix: s32 = 10
+        if d.* == 120 || d.* == 88 {
+            radix = 16
+            d = *d[1]
+        }
+        if d == semi {
+            return 0
+        }
+        cp = 0
+        while cast(u64)d < cast(u64)semi {
+            h = ifx radix == 16 then hex_digit(d.*) else (ifx d.* >= 48 && d.* <= 57 then (cast(s32)d.* - 48) else (-1))
+            if h < 0 {
+                return 0
+            }
+            cp = cp * cast(u64)radix + cast(u64)h
+            d = *d[1]
+        }
+        if !(acc_utf8(a, cp) != 0) {
+            return 0
+        }
+        pp.* = *semi[1]
+        return 1
+    } else {
+        return 0
+    }
+    if !(acc_push(a, c) != 0) {
+        return 0
+    }
+    pp.* = *semi[1]
+    return 1
+}
+
+read_text :: (ps: *Parser, a: *TextAcc) -> s32 {
+    p: *s8 = ps.p
+    while p.* != 0 && p.* != 60 {
+        if p.* == 38 {
+            if !(decode_entity(a, *p) != 0) {
+                bare: s8 = p.*
+                p = *p[1]
+                if !(acc_push(a, bare) != 0) {
+                    return 0
+                }
+                continue
+            }
+            continue
+        }
+        {
+            ch: s8 = p.*
+            p = *p[1]
+            if !(acc_push(a, ch) != 0) {
+                return 0
+            }
+        }
+    }
+    ps.p = p
+    return cast(s32)(p.* == 60)
+}
+
+skip_markup :: (ps: *Parser, a: *TextAcc) -> s32 {
+    p: *s8 = ps.p
+    if TextCompareNLiteral(p, "<!--", 4) == 0 {
+        end: *s8 = TextFindLiteral(*p[4], "-->")
+        if end == null {
+            return 0
+        }
+        ps.p = *end[3]
+        return 1
+    }
+    if TextCompareNLiteral(p, "<![CDATA[", 9) == 0 {
+        end: *s8 = TextFindLiteral(*p[9], "]]>")
+        if end == null {
+            return 0
+        }
+        if a != null {
+            d: *s8 = *p[9]
+            while cast(u64)d < cast(u64)end {
+                ch: s8 = d.*
+                d = *d[1]
+                if !(acc_push(a, ch) != 0) {
+                    break
+                }
+            }
+            if d != end {
+                return 0
+            }
+        }
+        ps.p = *end[3]
+        return 1
+    }
+    if p[1] == 63 {
+        end: *s8 = TextFindLiteral(*p[2], "?>")
+        if end == null {
+            return 0
+        }
+        ps.p = *end[2]
+        return 1
+    }
+    if TextCompareNLiteral(p, "<!", 2) == 0 {
+        end: *s8 = TextFindLiteral(*p[2], ">")
+        if end == null {
+            return 0
+        }
+        ps.p = *end[1]
+        return 1
+    }
+    return 0
+}
+
+add_child :: (parent: *XmlNode, child: *XmlNode) -> s32 {
+    grown: **XmlNode = cast(**XmlNode)MemoryResize(cast(*void)parent.children, 8 * cast(u64)(parent.count + 1))
+    if grown == null {
+        return 0
+    }
+    parent.children = grown
+    parent.children[parent.count] = child
+    parent.count += 1
+    return 1
+}
+
+add_attr :: (node: *XmlNode, name: *s8, value: *s8) -> s32 {
+    ng: **s8 = cast(**s8)MemoryResize(cast(*void)node.attrs, 8 * cast(u64)(node.attr_count + 1))
+    vg: **s8 = cast(**s8)MemoryResize(cast(*void)node.attr_values, 8 * cast(u64)(node.attr_count + 1))
+    if ng == null || vg == null {
+        MemoryFree(cast(*void)ng)
+        MemoryFree(cast(*void)vg)
+        return 0
+    }
+    node.attrs = ng
+    node.attr_values = vg
+    node.attrs[node.attr_count] = name
+    node.attr_values[node.attr_count] = value
+    node.attr_count += 1
+    return 1
+}
+
+parse_attribute :: (ps: *Parser, name_out: **s8, value_out: **s8) -> s32 {
+    p: *s8 = ps.p
+    start: *s8
+    val: TextAcc
+    quote: s8
+    name: *s8
+    value: *s8
+    skip_ws(*p)
+    if !(is_name_char(p.*) != 0) {
+        return 0
+    }
+    start = p
+    while is_name_char(p.*) != 0 {
+        p = *p[1]
+    }
+    name = cast(*s8)MemoryAllocate(cast(u64)(cast(s64)(cast(u64)p - cast(u64)start)) + 1)
+    if name == null {
+        return 0
+    }
+    MemoryCopy(cast(*void)name, cast(*void)start, cast(u64)(cast(s64)(cast(u64)p - cast(u64)start)))
+    name[cast(s64)(cast(u64)p - cast(u64)start)] = 0
+    skip_ws(*p)
+    if p.* != 61 {
+        MemoryFree(cast(*void)name)
+        return 0
+    }
+    p = *p[1]
+    skip_ws(*p)
+    quote = p.*
+    if quote != 34 && quote != 39 {
+        MemoryFree(cast(*void)name)
+        return 0
+    }
+    p = *p[1]
+    val.buf = null
+    val.len = 0
+    val.cap = 0
+    while p.* != 0 && p.* != quote {
+        if p.* == 38 {
+            if !(decode_entity(*val, *p) != 0) {
+                bare: s8 = p.*
+                p = *p[1]
+                if !(acc_push(*val, bare) != 0) {
+                    break
+                }
+                continue
+            }
+            continue
+        }
+        if p.* == 60 {
+            p = *p[1]
+            acc_push(*val, 60)
+            continue
+        }
+        {
+            ch: s8 = p.*
+            p = *p[1]
+            if !(acc_push(*val, ch) != 0) {
+                break
+            }
+        }
+    }
+    if p.* != quote {
+        MemoryFree(cast(*void)name)
+        MemoryFree(cast(*void)val.buf)
+        return 0
+    }
+    p = *p[1]
+    value = ifx val.buf != null then val.buf else (cast(*s8)MemoryAllocateZeroed(1, 1))
+    if value == null {
+        MemoryFree(cast(*void)name)
+        MemoryFree(cast(*void)val.buf)
+        return 0
+    }
+    name_out.* = name
+    value_out.* = value
+    ps.p = p
+    return 1
+}
+
+parse_element_fail :: (ps: *Parser, node: *XmlNode, text_buf: *s8) -> *XmlNode {
+    MemoryFree(cast(*void)text_buf)
+    XmlFree(node)
+    ps.depth -= 1
+    ps.failed = 1
+    return null
+}
+
+parse_element :: (ps: *Parser, parent: *XmlNode) -> *XmlNode {
+    p: *s8
+    start: *s8
+    node: *XmlNode
+    child: *XmlNode
+    text: TextAcc
+    text.buf = null
+    text.len = 0
+    text.cap = 0
+    if ps.depth >= 64 {
+        return null
+    }
+    ps.depth += 1
+    p = *ps.p[1]
+    if !(is_name_char(p.*) != 0) {
+        ps.depth -= 1
+        return null
+    }
+    start = p
+    while is_name_char(p.*) != 0 {
+        p = *p[1]
+    }
+    node = node_new(start, cast(u64)(cast(s64)(cast(u64)p - cast(u64)start)))
+    if node == null {
+        ps.depth -= 1
+        return null
+    }
+    {
+        while true {
+            aname: *s8 = null
+            avalue: *s8 = null
+            skip_ws(*p)
+            if p.* == 0 {
+                return parse_element_fail(ps, node, text.buf)
+            }
+            if p.* == 62 {
+                p = *p[1]
+                break
+            }
+            if p.* == 47 && p[1] == 62 {
+                p = *p[2]
+                ps.p = p
+                ps.depth -= 1
+                return node
+            }
+            ps.p = p
+            if !(parse_attribute(ps, *aname, *avalue) != 0) {
+                return parse_element_fail(ps, node, text.buf)
+            }
+            p = ps.p
+            if !(add_attr(node, aname, avalue) != 0) {
+                MemoryFree(cast(*void)aname)
+                MemoryFree(cast(*void)avalue)
+                return parse_element_fail(ps, node, text.buf)
+            }
+        }
+    }
+    ps.p = p
+    {
+        while true {
+            if ps.p.* == 0 {
+                return parse_element_fail(ps, node, text.buf)
+            }
+            if TextCompareNLiteral(ps.p, "</", 2) == 0 {
+                break
+            }
+            if ps.p[0] == 60 {
+                if ps.p[1] == 33 || ps.p[1] == 63 {
+                    if !(skip_markup(ps, *text) != 0) {
+                        return parse_element_fail(ps, node, text.buf)
+                    }
+                    continue
+                }
+                if ps.p[1] == 47 {
+                    break
+                }
+                child = parse_element(ps, node)
+                if child == null {
+                    return parse_element_fail(ps, node, text.buf)
+                }
+                if !(add_child(node, child) != 0) {
+                    return parse_element_fail(ps, node, text.buf)
+                }
+                continue
+            }
+            if !(read_text(ps, *text) != 0) {
+                return parse_element_fail(ps, node, text.buf)
+            }
+        }
+    }
+    p = *ps.p[2]
+    {
+        nlen: u64 = TextLength(node.name)
+        if TextCompareN(p, node.name, nlen) != 0 || !(p[nlen] == 62 || p[nlen] == 32 || p[nlen] == 9 || p[nlen] == 10 || p[nlen] == 13) {
+            return parse_element_fail(ps, node, text.buf)
+        }
+        p = *p[nlen]
+        skip_ws(*p)
+        if p.* != 62 {
+            return parse_element_fail(ps, node, text.buf)
+        }
+        p = *p[1]
+    }
+    node.text = ifx text.buf != null then text.buf else (cast(*s8)MemoryAllocateZeroed(1, 1))
+    if node.text == null {
+        MemoryFree(cast(*void)text.buf)
+        return parse_element_fail(ps, node, text.buf)
+    }
+    ps.p = p
+    ps.depth -= 1
+    if parent == null && ps.p.* != 0 {
+        q: *s8 = ps.p
+        while q.* == 32 || q.* == 9 || q.* == 10 || q.* == 13 {
+            q = *q[1]
+        }
+        if q.* != 0 {
+            return parse_element_fail(ps, node, null)
+        }
+    }
+    return node
+}
+
+#scope_export
+
+XmlParse :: (text: *s8) -> *XmlNode {
+    ps: Parser
+    root: *XmlNode
+    if text == null {
+        return null
+    }
+    ps.p = text
+    ps.depth = 0
+    ps.failed = 0
+    skip_ws(*ps.p)
+    while ps.p.* == 60 && (ps.p[1] == 63 || ps.p[1] == 33) {
+        if !(skip_markup(*ps, null) != 0) {
+            return null
+        }
+        skip_ws(*ps.p)
+    }
+    if ps.p.* != 60 || ps.p[1] == 47 {
+        return null
+    }
+    root = parse_element(*ps, null)
+    if root == null {
+        return null
+    }
+    skip_ws(*ps.p)
+    if ps.p.* != 0 {
+        XmlFree(root)
+        return null
+    }
+    return root
+}
+
+#scope_file
+
+buf_reserve :: (b: *XmlBuffer, extra: u64) {
+    if (b.len + extra + 1) <= b.cap {
+        return
+    }
+    while (b.len + extra + 1) > b.cap {
+        b.cap = ifx b.cap != 0 then (b.cap * 2) else 256
+    }
+    b.buf = cast(*s8)MemoryResize(cast(*void)b.buf, b.cap)
+}
+
+#scope_export
+
+XmlBufferRaw :: (b: *XmlBuffer, text: *s8) {
+    len: u64
+    if b == null || text == null {
+        return
+    }
+    len = TextLength(text)
+    buf_reserve(b, len)
+    if b.buf == null {
+        return
+    }
+    MemoryCopy(cast(*void)(*b.buf[b.len]), cast(*void)text, len)
+    b.len += len
+    b.buf[b.len] = 0
+}
+
+XmlBufferEsc :: (b: *XmlBuffer, text: *s8) {
+    if b == null || text == null {
+        return
+    }
+    {
+        while text.* != 0 {
+            rep: *s8 = null
+            if text.* == 38 {
+                rep = CText("&amp;")
+            } else if text.* == 60 {
+                rep = CText("&lt;")
+            } else if text.* == 62 {
+                rep = CText("&gt;")
+            } else if text.* == 34 {
+                rep = CText("&quot;")
+            } else {
+                buf_reserve(b, 1)
+                if b.buf == null {
+                    return
+                }
+                b.buf[b.len] = text.*
+                b.len += 1
+                b.buf[b.len] = 0
+                text = *text[1]
+                continue
+            }
+            XmlBufferRaw(b, rep)
+            text = *text[1]
+        }
+    }
+}
+
+XmlBufferFinish :: (b: *XmlBuffer) -> *s8 {
+    if b == null || b.buf == null {
+        return CText("")
+    }
+    b.buf[b.len] = 0
+    return b.buf
+}
+
+XmlBufferFree :: (b: *XmlBuffer) {
+    if b == null {
+        return
+    }
+    MemoryFree(cast(*void)b.buf)
+    b.buf = null
+    b.len = 0
+    b.cap = 0
+}

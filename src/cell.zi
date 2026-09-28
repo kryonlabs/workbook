@@ -1,0 +1,159 @@
+// cell - headless Workbook engine driver.
+//
+//   cell eval FILE [-o OUT.csv]       evaluate and export the first sheet as CSV
+//   cell csv2gnm IN.csv OUT.gnumeric  import CSV, write a .gnumeric file
+//   cell copy IN OUT.gnumeric         load any supported file, write .gnumeric
+//   cell gnm2csv IN.gnumeric OUT.csv  load .gnumeric, evaluate, export CSV
+//   cell info FILE                    sheet names and dimensions
+#import "engine"
+
+#scope_file
+libc :: #system_library "libc";
+WriteDescriptor :: (descriptor: s32, bytes: *s8, count: u64) -> s64 #foreign libc "write";
+
+StandardOutput :: 1;
+StandardError :: 2;
+
+#scope_export
+
+#program_export
+main :: (argc: s32, argv: **s8) -> s32 {
+    if argc < 3 {
+        Usage()
+        return 2
+    }
+    command: *s8 = argv[1]
+    if Is(command, "eval") {
+        output: *s8 = CText("/dev/stdout")
+        if argc >= 5 && Is(argv[3], "-o") && !Is(argv[4], "-") {
+            output = argv[4]
+        }
+        return Evaluate(argv[2], output)
+    }
+    if Is(command, "info") && argc == 3 {
+        return Info(argv[2])
+    }
+    if Is(command, "copy") && argc == 4 {
+        return Convert(argv[2], argv[3])
+    }
+    if argc < 4 {
+        Usage()
+        return 2
+    }
+    if Is(command, "csv2gnm") {
+        return Convert(argv[2], argv[3])
+    }
+    if Is(command, "gnm2csv") {
+        return Evaluate(argv[2], argv[3])
+    }
+    if Is(command, "info") {
+        return Info(argv[2])
+    }
+    Usage()
+    return 2
+}
+
+#scope_file
+
+Usage :: () {
+    WriteLiteral(StandardError, "usage: cell eval FILE [-o OUT.csv]\n")
+    WriteLiteral(StandardError, "       cell csv2gnm IN.csv OUT.gnumeric\n")
+    WriteLiteral(StandardError, "       cell gnm2csv IN.gnumeric OUT.csv\n")
+    WriteLiteral(StandardError, "       cell info FILE\n")
+}
+
+// Loads input and returns the workbook, or reports the failure and returns null.
+Load :: (input: *s8) -> *Workbook {
+    workbook: *Workbook = WorkbookNew()
+    if workbook == null { return null }
+    if WorkbookLoadFile(workbook, input) == 0 {
+        Fail("cannot load ", input)
+        WorkbookFree(workbook)
+        return null
+    }
+    return workbook
+}
+
+Evaluate :: (input: *s8, output: *s8) -> s32 {
+    workbook: *Workbook = Load(input)
+    if workbook == null { return 1 }
+    if WorkbookExportCsv(workbook, output) == 0 {
+        Fail("cannot write ", output)
+        WorkbookFree(workbook)
+        return 1
+    }
+    WorkbookFree(workbook)
+    return 0
+}
+
+Convert :: (input: *s8, output: *s8) -> s32 {
+    workbook: *Workbook = Load(input)
+    if workbook == null { return 1 }
+    if WorkbookWriteGnumeric(workbook, output) == 0 {
+        Fail("cannot write ", output)
+        WorkbookFree(workbook)
+        return 1
+    }
+    WorkbookFree(workbook)
+    return 0
+}
+
+Info :: (input: *s8) -> s32 {
+    workbook: *Workbook = Load(input)
+    if workbook == null { return 1 }
+    count: s32 = WorkbookSheetCount(workbook)
+    WriteNumber(StandardOutput, count)
+    WriteLiteral(StandardOutput, " sheet(s)\n")
+    index: s32 = 0
+    while index < count {
+        WriteText(StandardOutput, WorkbookSheetName(workbook, index))
+        WriteLiteral(StandardOutput, ": ")
+        WriteNumber(StandardOutput, WorkbookSheetRows(workbook, index))
+        WriteLiteral(StandardOutput, " rows x ")
+        WriteNumber(StandardOutput, WorkbookSheetColumns(workbook, index))
+        WriteLiteral(StandardOutput, " cols\n")
+        index += 1
+    }
+    WorkbookFree(workbook)
+    return 0
+}
+
+Fail :: (message: string, path: *s8) {
+    WriteLiteral(StandardError, "cell: ")
+    WriteLiteral(StandardError, message)
+    WriteText(StandardError, path)
+    WriteLiteral(StandardError, "\n")
+}
+
+Is :: (text: *s8, expected: string) -> bool {
+    return TextCompareLiteral(text, expected) == 0
+}
+
+WriteText :: (descriptor: s32, text: *s8) {
+    length: u64 = 0
+    while text[length] != 0 { length += 1 }
+    WriteDescriptor(descriptor, text, length)
+}
+
+WriteLiteral :: (descriptor: s32, text: string) {
+    WriteText(descriptor, CText(text))
+}
+
+WriteNumber :: (descriptor: s32, value: s32) {
+    digits: [16]s8
+    at: s32 = 15
+    digits[at] = 0
+    magnitude: s64 = cast(s64)value
+    if magnitude < 0 { magnitude = -magnitude }
+    while true {
+        at -= 1
+        digits[at] = cast(s8)(48 + magnitude % 10)
+        magnitude = magnitude / 10
+        if magnitude == 0 { break }
+    }
+    if value < 0 {
+        at -= 1
+        digits[at] = 45
+    }
+    WriteText(descriptor, *digits[at])
+}

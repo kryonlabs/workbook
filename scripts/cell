@@ -1,6 +1,0 @@
-#!/usr/bin/env sh
-# Legacy wrapper: the headless engine driver is now the real `cell` binary.
-set -eu
-
-dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$dir/cell" "$@"

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Workbook
-Comment=Kry spreadsheet-style workbook editor
+Comment=Spreadsheet editor compatible with Gnumeric
 Exec=workbook
 Terminal=false
 Categories=Office;

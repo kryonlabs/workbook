@@ -6,7 +6,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=${TMPDIR:-/tmp}/workbook-parity.$$
-cell_bin=${CELL_BIN:-$root/cell}
+cell_bin=${CELL_BIN:-$root/build/cell}
 
 cleanup() { rm -rf "$work"; }
 trap cleanup EXIT INT TERM
