@@ -28,8 +28,10 @@ TabLeft :: 24;
 TabWidth :: 104;
 
 Background :: 0xF8FAFC;
-HeaderFill :: 0xEDF4FC;
-SelectedFill :: 0xDCEBFF;
+// The fixture theme below is #f8fafc with ink #1e2530, base white, and a
+// #3070e0 accent; the app derives its header and selection from those.
+HeaderFill :: 0xEDEFF2;
+SelectedFill :: 0xCCDCF6;
 White :: 0xFFFFFF;
 
 TwoSheets :: #string END
@@ -420,6 +422,45 @@ RunSession :: (self: string, mode: string, directory: string) {
     Check(result.code == 0 && !result.error, "the desktop session failed")
 }
 
+// Points the desktop theme at a fixture, so the app's colors are known and the
+// test never depends on the theme of whoever runs it.
+InstallFixtureTheme :: (work: string) {
+    config: [4096]u8
+    data: [4096]u8
+    path: [4096]u8
+    SetText(config[:], work)
+    AppendText(config[:], "/theme-config")
+    SetText(data[:], work)
+    AppendText(data[:], "/theme-data")
+    Check(MakeDirectory(TextUntilNul(config[:])) && MakeDirectory(TextUntilNul(data[:])),
+        "cannot create the theme directories")
+    SetText(path[:], TextUntilNul(config[:]))
+    AppendText(path[:], "/xfce4")
+    Check(MakeDirectory(TextUntilNul(path[:])), "cannot create the xfce4 directory")
+    AppendText(path[:], "/xfconf")
+    Check(MakeDirectory(TextUntilNul(path[:])), "cannot create the xfconf directory")
+    AppendText(path[:], "/xfce-perchannel-xml")
+    Check(MakeDirectory(TextUntilNul(path[:])), "cannot create the xfconf channel directory")
+    AppendText(path[:], "/xsettings.xml")
+    Check(WriteWholeFile(TextUntilNul(path[:]),
+        "<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Net\" type=\"empty\">\n    <property name=\"ThemeName\" type=\"string\" value=\"Fixture\"/>\n  </property>\n</channel>\n"),
+        "cannot write xsettings.xml")
+    SetText(path[:], TextUntilNul(data[:]))
+    AppendText(path[:], "/themes")
+    Check(MakeDirectory(TextUntilNul(path[:])), "cannot create the themes directory")
+    AppendText(path[:], "/Fixture")
+    Check(MakeDirectory(TextUntilNul(path[:])), "cannot create the theme directory")
+    AppendText(path[:], "/gtk-3.0")
+    Check(MakeDirectory(TextUntilNul(path[:])), "cannot create the gtk-3.0 directory")
+    AppendText(path[:], "/gtk.css")
+    Check(WriteWholeFile(TextUntilNul(path[:]),
+        "@define-color theme_bg_color #f8fafc;\n@define-color theme_fg_color #1e2530;\n@define-color theme_base_color #ffffff;\n@define-color theme_selected_bg_color #3070e0;\n@define-color theme_selected_fg_color #ffffff;\n"),
+        "cannot write gtk.css")
+    SetEnvironment("XDG_CONFIG_HOME", TextUntilNul(config[:]))
+    SetEnvironment("XDG_DATA_HOME", TextUntilNul(data[:]))
+    UnsetEnvironment("GTK_THEME")
+}
+
 RunAll :: (self: string) -> s32 {
     Check(OnPath("xdotool"), "install xdotool to test the desktop app")
     Check(OnPath("xvfb-run"), "install xvfb-run to test the desktop app")
@@ -443,6 +484,7 @@ RunAll :: (self: string) -> s32 {
     SetText(cleanup_directory[:], work)
     work = TextUntilNul(work_buffer[:])
 
+    InstallFixtureTheme(work)
     CheckFrame(work)
 
     edit: [4096]u8

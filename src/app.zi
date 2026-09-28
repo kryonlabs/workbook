@@ -3,6 +3,8 @@
 using UI :: #import "Widgets";
 Engine :: #import "engine";
 Json :: #import "json_scan";
+SystemStyle :: #import "SystemStyle";
+SystemThemeLinux :: #import "SystemThemeLinux";
 #import "byte_text_linux"
 #import "text_buffer"
 
@@ -73,6 +75,11 @@ edit_scroll: s32 = 0;
 edit_focused: bool = false;
 edit_composition: CompositionState;
 
+// The desktop theme the style was last built from.
+theme_name: [128]u8;
+theme_frames: s32 = 0;
+theme_installed: bool = false;
+
 data_path: [1024]u8;
 data_directory: [1024]u8;
 status: [256]u8;
@@ -81,6 +88,7 @@ status: [256]u8;
 
 #program_export
 Frame :: (session: Session, viewport: Rectangle) -> s32 {
+    FollowSystemTheme()
     if workbook == null {
         LoadWorkbook()
         SelectCell(0, 0)
@@ -94,6 +102,7 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
         key = 0
     }
 
+    DrawBackground(session, viewport)
     DrawToolbar(session, viewport)
     DrawSheetTabs(session, viewport)
     // The field consumes this frame's keys while it is being edited; the
@@ -108,6 +117,21 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
 }
 
 #scope_file
+
+// Styles the app in the desktop's GTK theme and follows it when it changes:
+// the configured theme is looked at again every couple of seconds.
+FollowSystemTheme :: () {
+    if theme_installed {
+        theme_frames += 1
+        if theme_frames < 120 { return }
+        theme_frames = 0
+    }
+    name: string = SystemThemeLinux.SystemThemeName()
+    if theme_installed && name == TextUntilNul(theme_name[:]) { return }
+    SystemStyle.StyleInstallSystem(SystemThemeLinux.SystemPaletteRead())
+    SetText(theme_name[:], name)
+    theme_installed = true
+}
 
 // -------------------------------------------------------------------- data
 
@@ -478,6 +502,15 @@ AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
 
 // --------------------------------------------------------------------- view
 
+// The window's own color: the theme's canvas behind every widget.
+DrawBackground :: (session: Session, viewport: Rectangle) {
+    background: BoxProps
+    background.key = cast(u64)7
+    background.bounds = viewport
+    background.fill = StyleTokenColor("canvas")
+    Box(session, background)
+}
+
 DrawToolbar :: (session: Session, viewport: Rectangle) {
     x: float32 = Margin
     if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook() }
@@ -668,13 +701,13 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     if scroll_row < 0 { scroll_row = 0 }
 
     GridSquare(session, 10, Rectangle.{table.x, table.y, RowHeaderWidth, HeaderHeight},
-        HeaderBackground, "")
+        HeaderBackground(), "")
     column: s32 = scroll_column
     while column < scroll_column + visible_columns && column < columns {
         name: [8]u8
         AppendCellColumn(name[:], column)
         GridSquare(session, 20 + column, Rectangle.{ColumnX(table, column), table.y,
-                ColumnWidth, HeaderHeight}, HeaderBackground, TextUntilNul(name[:]))
+                ColumnWidth, HeaderHeight}, HeaderBackground(), TextUntilNul(name[:]))
         column += 1
     }
     shown: s32 = 0
@@ -684,15 +717,15 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         number: [16]u8
         FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
         GridSquare(session, 100 + row, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
-            HeaderBackground, TextUntilNul(number[:]))
+            HeaderBackground(), TextUntilNul(number[:]))
         column = scroll_column
         while column < scroll_column + visible_columns && column < columns {
             display: [256]u8
             Engine.WorkbookCellDisplay(workbook, sheet_index, row, column,
                 cast(*s8)*display[0], 256)
             Engine.RoundForDisplay(cast(*s8)*display[0], 256)
-            fill: u32 = CellBackground
-            if row == selected_row && column == selected_column { fill = SelectedBackground }
+            fill: Color = CellBackground()
+            if row == selected_row && column == selected_column { fill = SelectedBackground() }
             GridSquare(session, 1000 + row * 64 + column,
                 Rectangle.{ColumnX(table, column), y, ColumnWidth, RowHeight},
                 fill, TextUntilNul(display[:]))
@@ -721,10 +754,11 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     if frames_since_click < 1000 { frames_since_click += 1 }
 }
 
-HeaderBackground :: 0xEDF4FCFF;
-CellBackground :: 0xFFFFFFFF;
-SelectedBackground :: 0xDCEBFFFF;
-GridLineColor :: 0xC6D4E3FF;
+// The grid takes its colors from the installed style, so it follows the theme.
+HeaderBackground :: () -> Color { return StyleTokenColor("surface") }
+CellBackground :: () -> Color { return StyleTokenColor("card") }
+SelectedBackground :: () -> Color { return StyleTokenColor("accent-soft") }
+GridLineColor :: () -> Color { return StyleTokenColor("border-soft") }
 
 ColumnX :: (table: Rectangle, column: s32) -> float32 {
     return table.x + RowHeaderWidth + cast(float32)(column - scroll_column) * ColumnWidth
@@ -735,12 +769,12 @@ RowY :: (table: Rectangle, row: s32) -> float32 {
 }
 
 // One grid square: a bordered box and its clipped text.
-GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: u32, text: string) {
+GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: Color, text: string) {
     box: BoxProps
     box.key = cast(u64)(100000 + key)
     box.bounds = bounds
-    box.fill = ColorFromPacked(fill)
-    box.border = ColorFromPacked(GridLineColor)
+    box.fill = fill
+    box.border = GridLineColor()
     Box(session, box)
     if text.count == 0 { return }
     label: TextProps
