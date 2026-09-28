@@ -11,7 +11,7 @@ DIST_DIR ?= dist
 
 APP := build/workbook-desktop
 CELL := build/cell
-TESTS := source_audit_test structure_test desktop_test parity_test
+TESTS := source_audit_test structure_test conversion_test desktop_test parity_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
 SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 
@@ -20,7 +20,7 @@ SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 # has the same layout.
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-.PHONY: build cell check run test test-ci structure-test desktop-test parity audit install deb clean
+.PHONY: build cell check run test test-ci structure-test conversion-test desktop-test parity audit install deb clean
 
 build: $(APP) $(CELL)
 
@@ -63,7 +63,7 @@ audit: build/source_audit_test
 desktop-test: build build/desktop_test
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY build/desktop_test
 
-test-ci: build audit structure-test desktop-test
+test-ci: build audit structure-test conversion-test desktop-test
 
 test: test-ci parity
 
@@ -121,3 +121,6 @@ clean:
 
 structure-test: build/structure_test
 	@build/structure_test
+
+conversion-test: build/conversion_test
+	@build/conversion_test
