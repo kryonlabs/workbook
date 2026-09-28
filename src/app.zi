@@ -6,6 +6,12 @@ Json :: #import "json_scan";
 #import "byte_text_linux"
 #import "text_buffer"
 
+SaveIcon :: #import "mingcute_regular_save_2";
+RowAddIcon :: #import "mingcute_extra_table_row_add";
+RowRemoveIcon :: #import "mingcute_extra_table_row_remove";
+ColumnAddIcon :: #import "mingcute_extra_table_column_add";
+ColumnRemoveIcon :: #import "mingcute_extra_table_column_remove";
+
 using ButtonEmphasis;
 using ButtonTone;
 using ControlSize;
@@ -474,38 +480,39 @@ AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
 
 DrawToolbar :: (session: Session, viewport: Rectangle) {
     x: float32 = Margin
-    if ToolbarButton(session, 1001, "Save", 64.0, *x, dirty) { SaveWorkbook() }
-    if ToolbarButton(session, 1002, "+ Row", 64.0, *x, false) {
+    if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook() }
+    if ToolbarIcon(session, 1002, RowAddIcon.Shape, *x, false) {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
         Changed("Row inserted")
     }
-    if ToolbarButton(session, 1003, "- Row", 64.0, *x, false) {
+    if ToolbarIcon(session, 1003, RowRemoveIcon.Shape, *x, false) {
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
         Changed("Row deleted")
     }
-    if ToolbarButton(session, 1004, "+ Col", 64.0, *x, false) {
+    if ToolbarIcon(session, 1004, ColumnAddIcon.Shape, *x, false) {
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
         Changed("Column inserted")
     }
-    if ToolbarButton(session, 1005, "- Col", 64.0, *x, false) {
+    if ToolbarIcon(session, 1005, ColumnRemoveIcon.Shape, *x, false) {
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed("Column deleted")
     }
 }
 
 
-ToolbarButton :: (session: Session, id: s32, label: string, width: float32,
-    x: *float32, primary: bool) -> bool {
+ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
+    primary: bool) -> bool {
     button: ButtonProps
     button.id = id
-    button.label = label
+    button.icon_shape = shape
+    button.icon_only = true
     button.size = cast(ControlSize)ControlSizeSmall
     button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
     if primary {
         button.tone = cast(ButtonTone)ButtonToneAccent
     }
-    button.bounds = Rectangle.{x.*, 14.0, width, 32.0}
-    x.* = x.* + width + 8.0
+    button.bounds = Rectangle.{x.*, 14.0, 36.0, 32.0}
+    x.* = x.* + 36.0 + 8.0
     return Button(session, button) != 0
 }
 

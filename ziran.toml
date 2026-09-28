@@ -12,6 +12,10 @@ ref = "master"
 git = "https://github.com/kryonlabs/kryon.git"
 ref = "master"
 
+[dependencies.mingcute]
+git = "https://github.com/kryonlabs/mingcute.git"
+ref = "master"
+
 [install]
 tool = "Kryon"
 bin = "workbook"
