@@ -2,16 +2,16 @@
   "format": 1,
   "packages": [
     {
-      "commit": "5b67295ae3ef13c5929e346c01f12f33523fc495",
+      "commit": "002ae973cda5068a188f146023f73d9dc16d69c2",
       "dependencies": {},
-      "id": "paaa5118cf657f56a",
+      "id": "p26f732dc0fc7c293",
       "name": "Kryon",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kryon.git"
     }
   ],
   "root": {
-    "dependencies": {"Kryon": "paaa5118cf657f56a"},
+    "dependencies": {"Kryon": "p26f732dc0fc7c293"},
     "name": "workbook"
   },
   "toolchain": {
