@@ -1,0 +1,1221 @@
+Quad :: struct {
+    h: float64
+    l: float64
+}
+
+QuadAcc :: struct {
+    partials: [128]float64
+    len: s32
+}
+
+QuadMatrix :: struct {
+    m: s32
+    n: s32
+    data: [16][16]Quad
+}
+
+QuadQR :: struct {
+    V: QuadMatrix
+    R: QuadMatrix
+    qdet: s32
+}
+
+#scope_file
+
+QUAD_SPLIT_CONST: float64 = 134217729.0;
+#scope_export
+
+QuadInit :: (r: *Quad, hv: float64) {
+    r.h = hv
+    r.l = 0.0
+}
+
+QuadVal :: (a: *Quad) -> float64 {
+    return a.h + a.l
+}
+
+QuadNeg :: (r: *Quad, a: *Quad) {
+    r.h = -a.h
+    r.l = -a.l
+}
+
+QuadZero :: (r: *Quad) {
+    r.h = 0.0
+    r.l = 0.0
+}
+
+QuadAdd :: (r: *Quad, a: *Quad, b: *Quad) {
+    rr: float64 = a.h + b.h
+    s: float64 = ifx Fabs(a.h) > Fabs(b.h) then (a.h - rr + b.h + b.l + a.l) else (b.h - rr + a.h + a.l + b.l)
+    r.h = rr + s
+    r.l = rr - r.h + s
+}
+
+QuadSub :: (r: *Quad, a: *Quad, b: *Quad) {
+    rr: float64 = a.h - b.h
+    s: float64 = ifx Fabs(a.h) > Fabs(b.h) then (a.h - rr - b.h - b.l + a.l) else (-b.h - rr + a.h + a.l - b.l)
+    r.h = rr + s
+    r.l = rr - r.h + s
+}
+
+#scope_file
+
+quad_split :: (x_in: float64, h: *float64, t: *float64) -> float64 {
+    x: float64 = x_in
+    p: float64 = x * QUAD_SPLIT_CONST
+    if !(IsFinite(p) != 0) && IsFinite(x) != 0 {
+        x *= 2.220446049250313080847e-16
+        p = x * QUAD_SPLIT_CONST
+        h.* = x - p + p
+        t.* = x - h.*
+        h.* *= 1.0 / 2.220446049250313080847e-16
+        t.* *= 1.0 / 2.220446049250313080847e-16
+    } else {
+        h.* = x - p + p
+        t.* = x - h.*
+    }
+    return x
+}
+
+#scope_export
+
+QuadMul12 :: (r: *Quad, xv: float64, yv: float64) {
+    hx: float64
+    tx: float64
+    hy: float64
+    ty: float64
+    p: float64
+    q: float64
+    x: float64 = quad_split(xv, *hx, *tx)
+    y: float64 = quad_split(yv, *hy, *ty)
+    p = hx * hy
+    q = hx * ty + tx * hy
+    r.h = p + q
+    r.l = p - r.h + q + tx * ty
+}
+
+QuadMul :: (r: *Quad, a: *Quad, b: *Quad) {
+    c: Quad
+    QuadMul12(*c, a.h, b.h)
+    c.l = a.h * b.l + a.l * b.h + c.l
+    r.h = c.h + c.l
+    r.l = c.h - r.h + c.l
+}
+
+QuadDiv :: (r: *Quad, a: *Quad, b: *Quad) {
+    c_h: float64 = a.h / b.h
+    u: Quad
+    QuadMul12(*u, c_h, b.h)
+    c_l: float64 = (a.h - u.h - u.l + a.l - c_h * b.l) / b.h
+    r.h = c_h + c_l
+    r.l = c_h - r.h + c_l
+}
+
+QuadSqrt :: (r: *Quad, a: *Quad) {
+    if a.h > 0 {
+        c_h: float64 = Sqrt(a.h)
+        u: Quad
+        QuadMul12(*u, c_h, c_h)
+        c_l: float64 = ((a.h - u.h - u.l + a.l) * 0.5) / c_h
+        r.h = c_h + c_l
+        r.l = c_h - r.h + c_l
+    } else {
+        r.h = 0.0
+        r.l = 0.0
+    }
+}
+
+QuadSqrt1pm1 :: (r: *Quad, a: *Quad) {
+    x0: Quad
+    x1: Quad
+    d: Quad
+    one: Quad = Quad.{1.0, 0.0}
+    QuadAdd(*x0, a, *one)
+    QuadSqrt(*x0, *x0)
+    QuadSub(*x0, *x0, *one)
+    QuadMul(*x1, *x0, *x0)
+    QuadAdd(*x1, *x1, a)
+    QuadAdd(*d, *x0, *one)
+    QuadAdd(*d, *d, *d)
+    QuadDiv(r, *x1, *d)
+}
+
+QuadScalbn :: (r: *Quad, a: *Quad, n: s32) {
+    r.h = Scalbn(a.h, n)
+    r.l = Scalbn(a.l, n)
+}
+
+QuadCompare :: (a: *Quad, b: *Quad) -> s32 {
+    sa: s32 = cast(s32)(a.h < 0)
+    sb: s32 = cast(s32)(b.h < 0)
+    d: Quad
+    if sa != sb {
+        return ifx sa != 0 then (-1) else 1
+    }
+    QuadSub(*d, a, b)
+    if d.h > 0 {
+        return 1
+    }
+    if d.h == 0 {
+        return 0
+    }
+    return -1
+}
+
+QuadFloor :: (r: *Quad, a: *Quad) {
+    qh: Quad
+    ql: Quad
+    q: Quad
+    rr: Quad
+    one: Quad = Quad.{1.0, 0.0}
+    QuadInit(*qh, Floor(a.h))
+    QuadInit(*ql, Floor(a.l))
+    QuadAdd(*q, *qh, *ql)
+    QuadSub(*rr, a, *q)
+    if QuadVal(*rr) < 0 {
+        QuadSub(r, *q, *one)
+    } else {
+        QuadSub(*rr, *rr, *one)
+        if QuadVal(*rr) < 0 {
+            r.* = q
+        } else {
+            QuadAdd(r, *q, *one)
+        }
+    }
+}
+
+QuadRescaleBase :: (x: *Quad, e: *float64) {
+    xe: s32 = Ilogb(QuadVal(x))
+    if xe != 0 {
+        qs: Quad
+        QuadInit(*qs, Scalbn(1.0, -xe))
+        QuadMul(x, x, *qs)
+        e.* += cast(float64)xe
+    }
+}
+
+QuadPowInt :: (r: *Quad, exp2: *float64, x: *Quad, y: *Quad) {
+    xn: Quad
+    xe: float64 = 0
+    dy: float64 = QuadVal(y)
+    xn = x.*
+    exp2.* = 0
+    QuadInit(r, 1.0)
+    QuadRescaleBase(*xn, *xe)
+    while dy > 0 {
+        if Fmod(dy, 2) != 0 {
+            QuadMul(r, r, *xn)
+            exp2.* += xe
+            QuadRescaleBase(r, exp2)
+            dy -= 1
+            if dy == 0 {
+                break
+            }
+        }
+        dy /= 2
+        QuadMul(*xn, *xn, *xn)
+        xe *= 2
+        QuadRescaleBase(*xn, *xe)
+    }
+}
+
+QuadPowFrac :: (r: *Quad, x: *Quad, y: *Quad) {
+    qx: Quad
+    qr: Quad
+    qy: Quad = y.*
+    dy: float64
+    x1m: s32
+    one: Quad = Quad.{1.0, 0.0}
+    x1m = cast(s32)(Fabs(QuadVal(x)) >= 0.5)
+    if x1m != 0 {
+        QuadSub(*qx, x, *one)
+    } else {
+        qx = x.*
+    }
+    QuadInit(*qr, 1.0)
+    {
+        while true {
+            dy = QuadVal(*qy)
+            if !(dy > 0) {
+                break
+            }
+            QuadAdd(*qy, *qy, *qy)
+            if x1m != 0 {
+                QuadSqrt1pm1(*qx, *qx)
+                if QuadVal(*qx) == 0 {
+                    break
+                }
+            } else {
+                QuadSqrt(*qx, *qx)
+                if QuadVal(*qx) >= 0.5 {
+                    x1m = 1
+                    QuadSub(*qx, *qx, *one)
+                }
+            }
+            if dy >= 0.5 {
+                qp: Quad
+                QuadSub(*qy, *qy, *one)
+                QuadMul(*qp, *qx, *qr)
+                if x1m != 0 {
+                    QuadAdd(*qr, *qr, *qp)
+                } else {
+                    qr = qp
+                }
+            }
+        }
+    }
+    r.* = qr
+}
+
+QuadPow :: (r: *Quad, expb: *float64, x: *Quad, y: *Quad) {
+    one: Quad = Quad.{1.0, 0.0}
+    half: Quad = Quad.{0.5, 0.0}
+    if expb != null {
+        expb.* = 0
+    }
+    if y.h == 0 || QuadCompare(x, *one) == 0 {
+        QuadInit(r, 1.0)
+        return
+    }
+    if x.h == 0 && y.h > 0 {
+        QuadZero(r)
+        return
+    }
+    if x.h != x.h {
+        r.h = x.h
+        r.l = 0
+        return
+    }
+    if y.h != y.h {
+        r.h = y.h
+        r.l = 0
+        return
+    }
+    if QuadCompare(y, *one) == 0 {
+        r.* = x.*
+        return
+    }
+    if x.h > 0 && QuadCompare(y, *half) == 0 {
+        QuadSqrt(r, x)
+        return
+    }
+    if QuadVal(y) < 0 {
+        my: Quad
+        zero: Quad
+        one2: Quad
+        QuadZero(*zero)
+        QuadSub(*my, *zero, y)
+        QuadPow(r, expb, x, *my)
+        one2 = one
+        QuadDiv(r, *one2, r)
+        if expb != null {
+            expb.* = -expb.*
+        }
+        return
+    } else {
+        qew: Quad
+        qef: Quad
+        yint: Quad
+        qf: Quad
+        exp2ew: float64 = 0
+        QuadFloor(*yint, y)
+        QuadSub(*qf, y, *yint)
+        QuadPowInt(*qew, *exp2ew, x, *yint)
+        QuadPowFrac(*qef, x, *qf)
+        QuadMul(r, *qew, *qef)
+        if expb != null {
+            expb.* = exp2ew
+        } else {
+            QuadScalbn(r, r, TruncateToS32(exp2ew))
+        }
+    }
+}
+
+QuadExp :: (r: *Quad, expb: *float64, a: *Quad) {
+    quad_e: Quad = Quad.{2.718281828459045, 1.4456468917292502e-16}
+    if a.h != a.h {
+        r.h = a.h
+        r.l = 0
+        return
+    }
+    QuadPow(r, expb, *quad_e, a)
+}
+
+QuadAccAdd :: (acc: *QuadAcc, x: float64) {
+    ui: u32 = 0
+    uj: u32
+    {
+        uj = 0
+        while uj < cast(u32)acc.len {
+            y: float64 = acc.partials[uj]
+            hi: float64
+            lo: float64
+            if Fabs(x) < Fabs(y) {
+                t: float64 = x
+                x = y
+                y = t
+            }
+            hi = x + y
+            if !(IsFinite(hi) != 0) {
+                x = hi
+                ui = 0
+                break
+            }
+            lo = y - (hi - x)
+            if lo != 0 {
+                acc.partials[ui] = lo
+                ui += 1
+            }
+            x = hi
+            uj += 1
+        }
+    }
+    acc.len = cast(s32)ui + 1
+    acc.partials[ui] = x
+}
+
+QuadAccAddQuad :: (acc: *QuadAcc, x: *Quad) {
+    QuadAccAdd(acc, x.h)
+    QuadAccAdd(acc, x.l)
+}
+
+QuadAccValue :: (acc: *QuadAcc) -> float64 {
+    sum: float64 = 0
+    ui: s32
+    {
+        ui = 0
+        while ui < acc.len {
+            sum += acc.partials[ui]
+            ui += 1
+        }
+    }
+    return sum
+}
+
+QuadQrNew :: (A: *QuadMatrix) -> QuadQR {
+    qr: QuadQR
+    qdet: s32 = 1
+    R: QuadMatrix
+    MemorySet(cast(*void)(*qr), 0, cast(u64)size_of(QuadQR))
+    MemorySet(cast(*void)(*R), 0, cast(u64)size_of(QuadMatrix))
+    i: s32
+    j: s32
+    k: s32
+    m: s32 = A.m
+    n: s32 = A.n
+    L: Quad
+    L2: Quad
+    L2p: Quad
+    s: Quad
+    p: Quad
+    tmp: [16]Quad
+    qr.V.m = m
+    qr.V.n = n
+    qr.R.m = n
+    qr.R.n = n
+    R.m = m
+    R.n = n
+    {
+        i = 0
+        while i < m {
+            {
+                j = 0
+                while j < n {
+                    R.data[i][j] = A.data[i][j]
+                    j += 1
+                }
+            }
+            i += 1
+        }
+    }
+    {
+        k = 0
+        while k < n {
+            QuadZero(*L2)
+            QuadZero(*L2p)
+            {
+                i = m - 1
+                while i >= k {
+                    qr.V.data[i][k] = R.data[i][k]
+                    QuadMul(*s, *qr.V.data[i][k], *qr.V.data[i][k])
+                    L2p = L2
+                    QuadAdd(*L2, *L2, *s)
+                    i -= 1
+                }
+            }
+            QuadSqrt(*L, *L2)
+            if QuadVal(*qr.V.data[k][k]) < 0 {
+                QuadSub(*qr.V.data[k][k], *qr.V.data[k][k], *L)
+            } else {
+                QuadAdd(*qr.V.data[k][k], *qr.V.data[k][k], *L)
+            }
+            QuadMul(*s, *qr.V.data[k][k], *qr.V.data[k][k])
+            QuadAdd(*L2p, *L2p, *s)
+            QuadSqrt(*L, *L2p)
+            if QuadVal(*L) == 0 {
+                k += 1
+                continue
+            }
+            {
+                i = k
+                while i < m {
+                    QuadDiv(*qr.V.data[i][k], *qr.V.data[i][k], *L)
+                    i += 1
+                }
+            }
+            qdet = -qdet
+            {
+                j = k
+                while j < n {
+                    QuadZero(*tmp[j])
+                    {
+                        i = k
+                        while i < m {
+                            QuadMul(*p, *qr.V.data[i][k], *R.data[i][j])
+                            QuadAdd(*tmp[j], *tmp[j], *p)
+                            i += 1
+                        }
+                    }
+                    j += 1
+                }
+            }
+            {
+                j = k
+                while j < n {
+                    {
+                        i = k
+                        while i < m {
+                            QuadMul(*p, *qr.V.data[i][k], *tmp[j])
+                            QuadAdd(*p, *p, *p)
+                            QuadSub(*R.data[i][j], *R.data[i][j], *p)
+                            i += 1
+                        }
+                    }
+                    j += 1
+                }
+            }
+            {
+                i = k + 1
+                while i < m {
+                    QuadZero(*R.data[i][k])
+                    i += 1
+                }
+            }
+            k += 1
+        }
+    }
+    {
+        i = 0
+        while i < n {
+            {
+                j = 0
+                while j < n {
+                    qr.R.data[i][j] = R.data[i][j]
+                    j += 1
+                }
+            }
+            i += 1
+        }
+    }
+    qr.qdet = qdet
+    return qr
+}
+
+QuadQrMultiplyQt :: (qr: *QuadQR, x: *Quad) {
+    i: s32
+    k: s32
+    {
+        k = 0
+        while k < qr.V.n {
+            s: Quad
+            p: Quad
+            QuadZero(*s)
+            {
+                i = k
+                while i < qr.V.m {
+                    QuadMul(*p, *x[i], *qr.V.data[i][k])
+                    QuadAdd(*s, *s, *p)
+                    i += 1
+                }
+            }
+            QuadAdd(*s, *s, *s)
+            {
+                i = k
+                while i < qr.V.m {
+                    QuadMul(*p, *s, *qr.V.data[i][k])
+                    QuadSub(*x[i], *x[i], *p)
+                    i += 1
+                }
+            }
+            k += 1
+        }
+    }
+}
+
+QuadMatrixBackSolve :: (R: *QuadMatrix, x: *Quad, b: *Quad, allow_degenerate: s32) -> s32 {
+    i: s32
+    j: s32
+    n: s32 = R.m
+    d: Quad
+    Rii: Quad
+    p: Quad
+    {
+        i = n - 1
+        while i >= 0 {
+            d = b[i]
+            Rii = R.data[i][i]
+            if QuadVal(*Rii) == 0 {
+                if allow_degenerate != 0 {
+                    QuadZero(*x[i])
+                    i -= 1
+                    continue
+                } else {
+                    while i >= 0 {
+                        QuadZero(*x[i])
+                        i -= 1
+                    }
+                    return 1
+                }
+            }
+            {
+                j = i + 1
+                while j < n {
+                    QuadMul(*p, *R.data[i][j], *x[j])
+                    QuadSub(*d, *d, *p)
+                    j += 1
+                }
+            }
+            QuadDiv(*x[i], *d, *Rii)
+            i -= 1
+        }
+    }
+    return 0
+}
+
+QuadMatrixFwdSolve :: (R: *QuadMatrix, x: *Quad, b: *Quad, allow_degenerate: s32) -> s32 {
+    i: s32
+    j: s32
+    n: s32 = R.m
+    d: Quad
+    Rii: Quad
+    p: Quad
+    {
+        i = 0
+        while i < n {
+            d = b[i]
+            Rii = R.data[i][i]
+            if QuadVal(*Rii) == 0 {
+                if allow_degenerate != 0 {
+                    QuadZero(*x[i])
+                    i += 1
+                    continue
+                } else {
+                    while i < n {
+                        QuadZero(*x[i])
+                        i += 1
+                    }
+                    return 1
+                }
+            }
+            {
+                j = 0
+                while j < i {
+                    QuadMul(*p, *R.data[j][i], *x[j])
+                    QuadSub(*d, *d, *p)
+                    j += 1
+                }
+            }
+            QuadDiv(*x[i], *d, *Rii)
+            i += 1
+        }
+    }
+    return 0
+}
+
+QuadMatrixEigenRange :: (A: *QuadMatrix, emin: *float64, emax: *float64) {
+    i: s32
+    abs_e: float64 = Fabs(QuadVal(*A.data[0][0]))
+    emin.* = abs_e
+    emax.* = abs_e
+    {
+        i = 1
+        while i < A.m {
+            abs_e = Fabs(QuadVal(*A.data[i][i]))
+            if abs_e < emin.* {
+                emin.* = abs_e
+            }
+            if abs_e > emax.* {
+                emax.* = abs_e
+            }
+            i += 1
+        }
+    }
+}
+
+QuadMatrixDeterminant :: (A: *QuadMatrix, res: *Quad) {
+    qr: QuadQR
+    a: Quad
+    b: Quad
+    i: s32
+    if A.m == 1 {
+        res.* = A.data[0][0]
+        return
+    }
+    if A.m == 2 {
+        QuadMul(*a, *A.data[0][0], *A.data[1][1])
+        QuadMul(*b, *A.data[1][0], *A.data[0][1])
+        QuadSub(res, *a, *b)
+        return
+    }
+    qr = QuadQrNew(A)
+    QuadInit(res, cast(float64)qr.qdet)
+    {
+        i = 0
+        while i < qr.R.n {
+            QuadMul(res, res, *qr.R.data[i][i])
+            i += 1
+        }
+    }
+}
+
+QuadMatrixInverse :: (A: *QuadMatrix, threshold: float64, Z: *QuadMatrix) -> s32 {
+    qr: QuadQR
+    n: s32 = A.n
+    i: s32
+    k: s32
+    ok: s32
+    emin: float64
+    emax: float64
+    x: [16]Quad
+    qtk: [16]Quad
+    qr = QuadQrNew(A)
+    Z.m = n
+    Z.n = n
+    QuadMatrixEigenRange(*qr.R, *emin, *emax)
+    ok = cast(s32)(emin > (emax * threshold))
+    {
+        k = 0
+        while ok != 0 && k < n {
+            {
+                i = 0
+                while i < n {
+                    QuadInit(*qtk[i], ifx i == k then 1.0 else 0.0)
+                    i += 1
+                }
+            }
+            QuadQrMultiplyQt(*qr, *qtk[0])
+            if QuadMatrixBackSolve(*qr.R, *x[0], *qtk[0], 0) != 0 {
+                ok = 0
+                break
+            }
+            {
+                i = 0
+                while i < n {
+                    Z.data[i][k] = x[i]
+                    i += 1
+                }
+            }
+            k += 1
+        }
+    }
+    return ok
+}
+
+QuadMatrixMultiply :: (C: *QuadMatrix, A: *QuadMatrix, B: *QuadMatrix) {
+    i: s32
+    j: s32
+    k: s32
+    p: Quad
+    {
+        i = 0
+        while i < C.m {
+            {
+                j = 0
+                while j < C.n {
+                    acc: Quad
+                    QuadZero(*acc)
+                    {
+                        k = 0
+                        while k < A.n {
+                            QuadMul(*p, *A.data[i][k], *B.data[k][j])
+                            QuadAdd(*acc, *acc, *p)
+                            k += 1
+                        }
+                    }
+                    C.data[i][j] = acc
+                    j += 1
+                }
+            }
+            i += 1
+        }
+    }
+}
+
+QuadMatrixTranspose :: (A: *QuadMatrix, B: *QuadMatrix) {
+    i: s32
+    j: s32
+    {
+        i = 0
+        while i < A.m {
+            {
+                j = 0
+                while j < A.n {
+                    A.data[i][j] = B.data[j][i]
+                    j += 1
+                }
+            }
+            i += 1
+        }
+    }
+}
+
+#scope_file
+
+QUAD_PI: Quad = Quad.{3.141592653589793, 1.2246467991473532e-16};
+#scope_export
+
+QUAD_2PI_EXPORT: Quad = Quad.{6.283185307179586, 2.4492935982947064e-16};
+QUAD_PI_EXPORT: Quad = Quad.{3.141592653589793, 1.2246467991473532e-16};
+#scope_file
+
+QUAD_PIHALF: Quad = Quad.{1.5707963267948966, 6.123233995736766e-17};
+QUAD_LN2: Quad = Quad.{0.6931471805599453, 2.3190468138462996e-17};
+QUAD_SQRT2: Quad = Quad.{1.4142135623730951, -9.667293313452913e-17};
+#scope_export
+
+QuadLog :: (res: *Quad, a: *Quad) {
+    da: float64 = QuadVal(a)
+    if da == 0 {
+        QuadInit(res, -Infinity())
+    } else if da < 0 {
+        QuadInit(res, NotANumber())
+    } else if !(IsFinite(da) != 0) {
+        res.* = a.*
+    } else {
+        as: Quad
+        xi: Quad
+        yi: Quad
+        dx: Quad
+        dl: Quad
+        e: s32
+        Frexp(da, *e)
+        if da < (1 / Sqrt(2)) {
+            e -= 1
+        }
+        QuadScalbn(*as, a, -e)
+        QuadInit(*xi, Log(as.h))
+        QuadExp(*yi, null, *xi)
+        QuadSub(*dx, *as, *yi)
+        QuadDiv(*dx, *dx, *yi)
+        QuadAdd(*xi, *xi, *dx)
+        QuadInit(*dl, cast(float64)e)
+        QuadMul(*dl, *QUAD_LN2, *dl)
+        QuadAdd(*xi, *xi, *dl)
+        res.* = xi
+    }
+}
+
+QuadHypot :: (res: *Quad, a: *Quad, b: *Quad) {
+    e: s32
+    qa: Quad
+    qb: Quad
+    qn: Quad
+    maxh: float64
+    if a.h < 0 {
+        QuadNeg(*qa, a)
+    } else {
+        qa = a.*
+    }
+    if b.h < 0 {
+        QuadNeg(*qb, b)
+    } else {
+        qb = b.*
+    }
+    if qa.h == 0 {
+        res.* = qb
+        return
+    }
+    if qb.h == 0 {
+        res.* = qa
+        return
+    }
+    if qa.h == Infinity() || qb.h == Infinity() {
+        QuadInit(res, Infinity())
+        return
+    }
+    if IsNan(qa.h) != 0 || IsNan(qb.h) != 0 {
+        QuadInit(res, NotANumber())
+        return
+    }
+    maxh = ifx qa.h > qb.h then qa.h else qb.h
+    Frexp(maxh, *e)
+    QuadScalbn(*qa, *qa, -e)
+    QuadMul(*qa, *qa, *qa)
+    QuadScalbn(*qb, *qb, -e)
+    QuadMul(*qb, *qb, *qb)
+    QuadAdd(*qn, *qa, *qb)
+    QuadSqrt(*qn, *qn)
+    QuadScalbn(res, *qn, e)
+}
+
+#scope_file
+
+quad_ihypot :: (res: *Quad, a: *Quad) {
+    qp: Quad
+    one: Quad
+    QuadMul(*qp, a, a)
+    QuadInit(*one, 1.0)
+    QuadSub(*qp, *one, *qp)
+    QuadSqrt(res, *qp)
+}
+
+AGM_ARCSIN :: 0;
+AGM_ARCCOS :: 1;
+AGM_ARCTAN :: 2;
+
+quad_agm_internal :: (res: *Quad, method: s32, x: *Quad) {
+    g: Quad
+    gp: Quad
+    dk: [20]Quad
+    dpk: [20]Quad
+    qr: Quad
+    qrp: Quad
+    qnum: Quad
+    n: s32
+    k: s32
+    converged: s32 = 0
+    one: Quad = Quad.{1.0, 0.0}
+    half: Quad = Quad.{0.5, 0.0}
+    qrp = one
+    qrp.h = 0
+    qrp.l = 0
+    if method == AGM_ARCSIN {
+        quad_ihypot(*dpk[0], x)
+        gp = one
+        qnum = x.*
+    } else if method == AGM_ARCCOS {
+        dpk[0] = x.*
+        gp = one
+        quad_ihypot(*qnum, x)
+    } else if method == AGM_ARCTAN {
+        dpk[0] = one
+        QuadHypot(*gp, x, *one)
+        qnum = x.*
+    } else {
+        QuadInit(res, NotANumber())
+        return
+    }
+    {
+        n = 1
+        while n < 20 {
+            f: Quad
+            QuadAdd(*dk[0], *dpk[0], *gp)
+            QuadMul(*dk[0], *dk[0], *half)
+            QuadMul(*g, *dk[0], *gp)
+            QuadSqrt(*g, *g)
+            {
+                k = 1
+                while k <= n {
+                    QuadInit(*f, Ldexp(1.0, -2 * k))
+                    QuadMul(*dk[k], *f, *dpk[k - 1])
+                    QuadSub(*dk[k], *dk[k - 1], *dk[k])
+                    QuadInit(*f, 1.0 - Ldexp(1.0, -2 * k))
+                    QuadDiv(*dk[k], *dk[k], *f)
+                    k += 1
+                }
+            }
+            QuadDiv(*qr, *qnum, *dk[n])
+            QuadSub(*qrp, *qrp, *qr)
+            if Fabs(qrp.h) <= Ldexp(Fabs(qr.h), -2 * (53 - 1)) {
+                converged = 1
+                break
+            }
+            qrp = qr
+            gp = g
+            {
+                k = 0
+                while k <= n {
+                    dpk[k] = dk[k]
+                    k += 1
+                }
+            }
+            n += 1
+        }
+    }
+    res.* = qr
+}
+
+#scope_export
+
+QuadAsin :: (res: *Quad, a: *Quad) {
+    aa: Quad
+    aam1: Quad
+    sone: Quad = Quad.{1.0, 0.0}
+    if a.h < 0 {
+        QuadNeg(*aa, a)
+    } else {
+        aa = a.*
+    }
+    QuadSub(*aam1, *aa, *sone)
+    if aam1.h > 0 {
+        QuadInit(res, NotANumber())
+        return
+    }
+    quad_agm_internal(res, AGM_ARCSIN, a)
+}
+
+QuadAcos :: (res: *Quad, a: *Quad) {
+    aa: Quad
+    aam1: Quad
+    sone: Quad = Quad.{1.0, 0.0}
+    if a.h < 0 {
+        QuadNeg(*aa, a)
+    } else {
+        aa = a.*
+    }
+    QuadSub(*aam1, *aa, *sone)
+    if aam1.h > 0 {
+        QuadInit(res, NotANumber())
+        return
+    }
+    quad_agm_internal(res, AGM_ARCCOS, *aa)
+    if a.h < 0 {
+        QuadSub(res, *QUAD_PI, res)
+    }
+}
+
+#scope_file
+
+quad_atan2_special :: (y: *Quad, x: *Quad, f: *float64) -> s32 {
+    dy: float64 = QuadVal(y)
+    dx: float64 = QuadVal(x)
+    if dy == 0 {
+        f.* = cast(float64)(ifx dx >= 0 then 0 else 1)
+        return 1
+    }
+    if dx == 0 {
+        f.* = ifx dy >= 0 then 0.5 else (-0.5)
+        return 1
+    }
+    if Fabs(Fabs(dx) - Fabs(dy)) < 1e-10 {
+        d: Quad
+        QuadSub(*d, x, y)
+        if d.h == 0 {
+            f.* = ifx dy >= 0 then 0.25 else (-0.75)
+            return 1
+        }
+        QuadAdd(*d, x, y)
+        if d.h == 0 {
+            f.* = ifx dy >= 0 then 0.75 else (-0.25)
+            return 1
+        }
+    }
+    return 0
+}
+
+#scope_export
+
+QuadAtan2 :: (res: *Quad, y: *Quad, x: *Quad) {
+    f: float64
+    dy: float64 = QuadVal(y)
+    dx: float64 = QuadVal(x)
+    qr: Quad
+    if quad_atan2_special(y, x, *f) != 0 {
+        qf: Quad
+        QuadInit(*qf, f)
+        QuadMul(res, *qf, *QUAD_PI)
+        return
+    }
+    if Fabs(dx) >= Fabs(dy) {
+        QuadDiv(*qr, y, x)
+        quad_agm_internal(res, AGM_ARCTAN, *qr)
+    } else {
+        qa: Quad
+        QuadDiv(*qr, x, y)
+        quad_agm_internal(res, AGM_ARCTAN, *qr)
+        qa = QUAD_PIHALF
+        if qr.h < 0 {
+            qa.h = -qa.h
+            qa.l = -qa.l
+        }
+        QuadSub(res, *qa, res)
+    }
+    if dx < 0 {
+        if dy > 0 {
+            QuadAdd(res, res, *QUAD_PI)
+        } else {
+            QuadSub(res, res, *QUAD_PI)
+        }
+    }
+}
+
+QuadAtan2pi :: (res: *Quad, y: *Quad, x: *Quad) {
+    f: float64
+    if quad_atan2_special(y, x, *f) != 0 {
+        QuadInit(res, f)
+        return
+    }
+    QuadAtan2(res, y, x)
+    QuadDiv(res, res, *QUAD_PI)
+}
+
+#scope_file
+
+quad_reduce_half :: (res: *Quad, a: *Quad, pk: *s32) {
+    k: s32 = 0
+    qxr: Quad = a.*
+    if a.h < 0 {
+        aa: Quad
+        aa.h = -a.h
+        aa.l = -a.l
+        quad_reduce_half(*qxr, *aa, *k)
+        qxr.h = -qxr.h
+        qxr.l = -qxr.l
+        k = 4 - k
+        if qxr.h <= -0.25 && qxr.l == 0 {
+            qh: Quad = Quad.{0.5, 0.0}
+            QuadAdd(*qxr, *qxr, *qh)
+            k += 3
+        }
+    } else {
+        qdx: Quad
+        QuadInit(*qdx, qxr.h - Fmod(qxr.h, 2))
+        QuadSub(*qxr, *qxr, *qdx)
+        QuadInit(*qdx, qxr.h - Fmod(qxr.h, 2))
+        QuadSub(*qxr, *qxr, *qdx)
+        {
+            qone: Quad = Quad.{1.0, 0.0}
+            qh: Quad = Quad.{0.5, 0.0}
+            if qxr.h >= 1 {
+                QuadSub(*qxr, *qxr, *qone)
+                k += 2
+            }
+            if qxr.h >= 0.5 {
+                QuadSub(*qxr, *qxr, *qh)
+                k += 1
+            }
+            if qxr.h > 0.25 {
+                QuadSub(*qxr, *qxr, *qh)
+                k += 1
+            }
+        }
+    }
+    pk.* = k & 3
+    res.* = qxr
+}
+
+quad_do_sinpi :: (res: *Quad, a: *Quad, k: s32) {
+    qr: Quad
+    one: Quad
+    if a.h == 0 {
+        QuadInit(*qr, cast(float64)(k & 1))
+    } else if a.h == 0.25 && a.l == 0 {
+        QuadInit(*one, 1.0)
+        QuadDiv(*qr, *one, *QUAD_SQRT2)
+    } else {
+        api: Quad
+        QuadMul(*api, a, *QUAD_PI)
+        if (k & 1) != 0 {
+            qn: Quad
+            qd: Quad
+            qq: Quad
+            qabs: Quad
+            if api.h < 0 {
+                QuadNeg(*qabs, *api)
+            } else {
+                qabs = api
+            }
+            QuadInit(*qr, Cos(qabs.h))
+            QuadAcos(*qn, *qr)
+            QuadSub(*qn, *qn, *qabs)
+            quad_ihypot(*qd, *qr)
+            QuadMul(*qq, *qn, *qd)
+            QuadAdd(*qr, *qr, *qq)
+        } else {
+            qn: Quad
+            qd: Quad
+            qq: Quad
+            QuadInit(*qr, Sin(api.h))
+            QuadAsin(*qn, *qr)
+            QuadSub(*qn, *qn, *api)
+            quad_ihypot(*qd, *qr)
+            QuadMul(*qq, *qn, *qd)
+            QuadSub(*qr, *qr, *qq)
+        }
+    }
+    if (k & 2) != 0 {
+        qr.h = 0 - qr.h
+        qr.l = 0 - qr.l
+    }
+    res.* = qr
+}
+
+#scope_export
+
+QuadSinpi :: (res: *Quad, a: *Quad) {
+    k: s32
+    a0: Quad
+    quad_reduce_half(*a0, a, *k)
+    quad_do_sinpi(res, *a0, k)
+}
+
+QuadCospi :: (res: *Quad, a: *Quad) {
+    k: s32
+    a0: Quad
+    quad_reduce_half(*a0, a, *k)
+    quad_do_sinpi(res, *a0, k + 1)
+}
+
+QuadMulmod1 :: (dst: *Quad, qa_: *Quad, b: float64) {
+    qa: Quad = qa_.*
+    qfb: Quad
+    qfa: Quad
+    qp: Quad
+    res: Quad
+    wb: float64
+    wa: float64
+    ea: s32
+    eb: s32
+    de: s32
+    Frexp(QuadVal(*qa), *ea)
+    Frexp(b, *eb)
+    if (ea + eb) <= 0 {
+        QuadInit(*qfb, b)
+        QuadMul(dst, *qfb, *qa)
+        return
+    }
+    de = (ea - eb) / 2
+    if de != 0 {
+        f: float64 = Ldexp(1.0, de)
+        b *= f
+        qa.h /= f
+        qa.l /= f
+    }
+    wb = Round(b)
+    b -= wb
+    QuadInit(*qfb, b)
+    wa = Round(QuadVal(*qa))
+    QuadInit(*qfa, wa)
+    QuadSub(*qfa, *qa, *qfa)
+    QuadMul(*res, *qfa, *qfb)
+    QuadMul12(*qp, wa, b)
+    {
+        d: Quad = qp
+        r0: Quad = Quad.{Round(d.h), 0.0}
+        QuadSub(*qp, *d, *r0)
+    }
+    QuadAdd(*res, *res, *qp)
+    QuadInit(*qp, wb)
+    QuadMul(*qp, *qp, *qfa)
+    {
+        d: Quad = qp
+        r0: Quad = Quad.{Round(d.h), 0.0}
+        QuadSub(*qp, *d, *r0)
+    }
+    QuadAdd(*res, *res, *qp)
+    {
+        d: Quad = res
+        r0: Quad = Quad.{Round(d.h), 0.0}
+        QuadSub(dst, *d, *r0)
+    }
+}

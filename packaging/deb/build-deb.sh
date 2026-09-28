@@ -15,8 +15,8 @@ mkdir -p \
   "$root/usr/share/applications" \
   "$root/usr/share/doc/workbook"
 
-install -m 0755 workbook "$root/usr/bin/workbook"
-install -m 0755 scripts/cell "$root/usr/bin/cell"
+install -m 0755 build/workbook-desktop "$root/usr/bin/workbook"
+install -m 0755 build/cell "$root/usr/bin/cell"
 install -m 0755 scripts/geld "$root/usr/bin/geld"
 install -m 0644 packaging/workbook.desktop "$root/usr/share/applications/workbook.desktop"
 install -m 0644 packaging/geld.desktop "$root/usr/share/applications/geld.desktop"
@@ -32,12 +32,13 @@ Priority: optional
 Architecture: ${arch}
 Maintainer: Waozi <waozi@proton.me>
 Installed-Size: ${installed_size}
-Depends: libc6, libsdl2-2.0-0, libgl1, libgtk-3-0, libssl3, zlib1g, libbrotli1, libzstd1, libasound2, libpulse0, libsamplerate0, libx11-6
+Depends: libc6, libsdl2-2.0-0, libcairo2
 Homepage: https://github.com/kryonlabs/workbook
-Description: Native workbook tracker
- Workbook is a standalone Kry spreadsheet-style workbook. Installed profile
- commands such as geld start specialized workbook profiles with their own data
- directories and automation scripts.
+Description: Spreadsheet editor compatible with Gnumeric
+ Workbook is a native spreadsheet editor written in Ziran with Kryon. It reads
+ and writes Gnumeric and CSV files and evaluates Gnumeric formulas; the cell
+ command does the same without a window. Installed profile commands such as
+ geld start specialized workbook profiles with their own data directories.
 EOF
 
 dpkg-deb --build --root-owner-group "$root" "$deb"

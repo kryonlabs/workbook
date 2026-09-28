@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "packages": [
+    {
+      "commit": "5b67295ae3ef13c5929e346c01f12f33523fc495",
+      "dependencies": {},
+      "id": "paaa5118cf657f56a",
+      "name": "Kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    }
+  ],
+  "root": {
+    "dependencies": {"Kryon": "paaa5118cf657f56a"},
+    "name": "workbook"
+  },
+  "toolchain": {
+    "commit": "5cc0aba97e9bc8fa2d75175a409087270473e4e6",
+    "ref": "master",
+    "url": "https://github.com/ziranlang/ziran.git"
+  }
+}

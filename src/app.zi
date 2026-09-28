@@ -1,0 +1,831 @@
+// Workbook desktop editor: a toolbar, sheet tabs, a formula bar, and the
+// cell grid of the spreadsheet engine.
+using UI :: #import "Widgets";
+Engine :: #import "engine";
+Json :: #import "json_scan";
+#import "byte_text_linux"
+#import "text_buffer"
+
+using ButtonEmphasis;
+using ButtonTone;
+using ControlSize;
+using TabBarPlacement;
+using TextWrap;
+
+#scope_file
+
+libc :: #system_library "libc";
+EnvironmentValue :: (name: *u8) -> *u8 #foreign libc "getenv";
+PathAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
+MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
+FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
+
+MaxRows :: 200;
+MaxColumns :: 40;
+CellTextMax :: 256;
+ColumnWidth :: 110.0;
+RowHeight :: 28.0;
+HeaderHeight :: 30.0;
+RowHeaderWidth :: 52.0;
+TableTop :: 98.0;
+Margin :: 24.0;
+// Distances from the window's bottom edge to the sheet tabs and the grid.
+TabsBottom :: 78.0;
+GridBottom :: 88.0;
+
+// SDL key codes the desktop host reports.
+KeyTab :: 9;
+KeyEnter :: 13;
+KeyEscape :: 27;
+KeyDelete :: 127;
+KeyBackspace :: 8;
+KeyRight :: 0x4000004F;
+KeyLeft :: 0x40000050;
+KeyDown :: 0x40000051;
+KeyUp :: 0x40000052;
+KeyHome :: 0x4000004A;
+KeyEnd :: 0x4000004D;
+KeyA :: 97;
+KeyS :: 115;
+
+workbook: *Engine.Workbook;
+sheet_index: s32 = 0;
+selected_row: s32 = 0;
+selected_column: s32 = 0;
+scroll_row: s32 = 0;
+scroll_column: s32 = 0;
+dirty: bool = false;
+
+// The formula bar edits a NUL-terminated copy of the selected cell's source.
+edit: [256]u8;
+edit_cursor: s32 = 0;
+edit_anchor: s32 = 0;
+edit_scroll: s32 = 0;
+edit_focused: bool = false;
+edit_composition: CompositionState;
+
+data_path: [1024]u8;
+data_directory: [1024]u8;
+status: [256]u8;
+
+#scope_export
+
+#program_export
+Frame :: (session: Session, viewport: Rectangle) -> s32 {
+    if workbook == null {
+        LoadWorkbook()
+        SelectCell(0, 0)
+    }
+    key: s32 = KeyboardTake(session)
+    control: bool = (KeyboardModifiers(session) & KeyModifierControl) != 0
+    typed: [128]u8
+    typed_length: s32 = TakeTypedText(session, typed[:])
+    if control && key == KeyS {
+        SaveWorkbook()
+        key = 0
+    }
+
+    DrawToolbar(session, viewport)
+    DrawSheetTabs(session, viewport)
+    // The field consumes this frame's keys while it is being edited; the
+    // grid takes them otherwise, never both.
+    was_editing: bool = edit_focused
+    DrawFormulaBar(session, viewport, key, control, typed[:], typed_length)
+    if !was_editing {
+        HandleGridKeys(key, typed[:], typed_length)
+    }
+    DrawGrid(session, viewport)
+    DrawStatus(session, viewport)
+    return 0
+}
+
+#scope_file
+
+// -------------------------------------------------------------------- data
+
+LoadWorkbook :: () {
+    workbook = Engine.WorkbookNew()
+    application: string = "workbook"
+    override: *u8 = EnvironmentValue(CPath("WORKBOOK_DIR"))
+    profile: *u8 = EnvironmentValue(CPath("WORKBOOK_PROFILE"))
+    if profile != null && TextFromCString(profile) == "geld" {
+        application = "geld"
+        override = EnvironmentValue(CPath("GELD_DIR"))
+    }
+    if override != null && override[0] != 0 {
+        SetText(data_directory[:], TextFromCString(override))
+        SetText(data_path[:], TextFromCString(override))
+        AppendText(data_path[:], "/workbook.gnumeric")
+    } else if FileExists("workbook.gnumeric") {
+        SetText(data_path[:], "workbook.gnumeric")
+    } else if FileExists("workbook.json") {
+        SetText(data_path[:], "workbook.json")
+    } else {
+        base: *u8 = EnvironmentValue(CPath("XDG_DATA_HOME"))
+        if base != null && base[0] != 0 {
+            SetText(data_directory[:], TextFromCString(base))
+        } else {
+            home: *u8 = EnvironmentValue(CPath("HOME"))
+            if home != null && home[0] != 0 {
+                SetText(data_directory[:], TextFromCString(home))
+            } else {
+                SetText(data_directory[:], ".")
+            }
+            AppendText(data_directory[:], "/.local/share")
+        }
+        AppendText(data_directory[:], "/")
+        AppendText(data_directory[:], application)
+        SetText(data_path[:], TextUntilNul(data_directory[:]))
+        AppendText(data_path[:], "/workbook.gnumeric")
+    }
+    path: string = TextUntilNul(data_path[:])
+    loaded: bool = false
+    if PathAccess(*data_path[0], 0) == 0 {
+        if EndsWith(path, ".json") {
+            Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+            loaded = LoadLegacyJson()
+        } else {
+            loaded = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) != 0
+        }
+    }
+    // A file supplies its own sheets; a new workbook starts with one.
+    if Engine.WorkbookSheetCount(workbook) == 0 {
+        Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+    }
+    if loaded {
+        SetText(status[:], "Loaded ")
+    } else {
+        SetText(status[:], "New workbook ")
+    }
+    AppendText(status[:], FileName(path))
+    dirty = false
+}
+
+SaveWorkbook :: () {
+    path: string = TextUntilNul(data_path[:])
+    if data_directory[0] != 0 {
+        MakeDirectory(*data_directory[0], 493) // rwxr-xr-x
+    }
+    saved: bool = false
+    if EndsWith(path, ".json") {
+        saved = SaveLegacyJson()
+    } else {
+        saved = Engine.WorkbookWriteGnumeric(workbook, cast(*s8)*data_path[0]) != 0
+    }
+    if saved {
+        SetText(status[:], "Saved ")
+        dirty = false
+    } else {
+        SetText(status[:], "Could not save ")
+    }
+    AppendText(status[:], FileName(path))
+}
+
+// The legacy JSON layout stores one object per row with eight named columns.
+LegacyColumn :: (column: s32) -> string {
+    if column == 0 { return "section" }
+    if column == 1 { return "label" }
+    if column == 2 { return "id" }
+    if column == 3 { return "units" }
+    if column == 4 { return "rate" }
+    if column == 5 { return "pct" }
+    if column == 6 { return "usd" }
+    return "dusd"
+}
+
+LoadLegacyJson :: () -> bool {
+    size: s32 = 0
+    bytes: *u8 = Engine.ReadFileBytes(cast(*s8)*data_path[0], *size)
+    if bytes == null { return false }
+    text: string = TextFromBytes(BytesFromPointer(bytes, cast(u64)size))
+    rows: s32 = Json.FieldAt(text, Json.Space(text, 0), "rows")
+    count: s32 = 0
+    if rows >= 0 { count = Json.ArrayCount(text, rows) }
+    row: s32 = 0
+    while row < count {
+        item: s32 = Json.ElementAt(text, rows, row)
+        column: s32 = 0
+        while item >= 0 && column < 8 {
+            value: s32 = Json.FieldAt(text, item, LegacyColumn(column))
+            cell: [256]u8
+            if value >= 0 && text[value] == 34 {
+                span: Json.JsonSpan = Json.ReadString(text, value)
+                if span.valid { DecodeJsonString(text, span, cell[:]) }
+            } else if value >= 0 {
+                number: Json.JsonNumber = Json.ReadNumber(text, value)
+                if number.valid {
+                    FormatBytes(*cell[0], 256, cast(*u8)Engine.CText("%.15g"), number.value)
+                }
+            }
+            if cell[0] != 0 {
+                Engine.WorkbookSetCell(workbook, 0, row, column, cast(*s8)*cell[0])
+            }
+            column += 1
+        }
+        row += 1
+    }
+    Engine.FreeFileBytes(bytes)
+    Engine.WorkbookEvaluate(workbook)
+    return true
+}
+
+SaveLegacyJson :: () -> bool {
+    output: [65536]u8
+    SetText(output[:], "{\"rows\":[")
+    rows: s32 = Engine.WorkbookSheetRows(workbook, 0)
+    row: s32 = 0
+    while row < rows {
+        if row > 0 { AppendText(output[:], ",") }
+        AppendText(output[:], "{")
+        column: s32 = 0
+        while column < 8 {
+            if column > 0 { AppendText(output[:], ",") }
+            AppendJsonString(output[:], LegacyColumn(column))
+            AppendText(output[:], ":")
+            source: string = CellSource(0, row, column)
+            if source.count > 0 && source[0] == 61 {
+                AppendText(output[:], "{\"expr\":")
+                AppendJsonString(output[:], source[1:cast(s32)source.count])
+                AppendText(output[:], "}")
+            } else {
+                AppendJsonString(output[:], source)
+            }
+            column += 1
+        }
+        AppendText(output[:], "}")
+        row += 1
+    }
+    AppendText(output[:], "],\"format\":\"workbook-kry-1\"}\n")
+    if TextUntilNul(output[:]).count + 1 >= output.count { return false }
+    return Engine.WriteFileText(cast(*s8)*data_path[0], cast(*s8)*output[0])
+}
+
+// ------------------------------------------------------------------ editing
+
+CellSource :: (sheet: s32, row: s32, column: s32) -> string {
+    text: *s8 = Engine.WorkbookCellText(workbook, sheet, row, column)
+    if text == null { return "" }
+    return TextFromCString(cast(*u8)text)
+}
+
+SelectCell :: (row: s32, column: s32) {
+    if row < 0 { row = 0 }
+    if column < 0 { column = 0 }
+    if row >= MaxRows { row = MaxRows - 1 }
+    if column >= MaxColumns { column = MaxColumns - 1 }
+    selected_row = row
+    selected_column = column
+    SetText(edit[:], CellSource(sheet_index, row, column))
+    edit_cursor = cast(s32)TextUntilNul(edit[:]).count
+    edit_anchor = edit_cursor
+    edit_scroll = 0
+}
+
+CommitCell :: () {
+    Engine.WorkbookSetCell(workbook, sheet_index, selected_row,
+        selected_column, cast(*s8)*edit[0])
+    Engine.WorkbookEvaluate(workbook)
+    dirty = true
+    SetText(status[:], "Edited ")
+    AppendCellName(status[:], selected_row, selected_column)
+}
+
+ClearCell :: () {
+    edit[0] = 0
+    CommitCell()
+}
+
+HandleGridKeys :: (key: s32, typed: []u8, typed_length: s32) {
+    if key == KeyUp { SelectCell(selected_row - 1, selected_column) }
+    if key == KeyDown { SelectCell(selected_row + 1, selected_column) }
+    if key == KeyLeft { SelectCell(selected_row, selected_column - 1) }
+    if key == KeyRight || key == KeyTab {
+        SelectCell(selected_row, selected_column + 1)
+    }
+    if key == KeyEnter { edit_focused = true }
+    if key == KeyDelete || key == KeyBackspace { ClearCell() }
+    if typed_length > 0 {
+        // Typing over a selected cell starts a new value, as in Gnumeric.
+        edit[0] = 0
+        edit_cursor = 0
+        edit_anchor = 0
+        edit_focused = true
+        ApplyEdit(0, 0, TextView(typed[0:typed_length]))
+    }
+    EnsureVisible()
+}
+
+// Replaces edit bytes [start, end) with replacement, keeping the terminator.
+ApplyEdit :: (start: s32, end: s32, replacement: string) {
+    length: s32 = cast(s32)TextUntilNul(edit[:]).count
+    if start < 0 || end < start || end > length { return }
+    inserted: s32 = cast(s32)replacement.count
+    if length - (end - start) + inserted >= CellTextMax { return }
+    tail: [256]u8
+    tail_length: s32 = length - end
+    index: s32 = 0
+    while index < tail_length {
+        tail[index] = edit[end + index]
+        index += 1
+    }
+    index = 0
+    while index < inserted {
+        edit[start + index] = replacement[index]
+        index += 1
+    }
+    index = 0
+    while index < tail_length {
+        edit[start + inserted + index] = tail[index]
+        index += 1
+    }
+    edit[start + inserted + tail_length] = 0
+    edit_cursor = start + inserted
+    edit_anchor = edit_cursor
+}
+
+// Collects this frame's typed codepoints as UTF-8.
+TakeTypedText :: (session: Session, output: []u8) -> s32 {
+    length: s32 = 0
+    codepoint: s32 = TypedCodepointTake(session)
+    while codepoint != 0 {
+        if length + 4 < cast(s32)output.count {
+            length = AppendUtf8(output, length, codepoint)
+        }
+        codepoint = TypedCodepointTake(session)
+    }
+    return length
+}
+
+AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
+    if codepoint < 0x80 {
+        output[at] = cast(u8)codepoint
+        return at + 1
+    }
+    if codepoint < 0x800 {
+        output[at] = cast(u8)(0xC0 | (codepoint >> 6))
+        output[at + 1] = cast(u8)(0x80 | (codepoint & 0x3F))
+        return at + 2
+    }
+    if codepoint < 0x10000 {
+        output[at] = cast(u8)(0xE0 | (codepoint >> 12))
+        output[at + 1] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
+        output[at + 2] = cast(u8)(0x80 | (codepoint & 0x3F))
+        return at + 3
+    }
+    output[at] = cast(u8)(0xF0 | (codepoint >> 18))
+    output[at + 1] = cast(u8)(0x80 | ((codepoint >> 12) & 0x3F))
+    output[at + 2] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
+    output[at + 3] = cast(u8)(0x80 | (codepoint & 0x3F))
+    return at + 4
+}
+
+// --------------------------------------------------------------------- view
+
+DrawToolbar :: (session: Session, viewport: Rectangle) {
+    title: TextProps
+    title.key = cast(u64)1
+    title.text = "Workbook"
+    title.font = Text24
+    title.bounds = Rectangle.{Margin, 16.0, 120.0, 30.0}
+    Text(session, title)
+    if dirty {
+        marker: TextProps
+        marker.key = cast(u64)2
+        marker.text = "unsaved"
+        marker.font = Text14
+        marker.disabled = true
+        marker.bounds = Rectangle.{150.0, 23.0, 80.0, 20.0}
+        Text(session, marker)
+    }
+    x: float32 = 250.0
+    if ToolbarButton(session, 1001, "Save", 64.0, *x, true) { SaveWorkbook() }
+    if ToolbarButton(session, 1002, "Insert row", 96.0, *x, false) {
+        Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
+        Changed("Row inserted")
+    }
+    if ToolbarButton(session, 1003, "Delete row", 96.0, *x, false) {
+        Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
+        Changed("Row deleted")
+    }
+    if ToolbarButton(session, 1004, "Insert column", 116.0, *x, false) {
+        Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
+        Changed("Column inserted")
+    }
+    if ToolbarButton(session, 1005, "Delete column", 116.0, *x, false) {
+        Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
+        Changed("Column deleted")
+    }
+}
+
+ToolbarButton :: (session: Session, id: s32, label: string, width: float32,
+    x: *float32, primary: bool) -> bool {
+    button: ButtonProps
+    button.id = id
+    button.label = label
+    button.size = cast(ControlSize)ControlSizeSmall
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    if primary {
+        button.tone = cast(ButtonTone)ButtonToneAccent
+    }
+    button.bounds = Rectangle.{x.*, 14.0, width, 32.0}
+    x.* = x.* + width + 8.0
+    return Button(session, button) != 0
+}
+
+Changed :: (message: string) {
+    Engine.WorkbookEvaluate(workbook)
+    dirty = true
+    SetText(status[:], message)
+    SelectCell(selected_row, selected_column)
+}
+
+DrawSheetTabs :: (session: Session, viewport: Rectangle) {
+    count: s32 = Engine.WorkbookSheetCount(workbook)
+    if count < 1 { return }
+    // Sixteen tabs fill the bar; a workbook can hold more sheets than that.
+    if count > 16 { count = 16 }
+    tabs: [16]Tab
+    index: s32 = 0
+    while index < count {
+        tabs[index].key = cast(u64)(1100 + index)
+        tabs[index].label = TextFromCString(cast(*u8)Engine.WorkbookSheetName(workbook, index))
+        index += 1
+    }
+    bar: TabBarProps
+    bar.key = cast(u64)1099
+    bar.placement = cast(TabBarPlacement)TabBarTop
+    bar.selected_index = sheet_index
+    bar.bounds = Rectangle.{Margin, viewport.height - TabsBottom,
+        104.0 * cast(float32)count, 32.0}
+    bar.min_tab_width = 72
+    bar.max_tab_width = 104
+    result: TabBarResult = TabBar(session, bar, tabs[0:count])
+    if result.selected_index != sheet_index && result.selected_index >= 0 {
+        sheet_index = result.selected_index
+        scroll_row = 0
+        scroll_column = 0
+        SelectCell(0, 0)
+    }
+}
+
+DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
+    control: bool, typed: []u8, typed_length: s32) {
+    label: TextProps
+    label.key = cast(u64)3
+    label.text = "fx"
+    label.font = Text16
+    label.disabled = true
+    label.bounds = Rectangle.{Margin, 60.0, 24.0, 20.0}
+    Text(session, label)
+    result: TextFieldResult = RunFormulaField(session, viewport, key, control,
+        typed, typed_length)
+    edit_cursor = result.cursor
+    edit_anchor = result.anchor
+    edit_scroll = result.scroll_x
+    edit_composition = result.composition
+    edit_focused = result.focused
+    if result.edit.changed {
+        ApplyEdit(result.edit.start, result.edit.end, result.edit.replacement)
+        edit_cursor = result.cursor
+        edit_anchor = result.anchor
+    }
+    if result.committed {
+        CommitCell()
+        edit_focused = false
+        SelectCell(selected_row + 1, selected_column)
+        EnsureVisible()
+    }
+    if result.escaped {
+        edit_focused = false
+        SelectCell(selected_row, selected_column)
+    }
+}
+
+// The field's props view the edit buffer and composition state, so they
+// live only for the widget call; the caller then updates that storage.
+RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
+    control: bool, typed: []u8, typed_length: s32) -> TextFieldResult {
+    field: TextFieldProps
+    field.key = cast(u64)4
+    field.bounds = Rectangle.{52.0, 52.0, viewport.width - 52.0 - Margin, 34.0}
+    field.value = TextUntilNul(edit[:])
+    field.label = "Cell value"
+    field.placeholder = "Value or =formula"
+    field.cursor = edit_cursor
+    field.anchor = edit_anchor
+    field.scroll_x = edit_scroll
+    field.focused = edit_focused
+    field.composition = edit_composition
+    field.max_bytes = CellTextMax - 1
+    if edit_focused {
+        field.input.text = TextView(typed[0:typed_length])
+        field.input.left = key == KeyLeft
+        field.input.right = key == KeyRight
+        field.input.home = key == KeyHome
+        field.input.end = key == KeyEnd
+        field.input.backspace = key == KeyBackspace
+        field.input.delete_forward = key == KeyDelete
+        field.input.select_all = control && key == KeyA
+        field.input.commit = key == KeyEnter
+        field.input.escape = key == KeyEscape
+    }
+    return TextField(session, field)
+}
+
+GridRows :: () -> s32 {
+    count: s32 = Engine.WorkbookSheetRows(workbook, sheet_index)
+    if count < 8 { count = 8 }
+    if count < selected_row + 1 { count = selected_row + 1 }
+    if count > MaxRows { count = MaxRows }
+    return count
+}
+
+GridColumns :: () -> s32 {
+    count: s32 = Engine.WorkbookSheetColumns(workbook, sheet_index)
+    if count < 8 { count = 8 }
+    if count < selected_column + 1 { count = selected_column + 1 }
+    if count > MaxColumns { count = MaxColumns }
+    return count
+}
+
+visible_rows: s32 = 16;
+visible_columns: s32 = 8;
+
+// Frames since the last click, and the cell it landed on. The host paces
+// frames at roughly 60 per second, so 24 frames is a little under half a second.
+DoubleClickFrames :: 24;
+frames_since_click: s32 = 1000;
+last_click_row: s32 = -1;
+last_click_column: s32 = -1;
+
+EnsureVisible :: () {
+    if selected_row < scroll_row { scroll_row = selected_row }
+    if selected_row >= scroll_row + visible_rows {
+        scroll_row = selected_row - visible_rows + 1
+    }
+    if selected_column < scroll_column { scroll_column = selected_column }
+    if selected_column >= scroll_column + visible_columns {
+        scroll_column = selected_column - visible_columns + 1
+    }
+}
+
+DrawGrid :: (session: Session, viewport: Rectangle) {
+    table: Rectangle = Rectangle.{Margin, TableTop,
+        viewport.width - Margin * 2.0, viewport.height - TableTop - GridBottom}
+    visible_rows = cast(s32)((table.height - HeaderHeight) / RowHeight)
+    visible_columns = cast(s32)((table.width - RowHeaderWidth) / ColumnWidth)
+    rows: s32 = GridRows()
+    columns: s32 = GridColumns()
+
+    wheel: float32 = PointerWheelTake(session, table)
+    if wheel > 0.0 { scroll_row -= 1 }
+    if wheel < 0.0 { scroll_row += 1 }
+    if scroll_row > rows - visible_rows { scroll_row = rows - visible_rows }
+    if scroll_row < 0 { scroll_row = 0 }
+
+    GridSquare(session, 10, Rectangle.{table.x, table.y, RowHeaderWidth, HeaderHeight},
+        HeaderBackground, "")
+    column: s32 = scroll_column
+    while column < scroll_column + visible_columns && column < columns {
+        name: [8]u8
+        AppendCellColumn(name[:], column)
+        GridSquare(session, 20 + column, Rectangle.{ColumnX(table, column), table.y,
+                ColumnWidth, HeaderHeight}, HeaderBackground, TextUntilNul(name[:]))
+        column += 1
+    }
+    shown: s32 = 0
+    while shown < visible_rows && scroll_row + shown < rows {
+        row: s32 = scroll_row + shown
+        y: float32 = RowY(table, row)
+        number: [16]u8
+        FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
+        GridSquare(session, 100 + row, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
+            HeaderBackground, TextUntilNul(number[:]))
+        column = scroll_column
+        while column < scroll_column + visible_columns && column < columns {
+            display: [256]u8
+            Engine.WorkbookCellDisplay(workbook, sheet_index, row, column,
+                cast(*s8)*display[0], 256)
+            fill: u32 = CellBackground
+            if row == selected_row && column == selected_column { fill = SelectedBackground }
+            GridSquare(session, 1000 + row * 64 + column,
+                Rectangle.{ColumnX(table, column), y, ColumnWidth, RowHeight},
+                fill, TextUntilNul(display[:]))
+            column += 1
+        }
+        shown += 1
+    }
+
+    pointer: PointerFrame = PointerSample(session)
+    body: Rectangle = Rectangle.{table.x + RowHeaderWidth, table.y + HeaderHeight,
+        table.width - RowHeaderWidth, table.height - HeaderHeight}
+    if pointer.released && PointInBounds(pointer.x, pointer.y, body) {
+        row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
+        clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
+        if row < rows && clicked < columns &&
+        clicked < scroll_column + visible_columns {
+            second: bool = frames_since_click < DoubleClickFrames &&
+            row == last_click_row && clicked == last_click_column
+            SelectCell(row, clicked)
+            edit_focused = second
+            frames_since_click = 0
+            last_click_row = row
+            last_click_column = clicked
+        }
+    }
+    if frames_since_click < 1000 { frames_since_click += 1 }
+}
+
+HeaderBackground :: 0xEDF4FCFF;
+CellBackground :: 0xFFFFFFFF;
+SelectedBackground :: 0xDCEBFFFF;
+GridLineColor :: 0xC6D4E3FF;
+
+ColumnX :: (table: Rectangle, column: s32) -> float32 {
+    return table.x + RowHeaderWidth + cast(float32)(column - scroll_column) * ColumnWidth
+}
+
+RowY :: (table: Rectangle, row: s32) -> float32 {
+    return table.y + HeaderHeight + cast(float32)(row - scroll_row) * RowHeight
+}
+
+// One grid square: a bordered box and its clipped text.
+GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: u32, text: string) {
+    box: BoxProps
+    box.key = cast(u64)(100000 + key)
+    box.bounds = bounds
+    box.fill = ColorFromPacked(fill)
+    box.border = ColorFromPacked(GridLineColor)
+    Box(session, box)
+    if text.count == 0 { return }
+    label: TextProps
+    label.key = cast(u64)(200000 + key)
+    label.text = text
+    label.font = Text14
+    label.wrap = cast(TextWrap)TextWrapNone
+    label.bounds = Rectangle.{bounds.x + 6.0, bounds.y + 6.0,
+        bounds.width - 12.0, bounds.height - 8.0}
+    Text(session, label)
+}
+
+DrawStatus :: (session: Session, viewport: Rectangle) {
+    left: TextProps
+    left.key = cast(u64)5
+    left.text = TextUntilNul(status[:])
+    left.font = Text14
+    left.wrap = cast(TextWrap)TextWrapNone
+    left.disabled = true
+    left.bounds = Rectangle.{Margin, viewport.height - 36.0,
+        viewport.width / 2.0 - Margin, 20.0}
+    Text(session, left)
+    hint: TextProps
+    hint.key = cast(u64)6
+    hint.text = "Enter edits · Ctrl+S saves · formulas start with ="
+    hint.font = Text14
+    hint.wrap = cast(TextWrap)TextWrapNone
+    hint.disabled = true
+    hint.bounds = Rectangle.{viewport.width / 2.0, viewport.height - 36.0,
+        viewport.width / 2.0 - Margin, 20.0}
+    Text(session, hint)
+}
+
+// ----------------------------------------------------------------- text
+
+SetText :: (output: []u8, value: string) {
+    output[0] = 0
+    AppendText(output, value)
+}
+
+AppendText :: (output: []u8, value: string) {
+    at: s32 = cast(s32)TextUntilNul(output).count
+    index: s32 = 0
+    while index < cast(s32)value.count && at + 1 < cast(s32)output.count {
+        output[at] = value[index]
+        at += 1
+        index += 1
+    }
+    output[at] = 0
+}
+
+AppendCellColumn :: (output: []u8, column: s32) {
+    letters: [3]u8
+    if column < 26 {
+        letters[0] = cast(u8)(65 + column)
+        AppendText(output, TextView(letters[0:1]))
+        return
+    }
+    letters[0] = cast(u8)(65 + column / 26 - 1)
+    letters[1] = cast(u8)(65 + column % 26)
+    AppendText(output, TextView(letters[0:2]))
+}
+
+AppendCellName :: (output: []u8, row: s32, column: s32) {
+    AppendCellColumn(output, column)
+    number: [16]u8
+    FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
+    AppendText(output, TextUntilNul(number[:]))
+}
+
+AppendJsonString :: (output: []u8, value: string) {
+    AppendText(output, "\"")
+    index: s32 = 0
+    while index < cast(s32)value.count {
+        byte: u8 = value[index]
+        if byte == 34 {
+            AppendText(output, "\\\"")
+        } else if byte == 92 {
+            AppendText(output, "\\\\")
+        } else if byte == 10 {
+            AppendText(output, "\\n")
+        } else if byte == 9 {
+            AppendText(output, "\\t")
+        } else if byte < 32 {
+            escaped: [8]u8
+            FormatBytes(*escaped[0], 8, cast(*u8)Engine.CText("\\u%04x"), cast(s32)byte)
+            AppendText(output, TextUntilNul(escaped[:]))
+        } else {
+            AppendText(output, value[index:index + 1])
+        }
+        index += 1
+    }
+    AppendText(output, "\"")
+}
+
+// Copies a JSON string's contents, decoding its escapes.
+DecodeJsonString :: (text: string, span: Json.JsonSpan, output: []u8) {
+    at: s32 = 0
+    index: s32 = span.start
+    while index < span.end && at + 4 < cast(s32)output.count {
+        byte: u8 = text[index]
+        if byte != 92 || index + 1 >= span.end {
+            output[at] = byte
+            at += 1
+            index += 1
+            continue
+        }
+        escape: u8 = text[index + 1]
+        index += 2
+        if escape == 110 {
+            output[at] = 10
+            at += 1
+        } else if escape == 116 {
+            output[at] = 9
+            at += 1
+        } else if escape == 114 {
+            output[at] = 13
+            at += 1
+        } else if escape == 98 {
+            output[at] = 8
+            at += 1
+        } else if escape == 102 {
+            output[at] = 12
+            at += 1
+        } else if escape == 117 && index + 4 <= span.end {
+            at = AppendUtf8(output, at, HexValue(text, index))
+            index += 4
+        } else {
+            output[at] = escape
+            at += 1
+        }
+    }
+    output[at] = 0
+}
+
+HexValue :: (text: string, at: s32) -> s32 {
+    value: s32 = 0
+    index: s32 = 0
+    while index < 4 {
+        byte: s32 = cast(s32)text[at + index]
+        digit: s32 = 0
+        if byte >= 48 && byte <= 57 { digit = byte - 48 }
+        if byte >= 65 && byte <= 70 { digit = byte - 55 }
+        if byte >= 97 && byte <= 102 { digit = byte - 87 }
+        value = value * 16 + digit
+        index += 1
+    }
+    return value
+}
+
+// The part of a path after its last slash.
+FileName :: (path: string) -> string {
+    at: s32 = cast(s32)path.count
+    while at > 0 && path[at - 1] != 47 {
+        at -= 1
+    }
+    return path[at:cast(s32)path.count]
+}
+
+EndsWith :: (text: string, suffix: string) -> bool {
+    if text.count < suffix.count { return false }
+    start: s32 = cast(s32)(text.count - suffix.count)
+    return text[start:cast(s32)text.count] == suffix
+}
+
+FileExists :: (path: string) -> bool {
+    return PathAccess(CPath(path), 0) == 0
+}
+
+// A NUL-terminated copy of a path or name for libc.
+CPath :: (text: string) -> *u8 {
+    return cast(*u8)Engine.CText(text)
+}

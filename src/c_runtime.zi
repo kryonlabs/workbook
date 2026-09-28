@@ -1,0 +1,382 @@
+// Native services for the spreadsheet engine: memory, C text, number
+// parsing and formatting, the C math library, POSIX regular expressions,
+// local time, and whole-file I/O. The engine keeps text as NUL-terminated
+// bytes (*s8), so these procedures follow C string semantics exactly.
+
+#scope_module
+libc :: #system_library "libc";
+libm :: #system_library "m";
+
+// ------------------------------------------------------------------ memory
+
+MemoryAllocate :: (size: u64) -> *void #foreign libc "malloc";
+MemoryAllocateZeroed :: (count: u64, size: u64) -> *void #foreign libc "calloc";
+MemoryResize :: (block: *void, size: u64) -> *void #foreign libc "realloc";
+MemoryFree :: (block: *void) #foreign libc "free";
+MemoryCopy :: (destination: *void, source: *void, count: u64) -> *void #foreign libc "memcpy";
+MemoryMove :: (destination: *void, source: *void, count: u64) -> *void #foreign libc "memmove";
+MemorySet :: (destination: *void, value: s32, count: u64) -> *void #foreign libc "memset";
+
+// ------------------------------------------------------------------- text
+
+TextLength :: (text: *s8) -> u64 #foreign libc "strlen";
+TextCompare :: (left: *s8, right: *s8) -> s32 #foreign libc "strcmp";
+TextCompareN :: (left: *s8, right: *s8, count: u64) -> s32 #foreign libc "strncmp";
+TextCompareFold :: (left: *s8, right: *s8) -> s32 #foreign libc "strcasecmp";
+TextCompareFoldN :: (left: *s8, right: *s8, count: u64) -> s32 #foreign libc "strncasecmp";
+TextFind :: (haystack: *s8, needle: *s8) -> *s8 #foreign libc "strstr";
+TextFindByte :: (text: *s8, byte: s32) -> *s8 #foreign libc "strchr";
+TextAppend :: (destination: *s8, source: *s8) -> *s8 #foreign libc "strcat";
+FormatText :: (output: *s8, capacity: u64, format: *s8, args: ..any) -> s32 #foreign libc "snprintf";
+ParseDouble :: (text: *s8, end: **s8) -> float64 #foreign libc "strtod";
+ParseLong :: (text: *s8, end: **s8, base: s32) -> s64 #foreign libc "strtol";
+ParseLongLong :: (text: *s8, end: **s8, base: s32) -> s64 #foreign libc "strtoll";
+EnvironmentValue :: (name: *s8) -> *s8 #foreign libc "getenv";
+
+#scope_export
+// Byte classification in the C locale. Values outside ASCII never match.
+IsAlphaByte :: (byte: s32) -> s32 {
+    if byte >= 65 && byte <= 90 { return 1 }
+    if byte >= 97 && byte <= 122 { return 1 }
+    return 0
+}
+
+IsDigitByte :: (byte: s32) -> s32 {
+    if byte >= 48 && byte <= 57 { return 1 }
+    return 0
+}
+
+IsSpaceByte :: (byte: s32) -> s32 {
+    if byte == 32 || (byte >= 9 && byte <= 13) { return 1 }
+    return 0
+}
+
+LowerByte :: (byte: s32) -> s32 {
+    if byte >= 65 && byte <= 90 { return byte + 32 }
+    return byte
+}
+
+UpperByte :: (byte: s32) -> s32 {
+    if byte >= 97 && byte <= 122 { return byte - 32 }
+    return byte
+}
+
+// strcmp against a source literal: the sign of the first differing byte,
+// compared as unsigned values.
+TextCompareLiteral :: (text: *s8, literal: string) -> s32 {
+    return CompareLiteral(text, literal, -1, false)
+}
+
+TextCompareNLiteral :: (text: *s8, literal: string, count: u64) -> s32 {
+    return CompareLiteral(text, literal, cast(s64)count, false)
+}
+
+TextCompareFoldLiteral :: (text: *s8, literal: string) -> s32 {
+    return CompareLiteral(text, literal, -1, true)
+}
+
+TextCompareFoldNLiteral :: (text: *s8, literal: string, count: u64) -> s32 {
+    return CompareLiteral(text, literal, cast(s64)count, true)
+}
+
+// strstr with a source literal needle.
+TextFindLiteral :: (haystack: *s8, needle: string) -> *s8 {
+    if needle.count == 0 { return haystack }
+    start: s64 = 0
+    while haystack[start] != 0 {
+        index: s64 = 0
+        while index < needle.count && cast(u8)haystack[start + index] == needle[index] {
+            index += 1
+        }
+        if index == needle.count { return *haystack[start] }
+        start += 1
+    }
+    return null
+}
+
+// Copies a literal and its terminator into caller-owned storage.
+TextSet :: (output: *s8, literal: string) {
+    index: s64 = 0
+    while index < literal.count {
+        output[index] = cast(s8)literal[index]
+        index += 1
+    }
+    output[literal.count] = 0
+}
+
+// Returns a NUL-terminated copy of a source literal. Each distinct literal
+// is copied once and kept for the life of the program.
+CText :: (literal: string) -> *s8 {
+    hash := LiteralHash(literal)
+    if literal_table_capacity == 0 || (literal_table_count + 1) * 2 > literal_table_capacity {
+        GrowLiteralTable()
+    }
+    mask: u64 = cast(u64)literal_table_capacity - 1
+    slot: u64 = hash & mask
+    while literal_table[slot].text != null {
+        entry: *LiteralEntry = *literal_table[slot]
+        if entry.hash == hash && entry.length == literal.count && SameLiteral(entry.text, literal) {
+            return entry.text
+        }
+        slot = (slot + 1) & mask
+    }
+    copy: *s8 = cast(*s8)MemoryAllocate(cast(u64)literal.count + 1)
+    TextSet(copy, literal)
+    literal_table[slot].text = copy
+    literal_table[slot].length = literal.count
+    literal_table[slot].hash = hash
+    literal_table_count += 1
+    return copy
+}
+
+// ------------------------------------------------------------------- math
+
+#scope_module
+Sqrt :: (x: float64) -> float64 #foreign libm "sqrt";
+Exp :: (x: float64) -> float64 #foreign libm "exp";
+Expm1 :: (x: float64) -> float64 #foreign libm "expm1";
+Log :: (x: float64) -> float64 #foreign libm "log";
+Log10 :: (x: float64) -> float64 #foreign libm "log10";
+Log1p :: (x: float64) -> float64 #foreign libm "log1p";
+Log2 :: (x: float64) -> float64 #foreign libm "log2";
+Pow :: (x: float64, y: float64) -> float64 #foreign libm "pow";
+Floor :: (x: float64) -> float64 #foreign libm "floor";
+Ceil :: (x: float64) -> float64 #foreign libm "ceil";
+Round :: (x: float64) -> float64 #foreign libm "round";
+Rint :: (x: float64) -> float64 #foreign libm "rint";
+Trunc :: (x: float64) -> float64 #foreign libm "trunc";
+Fabs :: (x: float64) -> float64 #foreign libm "fabs";
+Fmod :: (x: float64, y: float64) -> float64 #foreign libm "fmod";
+Fmin :: (x: float64, y: float64) -> float64 #foreign libm "fmin";
+Fmax :: (x: float64, y: float64) -> float64 #foreign libm "fmax";
+Frexp :: (x: float64, exponent: *s32) -> float64 #foreign libm "frexp";
+Ldexp :: (x: float64, exponent: s32) -> float64 #foreign libm "ldexp";
+Modf :: (x: float64, whole: *float64) -> float64 #foreign libm "modf";
+Scalbn :: (x: float64, exponent: s32) -> float64 #foreign libm "scalbn";
+Ilogb :: (x: float64) -> s32 #foreign libm "ilogb";
+Nextafter :: (x: float64, toward: float64) -> float64 #foreign libm "nextafter";
+Copysign :: (x: float64, sign: float64) -> float64 #foreign libm "copysign";
+Hypot :: (x: float64, y: float64) -> float64 #foreign libm "hypot";
+Sin :: (x: float64) -> float64 #foreign libm "sin";
+Cos :: (x: float64) -> float64 #foreign libm "cos";
+Tan :: (x: float64) -> float64 #foreign libm "tan";
+Asin :: (x: float64) -> float64 #foreign libm "asin";
+Acos :: (x: float64) -> float64 #foreign libm "acos";
+Atan :: (x: float64) -> float64 #foreign libm "atan";
+Atan2 :: (y: float64, x: float64) -> float64 #foreign libm "atan2";
+Sinh :: (x: float64) -> float64 #foreign libm "sinh";
+Cosh :: (x: float64) -> float64 #foreign libm "cosh";
+Tanh :: (x: float64) -> float64 #foreign libm "tanh";
+Asinh :: (x: float64) -> float64 #foreign libm "asinh";
+Acosh :: (x: float64) -> float64 #foreign libm "acosh";
+Atanh :: (x: float64) -> float64 #foreign libm "atanh";
+Erf :: (x: float64) -> float64 #foreign libm "erf";
+Erfc :: (x: float64) -> float64 #foreign libm "erfc";
+Lgamma :: (x: float64) -> float64 #foreign libm "lgamma";
+Tgamma :: (x: float64) -> float64 #foreign libm "tgamma";
+Jn :: (order: s32, x: float64) -> float64 #foreign libm "jn";
+Yn :: (order: s32, x: float64) -> float64 #foreign libm "yn";
+
+#scope_export
+IsFinite :: (x: float64) -> s32 {
+    if x - x == 0.0 { return 1 }
+    return 0
+}
+
+IsNan :: (x: float64) -> s32 {
+    if x != x { return 1 }
+    return 0
+}
+
+Infinity :: () -> float64 {
+    return 1.0 / float_zero
+}
+
+NotANumber :: () -> float64 {
+    return float_zero / float_zero
+}
+
+// C's float-to-integer conversions as x86-64 performs them: truncate toward
+// zero, and give the minimum signed value for NaN or a value out of range.
+TruncateToS32 :: (x: float64) -> s32 {
+    if x > -2147483649.0 && x < 2147483648.0 { return cast(s32)x }
+    return -2147483647 - 1
+}
+
+TruncateToS64 :: (x: float64) -> s64 {
+    if x >= -9223372036854775808.0 && x < 9223372036854775808.0 { return cast(s64)x }
+    return -9223372036854775807 - 1
+}
+
+TruncateToU32 :: (x: float64) -> u32 {
+    return cast(u32)(cast(u64)TruncateToS64(x) & 4294967295)
+}
+
+TruncateToU64 :: (x: float64) -> u64 {
+    if x < 9223372036854775808.0 { return cast(u64)TruncateToS64(x) }
+    return cast(u64)TruncateToS64(x - 9223372036854775808.0) ^ 9223372036854775808
+}
+
+// ---------------------------------------------------- regular expressions
+
+// glibc's regex_t is 64 bytes on 64-bit Linux; the engine only passes it
+// to the regex functions.
+RegexPattern :: struct {
+    storage: [8]u64
+}
+
+RegexMatch :: struct {
+    rm_so: s32
+    rm_eo: s32
+}
+
+#scope_module
+RegexCompile :: (pattern: *RegexPattern, text: *s8, flags: s32) -> s32 #foreign libc "regcomp";
+RegexExecute :: (pattern: *RegexPattern, text: *s8, match_count: u64, matches: *RegexMatch, flags: s32) -> s32 #foreign libc "regexec";
+RegexFree :: (pattern: *RegexPattern) #foreign libc "regfree";
+
+// ------------------------------------------------------------------- time
+
+#scope_export
+CalendarTime :: struct {
+    tm_sec: s32
+    tm_min: s32
+    tm_hour: s32
+    tm_mday: s32
+    tm_mon: s32
+    tm_year: s32
+    tm_wday: s32
+    tm_yday: s32
+    tm_isdst: s32
+    tm_gmtoff: s64
+    tm_zone: *s8
+}
+
+#scope_module
+CurrentTime :: (result: *s64) -> s64 #foreign libc "time";
+LocalTime :: (time: *s64) -> *CalendarTime #foreign libc "localtime";
+
+// ------------------------------------------------------------------ files
+
+#scope_export
+// Reads a whole file into newly allocated memory. Returns null when the
+// file cannot be read; release the bytes with FreeFileBytes.
+ReadFileBytes :: (path: *s8, size: *s32) -> *u8 {
+    size.* = 0
+    file: *void = OpenFile(path, CText("rb"))
+    if file == null { return null }
+    if SeekFile(file, 0, 2) != 0 {
+        CloseFile(file)
+        return null
+    }
+    length: s64 = TellFile(file)
+    if length < 0 || SeekFile(file, 0, 0) != 0 {
+        CloseFile(file)
+        return null
+    }
+    data: *u8 = cast(*u8)MemoryAllocate(cast(u64)length + 1)
+    if data == null {
+        CloseFile(file)
+        return null
+    }
+    count: u64 = ReadFile(cast(*void)data, 1, cast(u64)length, file)
+    CloseFile(file)
+    data[count] = 0
+    size.* = cast(s32)count
+    return data
+}
+
+FreeFileBytes :: (data: *u8) {
+    MemoryFree(cast(*void)data)
+}
+
+// Writes NUL-terminated text to a file, replacing its contents.
+WriteFileText :: (path: *s8, text: *s8) -> bool {
+    file: *void = OpenFile(path, CText("wb"))
+    if file == null { return false }
+    length: u64 = TextLength(text)
+    written: u64 = WriteFile(cast(*void)text, 1, length, file)
+    closed: s32 = CloseFile(file)
+    return written == length && closed == 0
+}
+
+#scope_file
+
+OpenFile :: (path: *s8, mode: *s8) -> *void #foreign libc "fopen";
+CloseFile :: (file: *void) -> s32 #foreign libc "fclose";
+SeekFile :: (file: *void, offset: s64, origin: s32) -> s32 #foreign libc "fseek";
+TellFile :: (file: *void) -> s64 #foreign libc "ftell";
+ReadFile :: (output: *void, size: u64, count: u64, file: *void) -> u64 #foreign libc "fread";
+WriteFile :: (input: *void, size: u64, count: u64, file: *void) -> u64 #foreign libc "fwrite";
+
+float_zero: float64 = 0.0;
+
+LiteralEntry :: struct {
+    text: *s8
+    length: s64
+    hash: u64
+}
+
+literal_table: *LiteralEntry;
+literal_table_capacity: s64 = 0;
+literal_table_count: s64 = 0;
+
+LiteralHash :: (literal: string) -> u64 {
+    hash: u64 = 14695981039346656037
+    index: s64 = 0
+    while index < literal.count {
+        hash = (hash ^ cast(u64)literal[index]) * 1099511628211
+        index += 1
+    }
+    return hash
+}
+
+SameLiteral :: (text: *s8, literal: string) -> bool {
+    index: s64 = 0
+    while index < literal.count {
+        if cast(u8)text[index] != literal[index] { return false }
+        index += 1
+    }
+    return true
+}
+
+GrowLiteralTable :: () {
+    old_table: *LiteralEntry = literal_table
+    old_capacity: s64 = literal_table_capacity
+    capacity: s64 = 1024
+    if old_capacity > 0 { capacity = old_capacity * 2 }
+    literal_table = cast(*LiteralEntry)MemoryAllocateZeroed(cast(u64)capacity, cast(u64)size_of(LiteralEntry))
+    literal_table_capacity = capacity
+    mask: u64 = cast(u64)capacity - 1
+    index: s64 = 0
+    while index < old_capacity {
+        entry: *LiteralEntry = *old_table[index]
+        if entry.text != null {
+            slot: u64 = entry.hash & mask
+            while literal_table[slot].text != null {
+                slot = (slot + 1) & mask
+            }
+            literal_table[slot] = entry.*
+        }
+        index += 1
+    }
+    if old_table != null { MemoryFree(cast(*void)old_table) }
+}
+
+// Compares like strcmp or strncmp (limit >= 0), optionally folding ASCII case.
+CompareLiteral :: (text: *s8, literal: string, limit: s64, fold: bool) -> s32 {
+    index: s64 = 0
+    while limit < 0 || index < limit {
+        left: s32 = cast(s32)cast(u8)text[index]
+        right: s32 = 0
+        if index < literal.count { right = cast(s32)literal[index] }
+        if fold {
+            left = LowerByte(left)
+            right = LowerByte(right)
+        }
+        if left != right { return left - right }
+        if left == 0 { return 0 }
+        index += 1
+    }
+    return 0
+}

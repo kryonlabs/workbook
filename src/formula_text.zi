@@ -1,0 +1,194 @@
+FormulaColName :: (col: s32, out: *s8) -> s32 {
+    c: s32 = col + 1
+    n: s32 = 0
+    buf: [8]s8
+    i: s32 = 0
+    while c > 0 {
+        rem: s32 = (c - 1) % 26
+        buf[n] = cast(s8)(65 + rem)
+        n += 1
+        c = (c - 1) / 26
+    }
+    {
+        i = 0
+        while i < n {
+            out[i] = buf[n - 1 - i]
+            i += 1
+        }
+    }
+    out[n] = 0
+    return n
+}
+
+FormulaSheetNameNeedsQuote :: (name: *s8) -> s32 {
+    i: s32 = 1
+    c0: s32 = cast(s32)name[0]
+    if c0 == 0 {
+        return 0
+    }
+    if (c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122) {
+    } else if c0 == 95 || c0 == 46 {
+    } else {
+        return 1
+    }
+    while name[i] != 0 {
+        c: s32 = cast(s32)name[i]
+        if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) {
+        } else if c >= 48 && c <= 57 {
+        } else if c == 46 || c == 95 {
+        } else {
+            return 1
+        }
+        i += 1
+    }
+    return 0
+}
+
+FormulaSheetPrefix :: (name: *s8, out: *s8) -> s32 {
+    n: s32 = 0
+    i: s32 = 0
+    if name[0] == 0 {
+        out[0] = 33
+        out[1] = 0
+        return 1
+    }
+    if FormulaSheetNameNeedsQuote(name) != 0 {
+        out[0] = 39
+        n = 1
+        while name[i] != 0 {
+            if name[i] == 39 && n < 250 {
+                out[n] = 39
+                n += 1
+            }
+            if n < 250 {
+                out[n] = name[i]
+                n += 1
+            }
+            i += 1
+        }
+        out[n] = 39
+        n += 1
+    } else {
+        while name[i] != 0 && n < 250 {
+            out[n] = name[i]
+            n += 1
+            i += 1
+        }
+    }
+    out[n] = 33
+    n += 1
+    out[n] = 0
+    return n
+}
+
+FormulaAddEpsilon :: (x: float64) -> float64 {
+    e: s32 = 0
+    mant: float64
+    if !(IsFinite(x) != 0) || x == 0 {
+        return x
+    }
+    mant = Frexp(Fabs(x), *e)
+    if x < 0 {
+        return -Ldexp(mant - 2.220446049250313e-16 / 2, e)
+    }
+    return Ldexp(mant + 2.220446049250313e-16 / 2, e)
+}
+
+FormulaFakeFloor :: (x: float64) -> float64 {
+    if x == Floor(x) {
+        return x
+    }
+    return Floor(FormulaAddEpsilon(x))
+}
+
+FormulaFakeRound :: (x: float64) -> float64 {
+    y: float64
+    if x == Floor(x) {
+        return x
+    }
+    y = FormulaFakeFloor(Fabs(x) + 0.5)
+    return ifx x < 0 then (-y) else y
+}
+
+#scope_file
+
+eval_error_name :: (i: s32) -> *s8 {
+    if i == 0 {
+        return CText("#DIV/0!")
+    }
+    if i == 1 {
+        return CText("#VALUE!")
+    }
+    if i == 2 {
+        return CText("#REF!")
+    }
+    if i == 3 {
+        return CText("#NAME?")
+    }
+    if i == 4 {
+        return CText("#NUM!")
+    }
+    if i == 5 {
+        return CText("#N/A")
+    }
+    if i == 6 {
+        return CText("#NULL!")
+    }
+    return CText("#CYCLE!")
+}
+
+#scope_export
+
+FormulaScanErrorName :: (text: *s8, pos: *s32) -> s32 {
+    i: s32
+    if text[pos.*] != 35 {
+        return -1
+    }
+    {
+        i = 0
+        while i < 8 {
+            len: s32 = cast(s32)TextLength(eval_error_name(i))
+            if TextCompareN(*text[pos.*], eval_error_name(i), cast(u64)len) == 0 {
+                pos.* += len
+                return i
+            }
+            i += 1
+        }
+    }
+    return -1
+}
+
+FormulaParseStringLiteral :: (text: *s8, pos: *s32, out: *s8, cap: s32) -> s32 {
+    n: s32 = 0
+    if text[pos.*] != 34 {
+        return 0
+    }
+    pos.* += 1
+    while text[pos.*] != 0 {
+        ch: s8 = text[pos.*]
+        if ch == 34 {
+            if text[pos.* + 1] == 34 {
+                if n < (cap - 1) {
+                    out[n] = 34
+                    n += 1
+                }
+                pos.* += 2
+                continue
+            }
+            pos.* += 1
+            out[n] = 0
+            return 1
+        }
+        if ch == 92 && text[pos.* + 1] != 0 {
+            pos.* += 1
+            ch = text[pos.*]
+        }
+        if n < (cap - 1) {
+            out[n] = ch
+            n += 1
+        }
+        pos.* += 1
+    }
+    out[n] = 0
+    return 0
+}

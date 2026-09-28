@@ -102,5 +102,5 @@ Ground truth is the installed Gnumeric itself, never hand-computed:
 2. `ssconvert fixture.gnumeric out.csv` (LC_ALL=C) → expected values.
 3. `cell eval fixture.gnumeric` → workbook's own evaluation as CSV.
 4. `scripts/parity-test.sh` diffs both outputs cell-by-cell.
-5. Round-trip: `cell write` produces a `.gnumeric` that Gnumeric re-reads
-   with identical evaluated values.
+5. Round-trip: `cell copy in out.gnumeric` writes a `.gnumeric` that Gnumeric
+   re-reads with identical evaluated values.

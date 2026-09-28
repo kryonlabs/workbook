@@ -1,0 +1,29 @@
+[package]
+name = "workbook"
+entry = "src/app.zi"
+module_roots = ["src"]
+bridge_modules = ["app"]
+
+[toolchain]
+git = "https://github.com/ziranlang/ziran.git"
+ref = "master"
+
+[dependencies.Kryon]
+git = "https://github.com/kryonlabs/kryon.git"
+ref = "master"
+
+[install]
+tool = "Kryon"
+bin = "workbook"
+
+[tool.Kryon]
+default_profile = "desktop"
+
+[tool.Kryon.profiles.desktop]
+backend = "desktop"
+
+[tool.Kryon.install]
+profile = "desktop"
+name = "Workbook"
+comment = "Spreadsheet editor compatible with Gnumeric"
+categories = "Office;Spreadsheet;"
