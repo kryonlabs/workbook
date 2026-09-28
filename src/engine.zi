@@ -1857,6 +1857,35 @@ WorkbookShiftRefs :: (wb: *Workbook, sheet_index: s32, by_row: s32, at: s32, ins
     }
 }
 
+// Grid numbers show two decimals; a value below 0.01 shows two significant
+// figures so it does not collapse to 0.00. Whole numbers and text are left as
+// they are, and the cell itself keeps its full value.
+RoundForDisplay :: (display: *s8, cap: s32) {
+    value: float64 = 0
+    magnitude: float64 = 0
+    whole: s32 = 1
+    i: s32 = 0
+    if TextLooksNumeric(display) == 0 {
+        return
+    }
+    value = ParseDouble(display, null)
+    while display[i] != 0 {
+        if display[i] == 46 || display[i] == 101 || display[i] == 69 {
+            whole = 0
+        }
+        i += 1
+    }
+    if whole != 0 {
+        return
+    }
+    magnitude = ifx value < 0 then (-value) else value
+    if magnitude >= 0.01 {
+        FormatText(display, cast(u64)cap, CText("%.2f"), value)
+    } else if magnitude > 0 {
+        FormatText(display, cast(u64)cap, CText("%.2g"), value)
+    }
+}
+
 SheetInsertRow :: (sheet: *Sheet, at_row: s32) -> s32 {
     i: s32 = sheet.cell_count - 1
     moved: s32 = 0

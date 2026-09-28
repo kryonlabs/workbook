@@ -161,11 +161,11 @@ DoubleClickCell :: (row: s32, column: s32) {
 }
 
 ToolbarX :: (name: string) -> s32 {
-    if name == "Save" { return 282 }
-    if name == "Insert row" { return 370 }
-    if name == "Delete row" { return 474 }
-    if name == "Insert column" { return 588 }
-    if name == "Delete column" { return 712 }
+    if name == "Save" { return 56 }
+    if name == "Insert row" { return 128 }
+    if name == "Delete row" { return 200 }
+    if name == "Insert column" { return 272 }
+    if name == "Delete column" { return 344 }
     Fail("unknown toolbar button")
     return 0
 }
