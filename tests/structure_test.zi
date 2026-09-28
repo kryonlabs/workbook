@@ -1,0 +1,61 @@
+// Inserting and deleting rows and columns must rewrite formulas the way a
+// spreadsheet does: references follow their cells, and references to deleted
+// cells become #REF!.
+#load "test_support.zi";
+Engine :: #import "engine";
+
+Set :: (workbook: *Engine.Workbook, row: s32, col: s32, text: string) {
+    bytes: [256]u8
+    SetText(bytes[:], text)
+    Engine.WorkbookSetCell(workbook, 0, row, col, cast(*s8)*bytes[0])
+}
+
+Expect :: (workbook: *Engine.Workbook, row: s32, col: s32, expected: string) {
+    actual: *s8 = Engine.WorkbookCellText(workbook, 0, row, col)
+    if Engine.TextCompareLiteral(actual, expected) != 0 {
+        WriteText(2, "expected ")
+        WriteText(2, expected)
+        WriteText(2, " got ")
+        copy: [256]u8
+        at: s32 = 0
+        while at < 255 && actual[at] != 0 {
+            copy[at] = cast(u8)actual[at]
+            at += 1
+        }
+        copy[at] = 0
+        WriteText(2, TextUntilNul(copy[:]))
+        WriteText(2, "\n")
+        Fail("formula was not rewritten")
+    }
+}
+
+#program_export
+main :: () -> s32 {
+    workbook: *Engine.Workbook = Engine.WorkbookNew()
+    Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+    Engine.WorkbookAddSheet(workbook, Engine.CText("Other"))
+
+    // Column E is the sheet's column index 4; rows are zero based.
+    Set(workbook, 4, 0, "10")
+    Set(workbook, 5, 0, "20")
+    Set(workbook, 5, 4, "=A6*2")
+    Set(workbook, 6, 4, "=SUM(A5:A6)+$A$6+LOG10(A6)+\"A6\"")
+    Set(workbook, 7, 4, "=A5")
+    Engine.WorkbookDeleteRow(workbook, 0, 4)
+    Expect(workbook, 4, 4, "=A5*2")
+    Expect(workbook, 5, 4, "=SUM(A5:A5)+$A$5+LOG10(A5)+\"A6\"")
+    Expect(workbook, 6, 4, "=#REF!")
+
+    Engine.WorkbookInsertRow(workbook, 0, 0)
+    Expect(workbook, 5, 4, "=A6*2")
+
+    Set(workbook, 0, 6, "=A6+B6")
+    Engine.WorkbookDeleteColumn(workbook, 0, 0)
+    Expect(workbook, 0, 5, "=#REF!+A6")
+    Engine.WorkbookInsertColumn(workbook, 0, 0)
+    Expect(workbook, 0, 6, "=#REF!+B6")
+
+    Engine.WorkbookFree(workbook)
+    Say("{\"workbook_structure\":\"ok\"}")
+    return 0
+}

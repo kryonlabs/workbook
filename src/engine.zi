@@ -1591,6 +1591,272 @@ EvaluateSheet :: (wb: *Workbook, sheet: *Sheet) {
     MemoryFree(cast(*void)refs)
 }
 
+ShiftEmitChar :: (out: *s8, o: *s32, cap: s32, ch: s8) {
+    if o[0] < cap - 1 {
+        out[o[0]] = ch
+        o[0] += 1
+    }
+}
+
+ShiftEmitSpan :: (out: *s8, o: *s32, cap: s32, text: *s8, from: s32, to: s32) {
+    i: s32 = from
+    while i < to {
+        ShiftEmitChar(out, o, cap, text[i])
+        i += 1
+    }
+}
+
+ShiftEmitNumber :: (out: *s8, o: *s32, cap: s32, value: s32) {
+    buf: [16]s8
+    FormatText(*buf[0], 16, CText("%d"), value)
+    ShiftEmitSpan(out, o, cap, *buf[0], 0, cast(s32)TextLength(*buf[0]))
+}
+
+// One reference corner: the original "$", letters, "$", digits spans, with the
+// shifted axis value substituted. new_col / new_row are -1 when unchanged.
+ShiftEmitCorner :: (out: *s8, o: *s32, cap: s32, text: *s8, dollar_col: s32, letters_end: s32, digits_start: s32, digits_end: s32, new_col: s32, new_row: s32) {
+    letters: [8]s8
+    if new_col >= 0 {
+        ShiftEmitSpan(out, o, cap, text, dollar_col, ifx text[dollar_col] == 36 then dollar_col + 1 else dollar_col)
+        FormulaColName(new_col, *letters[0])
+        ShiftEmitSpan(out, o, cap, *letters[0], 0, cast(s32)TextLength(*letters[0]))
+    } else {
+        ShiftEmitSpan(out, o, cap, text, dollar_col, letters_end)
+    }
+    if new_row >= 0 {
+        dollar_row: s32 = letters_end
+        if text[dollar_row] == 36 {
+            ShiftEmitChar(out, o, cap, 36)
+        }
+        ShiftEmitNumber(out, o, cap, new_row + 1)
+    } else {
+        ShiftEmitSpan(out, o, cap, text, letters_end, digits_end)
+    }
+}
+
+// Excel semantics for one axis value. Returns the new value, or -1 when a
+// single reference points at the deleted line.
+ShiftAxisValue :: (v: s32, at: s32, insert: s32, is_end: s32, single: s32) -> s32 {
+    if insert != 0 {
+        return ifx v >= at then v + 1 else v
+    }
+    if single != 0 && v == at {
+        return -1
+    }
+    if is_end != 0 {
+        return ifx v >= at then v - 1 else v
+    }
+    return ifx v > at then v - 1 else v
+}
+
+// Rewrites every reference in a formula that points into `target` so it keeps
+// following its cells when a row (by_row) or column is inserted or deleted at
+// `at`. Returns a newly allocated string.
+ShiftFormulaRefs :: (wb: *Workbook, home: *Sheet, target: *Sheet, text: *s8, by_row: s32, at: s32, insert: s32) -> *s8 {
+    n: s32 = cast(s32)TextLength(text)
+    cap: s32 = n * 4 + 64
+    out: *s8 = cast(*s8)MemoryAllocate(cast(u64)cap)
+    o: s32 = 0
+    i: s32 = 0
+    if out == null {
+        return wb_strdup(text)
+    }
+    while text[i] != 0 {
+        ch: s32 = cast(s32)text[i]
+        p: s32 = i
+        sheet: *Sheet = home
+        name: [160]s8
+        nl: s32 = 0
+        ok: s32 = 1
+        has_prefix: s32 = 0
+        if ch == 34 {
+            ShiftEmitChar(out, *o, cap, text[i])
+            i += 1
+            while text[i] != 0 {
+                c: s8 = text[i]
+                ShiftEmitChar(out, *o, cap, c)
+                i += 1
+                if c == 34 {
+                    if text[i] == 34 {
+                        ShiftEmitChar(out, *o, cap, text[i])
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+            }
+            continue
+        }
+        if i > 0 && (IdentChar(cast(s32)text[i - 1]) != 0 || text[i - 1] == 36 || text[i - 1] == 33) {
+            ShiftEmitChar(out, *o, cap, text[i])
+            i += 1
+            continue
+        }
+        if ch == 39 {
+            q: s32 = p + 1
+            while text[q] != 0 {
+                if text[q] == 39 {
+                    if text[q + 1] == 39 {
+                        if nl < 159 {
+                            name[nl] = 39
+                            nl += 1
+                        }
+                        q += 2
+                        continue
+                    }
+                    break
+                }
+                if nl < 159 {
+                    name[nl] = text[q]
+                    nl += 1
+                }
+                q += 1
+            }
+            if text[q] == 39 && text[q + 1] == 33 {
+                name[nl] = 0
+                p = q + 2
+                has_prefix = 1
+            } else {
+                ok = 0
+            }
+        } else {
+            q: s32 = p
+            while IdentChar(cast(s32)text[q]) != 0 {
+                q += 1
+            }
+            if q > p && text[q] == 33 && q - p < 160 {
+                MemoryCopy(cast(*void)(*name[0]), cast(*void)(*text[p]), cast(u64)(q - p))
+                name[q - p] = 0
+                p = q + 1
+                has_prefix = 1
+            }
+        }
+        if has_prefix != 0 {
+            sheet = WorkbookFindSheet(wb, *name[0])
+        }
+        ref_start: s32 = p
+        c1_dollar: s32 = p
+        c1_end: s32 = 0
+        r1_start: s32 = 0
+        r1_end: s32 = 0
+        col1: s32 = -1
+        row1: s32 = -1
+        col2: s32 = -1
+        row2: s32 = -1
+        c2_dollar: s32 = 0
+        c2_end: s32 = 0
+        r2_start: s32 = 0
+        r2_end: s32 = 0
+        is_range: s32 = 0
+        if ok != 0 {
+            if text[p] == 36 {
+                p += 1
+            }
+            col1 = ParseColLetters(text, *p)
+            c1_end = p
+            if col1 < 0 {
+                ok = 0
+            } else {
+                if text[p] == 36 {
+                    p += 1
+                }
+                r1_start = p
+                row1 = ParseRowDigits(text, *p)
+                r1_end = p
+                if row1 < 0 {
+                    ok = 0
+                }
+            }
+        }
+        if ok != 0 && text[p] == 58 {
+            look: s32 = p + 1
+            c2_dollar = look
+            if text[look] == 36 {
+                look += 1
+            }
+            col2 = ParseColLetters(text, *look)
+            c2_end = look
+            if col2 >= 0 {
+                if text[look] == 36 {
+                    look += 1
+                }
+                r2_start = look
+                row2 = ParseRowDigits(text, *look)
+                r2_end = look
+                if row2 >= 0 {
+                    is_range = 1
+                    p = look
+                }
+            }
+        }
+        if ok != 0 && (IdentChar(cast(s32)text[p]) != 0 || text[p] == 40) {
+            ok = 0
+        }
+        if ok == 0 {
+            ShiftEmitChar(out, *o, cap, text[i])
+            i += 1
+            continue
+        }
+        if sheet != target || sheet == null {
+            ShiftEmitSpan(out, *o, cap, text, i, p)
+            i = p
+            continue
+        }
+        {
+            a: s32 = ifx by_row != 0 then row1 else col1
+            b: s32 = ifx by_row != 0 then row2 else col2
+            na: s32 = ShiftAxisValue(a, at, insert, 0, ifx is_range != 0 then 0 else 1)
+            nb: s32 = a
+            if is_range != 0 {
+                nb = ShiftAxisValue(b, at, insert, 1, 0)
+                if insert == 0 && a == at && b == at {
+                    na = -1
+                }
+            }
+            ShiftEmitSpan(out, *o, cap, text, i, ref_start)
+            if na < 0 {
+                ShiftEmitSpan(out, *o, cap, CText("#REF!"), 0, 5)
+            } else {
+                ShiftEmitCorner(out, *o, cap, text, ref_start, c1_end, r1_start, r1_end, ifx by_row != 0 then -1 else na, ifx by_row != 0 then na else -1)
+                if is_range != 0 {
+                    ShiftEmitChar(out, *o, cap, 58)
+                    ShiftEmitCorner(out, *o, cap, text, c2_dollar, c2_end, r2_start, r2_end, ifx by_row != 0 then -1 else nb, ifx by_row != 0 then nb else -1)
+                }
+            }
+        }
+        i = p
+    }
+    out[o] = 0
+    return out
+}
+
+// Applies ShiftFormulaRefs to every formula in the workbook.
+WorkbookShiftRefs :: (wb: *Workbook, sheet_index: s32, by_row: s32, at: s32, insert: s32) {
+    target: *Sheet = *wb.sheets[sheet_index]
+    s: s32 = 0
+    while s < wb.sheet_count {
+        sheet: *Sheet = *wb.sheets[s]
+        i: s32 = 0
+        while i < sheet.cell_count {
+            cell: *Cell = *sheet.cells[i]
+            if cell.text != null && cell.text[0] == 61 {
+                rewritten: *s8 = ShiftFormulaRefs(wb, sheet, target, cell.text, by_row, at, insert)
+                if TextCompare(rewritten, cell.text) != 0 {
+                    MemoryFree(cast(*void)cell.text)
+                    cell.text = rewritten
+                    MemoryFree(cast(*void)cell.serialized)
+                    cell.serialized = null
+                    ClassifyCell(cell)
+                } else {
+                    MemoryFree(cast(*void)rewritten)
+                }
+            }
+            i += 1
+        }
+        s += 1
+    }
+}
+
 SheetInsertRow :: (sheet: *Sheet, at_row: s32) -> s32 {
     i: s32 = sheet.cell_count - 1
     moved: s32 = 0
@@ -1689,6 +1955,7 @@ WorkbookInsertRow :: (wb: *Workbook, sheet_index: s32, row: s32) -> s32 {
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
+    WorkbookShiftRefs(wb, sheet_index, 1, row, 1)
     return SheetInsertRow(*wb.sheets[sheet_index], row)
 }
 
@@ -1696,6 +1963,7 @@ WorkbookDeleteRow :: (wb: *Workbook, sheet_index: s32, row: s32) -> s32 {
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
+    WorkbookShiftRefs(wb, sheet_index, 1, row, 0)
     return SheetDeleteRow(*wb.sheets[sheet_index], row)
 }
 
@@ -1703,6 +1971,7 @@ WorkbookInsertColumn :: (wb: *Workbook, sheet_index: s32, col: s32) -> s32 {
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
+    WorkbookShiftRefs(wb, sheet_index, 0, col, 1)
     return SheetInsertColumn(*wb.sheets[sheet_index], col)
 }
 
@@ -1710,6 +1979,7 @@ WorkbookDeleteColumn :: (wb: *Workbook, sheet_index: s32, col: s32) -> s32 {
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
+    WorkbookShiftRefs(wb, sheet_index, 0, col, 0)
     return SheetDeleteColumn(*wb.sheets[sheet_index], col)
 }
 
