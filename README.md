@@ -33,7 +33,7 @@ development packages installed.
     make cell         # build only the headless engine driver
     make check        # type-check the application, the driver, and the tests
     make run          # open the editor
-    make test         # source audit, desktop test on a private display, gnumeric parity
+    make test         # source audit, structure and conversion tests, desktop test on a private display, gnumeric parity
     make test-ci      # the same without parity, which is what CI runs
     make parity       # 1:1 evaluation tests against the installed gnumeric
     make install      # install workbook, cell, and geld under ~/.local

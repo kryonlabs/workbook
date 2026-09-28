@@ -198,8 +198,11 @@ NotANumber :: () -> float64 {
 
 // C's float-to-integer conversions as x86-64 performs them: truncate toward
 // zero, and give the minimum signed value for NaN or a value out of range.
+// A value just below -2^31 truncates to one that fits, but Ziran checks the
+// float itself against the type's range, so the 32-bit conversion goes
+// through the 64-bit one.
 TruncateToS32 :: (x: float64) -> s32 {
-    if x > -2147483649.0 && x < 2147483648.0 { return cast(s32)x }
+    if x > -2147483649.0 && x < 2147483648.0 { return cast(s32)TruncateToS64(x) }
     return -2147483647 - 1
 }
 
@@ -212,8 +215,11 @@ TruncateToU32 :: (x: float64) -> u32 {
     return cast(u32)(cast(u64)TruncateToS64(x) & 4294967295)
 }
 
+// Like the compiler's sequence for a double to a 64-bit unsigned integer:
+// values below 2^63 convert as signed; the rest are shifted down first. NaN
+// fails the comparison, so it takes the signed path and becomes 2^63.
 TruncateToU64 :: (x: float64) -> u64 {
-    if x < 9223372036854775808.0 { return cast(u64)TruncateToS64(x) }
+    if !(x >= 9223372036854775808.0) { return cast(u64)TruncateToS64(x) }
     return cast(u64)TruncateToS64(x - 9223372036854775808.0) ^ 9223372036854775808
 }
 
