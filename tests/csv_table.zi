@@ -1,0 +1,222 @@
+// Two CSV tables held in global storage, with a parser and a cell-by-cell
+// comparison that treats a missing cell as an empty one. A test parses two
+// texts into tables 0 and 1 and compares them. Loaded after test_support.zi.
+
+CsvCell :: struct {
+    start: s32
+    length: s32
+}
+
+CsvTable :: struct {
+    text: [262144]u8
+    text_length: s32
+    cells: [16384]CsvCell
+    cell_count: s32
+    first_cell: [2049]s32
+    row_count: s32
+}
+
+csv_tables: [2]CsvTable;
+
+// Parses CSV text (quoted fields, doubled quotes, CR or LF line ends) into a
+// table. A blank line is a row with no cells. Returns false when the text
+// does not fit.
+ParseCsv :: (which: s32, text: string) -> bool {
+    table: *CsvTable = *csv_tables[which]
+    table.text_length = 0
+    table.cell_count = 0
+    table.row_count = 0
+    at: s32 = 0
+    length: s32 = cast(s32)text.count
+    while at < length {
+        if table.row_count >= 2048 { return false }
+        table.first_cell[table.row_count] = table.cell_count
+        if text[at] == 10 || text[at] == 13 {
+            at = SkipLineEnd(text, at)
+            table.row_count += 1
+            continue
+        }
+        while true {
+            if table.cell_count >= 16384 { return false }
+            start: s32 = table.text_length
+            if at < length && text[at] == 34 {
+                at += 1
+                while at < length {
+                    if text[at] == 34 {
+                        if at + 1 < length && text[at + 1] == 34 {
+                            if !AppendCsvByte(table, 34) { return false }
+                            at += 2
+                            continue
+                        }
+                        at += 1
+                        break
+                    }
+                    if !AppendCsvByte(table, text[at]) { return false }
+                    at += 1
+                }
+            }
+            while at < length && text[at] != 44 && text[at] != 10 && text[at] != 13 {
+                if !AppendCsvByte(table, text[at]) { return false }
+                at += 1
+            }
+            table.cells[table.cell_count].start = start
+            table.cells[table.cell_count].length = table.text_length - start
+            table.cell_count += 1
+            if at < length && text[at] == 44 {
+                at += 1
+                continue
+            }
+            break
+        }
+        at = SkipLineEnd(text, at)
+        table.row_count += 1
+    }
+    table.first_cell[table.row_count] = table.cell_count
+    return true
+}
+
+AppendCsvByte :: (table: *CsvTable, byte: u8) -> bool {
+    if table.text_length >= 262144 { return false }
+    table.text[table.text_length] = byte
+    table.text_length += 1
+    return true
+}
+
+// The position after a line end (LF, CR, or CRLF) at `at`, or `at` itself
+// when there is none.
+SkipLineEnd :: (text: string, at: s32) -> s32 {
+    length: s32 = cast(s32)text.count
+    if at >= length { return at }
+    if text[at] == 13 {
+        if at + 1 < length && text[at + 1] == 10 { return at + 2 }
+        return at + 1
+    }
+    if text[at] == 10 { return at + 1 }
+    return at
+}
+
+CsvRowWidth :: (which: s32, row: s32) -> s32 {
+    return csv_tables[which].first_cell[row + 1] - csv_tables[which].first_cell[row]
+}
+
+// The text of one cell, or "" past the end of the row.
+CsvCellText :: (which: s32, row: s32, column: s32) -> string {
+    if row >= csv_tables[which].row_count || column >= CsvRowWidth(which, row) {
+        return ""
+    }
+    cell: s32 = csv_tables[which].first_cell[row] + column
+    start: s32 = csv_tables[which].cells[cell].start
+    return TextView(csv_tables[which].text[start:start + csv_tables[which].cells[cell].length])
+}
+
+// Rows after the last one that holds any text.
+CsvUsedRows :: (which: s32) -> s32 {
+    rows: s32 = csv_tables[which].row_count
+    while rows > 0 {
+        empty: bool = true
+        column: s32 = 0
+        while column < CsvRowWidth(which, rows - 1) {
+            if CsvCellText(which, rows - 1, column).count > 0 { empty = false }
+            column += 1
+        }
+        if !empty { break }
+        rows -= 1
+    }
+    return rows
+}
+
+// Columns up to the last one that holds text in any row.
+CsvUsedColumns :: (which: s32) -> s32 {
+    width: s32 = 0
+    row: s32 = 0
+    while row < csv_tables[which].row_count {
+        column: s32 = CsvRowWidth(which, row)
+        while column > 0 && CsvCellText(which, row, column - 1).count == 0 {
+            column -= 1
+        }
+        if column > width { width = column }
+        row += 1
+    }
+    return width
+}
+
+// Counts the cells where tables 0 and 1 differ and, when report is set,
+// prints up to ten of them under the given names. With prefix_rows above zero
+// only that many leading rows are compared and table 1 may have fewer rows
+// than table 0; otherwise the used rows and columns must match exactly, and a
+// mismatch in their number counts as a difference.
+DiffCsv :: (prefix_rows: s32, left_name: string, right_name: string, report: bool) -> s32 {
+    rows: s32 = CsvUsedRows(0)
+    other_rows: s32 = CsvUsedRows(1)
+    width: s32 = CsvUsedColumns(0)
+    other_width: s32 = CsvUsedColumns(1)
+    if prefix_rows > 0 {
+        rows = prefix_rows
+        other_rows = prefix_rows
+        if width < other_width { width = other_width }
+        other_width = width
+    }
+    differences: s32 = 0
+    if rows != other_rows || width != other_width {
+        differences += 1
+        if report {
+            line: [256]u8
+            SetText(line[:], "  ")
+            AppendText(line[:], left_name)
+            AppendText(line[:], " has ")
+            AppendNumber(line[:], rows)
+            AppendText(line[:], " rows and ")
+            AppendNumber(line[:], width)
+            AppendText(line[:], " columns; ")
+            AppendText(line[:], right_name)
+            AppendText(line[:], " has ")
+            AppendNumber(line[:], other_rows)
+            AppendText(line[:], " and ")
+            AppendNumber(line[:], other_width)
+            Say(TextUntilNul(line[:]))
+        }
+    }
+    if other_rows > rows { rows = other_rows }
+    if other_width > width { width = other_width }
+    row: s32 = 0
+    while row < rows {
+        column: s32 = 0
+        while column < width {
+            left: string = CsvCellText(0, row, column)
+            right: string = CsvCellText(1, row, column)
+            if left != right {
+                differences += 1
+                if report && differences <= 10 {
+                    line: [1024]u8
+                    SetText(line[:], "  row ")
+                    AppendNumber(line[:], row + 1)
+                    AppendText(line[:], " column ")
+                    AppendNumber(line[:], column + 1)
+                    AppendText(line[:], ": ")
+                    AppendText(line[:], left_name)
+                    AppendText(line[:], " \"")
+                    AppendText(line[:], left)
+                    AppendText(line[:], "\", ")
+                    AppendText(line[:], right_name)
+                    AppendText(line[:], " \"")
+                    AppendText(line[:], right)
+                    AppendText(line[:], "\"")
+                    Say(TextUntilNul(line[:]))
+                }
+            }
+            column += 1
+        }
+        row += 1
+    }
+    return differences
+}
+
+// Compares tables 0 and 1 (see DiffCsv). When they differ it prints the
+// heading, then the differences. Returns whether they match.
+CompareCsv :: (prefix_rows: s32, left_name: string, right_name: string,
+    heading: string) -> bool {
+    if DiffCsv(prefix_rows, left_name, right_name, false) == 0 { return true }
+    if heading.count > 0 { Say(heading) }
+    DiffCsv(prefix_rows, left_name, right_name, true)
+    return false
+}

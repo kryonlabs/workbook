@@ -1,0 +1,436 @@
+// Shared helpers for Workbook's test programs: output, environment, files,
+// directories, and child processes over the C library. Each test program
+// loads this file into its own module.
+#import "byte_text_linux"
+#import "c_string"
+#import "process_capture_linux"
+#import "text_buffer"
+
+#scope_module
+
+libc :: #system_library "libc";
+RawMalloc :: (size: u64) -> *void #foreign libc "malloc";
+RawFree :: (block: *void) #foreign libc "free";
+RawFork :: () -> s32 #foreign libc "fork";
+RawExecvp :: (file: *u8, arguments: *PointerSlot) -> s32 #foreign libc "execvp";
+RawExit :: (status: s32) #foreign libc "_exit";
+RawWaitPid :: (pid: s32, status: *s32, options: s32) -> s32 #foreign libc "waitpid";
+RawKill :: (pid: s32, signal: s32) -> s32 #foreign libc "kill";
+RawSleep :: (microseconds: u32) -> s32 #foreign libc "usleep";
+RawSetenv :: (name: *u8, value: *u8, overwrite: s32) -> s32 #foreign libc "setenv";
+RawUnsetenv :: (name: *u8) -> s32 #foreign libc "unsetenv";
+RawGetenv :: (name: *u8) -> *u8 #foreign libc "getenv";
+RawOpen :: (path: *u8, flags: s32, mode: ..any) -> s32 #foreign libc "open";
+RawClose :: (descriptor: s32) -> s32 #foreign libc "close";
+RawRead :: (descriptor: s32, output: *u8, count: u64) -> s64 #foreign libc "read";
+RawWrite :: (descriptor: s32, input: *u8, count: u64) -> s64 #foreign libc "write";
+RawDup2 :: (source: s32, destination: s32) -> s32 #foreign libc "dup2";
+RawAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
+RawMakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
+RawMakeTemporaryDirectory :: (template: *u8) -> *u8 #foreign libc "mkdtemp";
+RawRemoveDirectory :: (path: *u8) -> s32 #foreign libc "rmdir";
+RawUnlink :: (path: *u8) -> s32 #foreign libc "unlink";
+RawOpenDirectory :: (path: *u8) -> *void #foreign libc "opendir";
+RawReadDirectory :: (directory: *void) -> *u8 #foreign libc "readdir";
+RawCloseDirectory :: (directory: *void) -> s32 #foreign libc "closedir";
+
+PointerSlot :: struct {
+    value: *u8
+}
+
+ArgumentBytes :: struct {
+    bytes: [1024]u8
+}
+
+#scope_export
+
+// ------------------------------------------------------------------ output
+
+// Writes all of text to a file descriptor. It goes out through a local
+// buffer because a string's bytes are read-only and have no address. Returns
+// the number of bytes that reached the descriptor.
+WriteBytes :: (descriptor: s32, text: string) -> s64 {
+    chunk: [512]u8
+    total: s64 = 0
+    at: s32 = 0
+    while at < cast(s32)text.count {
+        count: s32 = cast(s32)text.count - at
+        if count > 512 { count = 512 }
+        index: s32 = 0
+        while index < count {
+            chunk[index] = text[at + index]
+            index += 1
+        }
+        written: s64 = RawWrite(descriptor, *chunk[0], cast(u64)count)
+        if written <= 0 { break }
+        total += written
+        at += count
+    }
+    return total
+}
+
+WriteText :: (descriptor: s32, text: string) {
+    WriteBytes(descriptor, text)
+}
+
+Say :: (text: string) {
+    WriteText(1, text)
+    WriteText(1, "\n")
+}
+
+// Prints a prefix followed by a label on one line.
+SayWith :: (prefix: string, label: string) {
+    line: [1024]u8
+    SetText(line[:], prefix)
+    AppendText(line[:], label)
+    Say(TextUntilNul(line[:]))
+}
+
+// What Fail cleans up before it stops the program: a running child and a
+// scratch directory, when the test registered them.
+cleanup_pid: s32 = 0;
+cleanup_directory: [4096]u8;
+
+// Reports a failed check, cleans up, and stops the program with status 1.
+Fail :: (message: string) {
+    WriteText(2, "FAIL: ")
+    WriteText(2, message)
+    WriteText(2, "\n")
+    if cleanup_pid > 0 {
+        RawKill(cleanup_pid, 9)
+        status: s32 = 0
+        RawWaitPid(cleanup_pid, *status, 0)
+    }
+    if cleanup_directory[0] != 0 {
+        RemoveTree(TextUntilNul(cleanup_directory[:]))
+    }
+    RawExit(1)
+}
+
+Check :: (condition: bool, message: string) {
+    if !condition { Fail(message) }
+}
+
+// ------------------------------------------------------------------- text
+
+SetText :: (output: []u8, value: string) {
+    output[0] = 0
+    AppendText(output, value)
+}
+
+AppendText :: (output: []u8, value: string) {
+    at: s32 = cast(s32)TextUntilNul(output).count
+    index: s32 = 0
+    while index < cast(s32)value.count && at + 1 < cast(s32)output.count {
+        output[at] = value[index]
+        at += 1
+        index += 1
+    }
+    output[at] = 0
+}
+
+AppendNumber :: (output: []u8, value: s32) {
+    digits: [16]u8
+    at: s32 = 15
+    digits[at] = 0
+    magnitude: s64 = cast(s64)value
+    if magnitude < 0 { magnitude = -magnitude }
+    while true {
+        at -= 1
+        digits[at] = cast(u8)(48 + magnitude % 10)
+        magnitude = magnitude / 10
+        if magnitude == 0 { break }
+    }
+    if value < 0 {
+        at -= 1
+        digits[at] = 45
+    }
+    AppendText(output, TextView(digits[at:15]))
+}
+
+// Whether a sorts before b, comparing bytes.
+TextBefore :: (a: string, b: string) -> bool {
+    index: s32 = 0
+    while index < cast(s32)a.count && index < cast(s32)b.count {
+        if a[index] != b[index] { return a[index] < b[index] }
+        index += 1
+    }
+    return a.count < b.count
+}
+
+StartsWith :: (text: string, prefix: string) -> bool {
+    if text.count < prefix.count { return false }
+    return text[0:cast(s32)prefix.count] == prefix
+}
+
+EndsWith :: (text: string, suffix: string) -> bool {
+    if text.count < suffix.count { return false }
+    start: s32 = cast(s32)(text.count - suffix.count)
+    return text[start:cast(s32)text.count] == suffix
+}
+
+// -------------------------------------------------------------- environment
+
+// Borrows the value of an environment variable, or "" when it is unset.
+Environment :: (name: string) -> string {
+    key: [256]u8
+    if !CopyCString(name, key[:]) { return "" }
+    value: *u8 = RawGetenv(*key[0])
+    if value == null { return "" }
+    return TextFromCString(value)
+}
+
+SetEnvironment :: (name: string, value: string) {
+    key: [256]u8
+    contents: [4096]u8
+    Check(CopyCString(name, key[:]) && CopyCString(value, contents[:]),
+        "environment value is too long")
+    RawSetenv(*key[0], *contents[0], 1)
+}
+
+UnsetEnvironment :: (name: string) {
+    key: [256]u8
+    if CopyCString(name, key[:]) { RawUnsetenv(*key[0]) }
+}
+
+// ------------------------------------------------------------------- files
+
+PathExists :: (path: string) -> bool {
+    bytes: [4096]u8
+    if !CopyCString(path, bytes[:]) { return false }
+    return RawAccess(*bytes[0], 0) == 0
+}
+
+// Whether a file can be run: it exists and is executable.
+IsExecutable :: (path: string) -> bool {
+    bytes: [4096]u8
+    if !CopyCString(path, bytes[:]) { return false }
+    return RawAccess(*bytes[0], 1) == 0
+}
+
+// Whether a program can be found and run through the PATH.
+OnPath :: (name: string) -> bool {
+    path: string = Environment("PATH")
+    start: s32 = 0
+    while start <= cast(s32)path.count {
+        end: s32 = start
+        while end < cast(s32)path.count && path[end] != 58 { end += 1 }
+        candidate: [4096]u8
+        if end == start {
+            SetText(candidate[:], ".")
+        } else {
+            SetText(candidate[:], path[start:end])
+        }
+        AppendText(candidate[:], "/")
+        AppendText(candidate[:], name)
+        if IsExecutable(TextUntilNul(candidate[:])) { return true }
+        start = end + 1
+    }
+    return false
+}
+
+// Reads a whole file into output and returns its length, or -1.
+ReadWholeFile :: (path: string, output: []u8) -> s32 {
+    bytes: [4096]u8
+    if !CopyCString(path, bytes[:]) { return -1 }
+    descriptor: s32 = RawOpen(*bytes[0], 0)
+    if descriptor < 0 { return -1 }
+    length: s32 = 0
+    while length < cast(s32)output.count {
+        count: s64 = RawRead(descriptor, *output[length],
+            cast(u64)(cast(s32)output.count - length))
+        if count <= 0 { break }
+        length += cast(s32)count
+    }
+    RawClose(descriptor)
+    return length
+}
+
+// Replaces a file's contents. Returns false when it cannot be written.
+WriteWholeFile :: (path: string, text: string) -> bool {
+    bytes: [4096]u8
+    if !CopyCString(path, bytes[:]) { return false }
+    // O_WRONLY | O_CREAT | O_TRUNC, mode 0644
+    descriptor: s32 = RawOpen(*bytes[0], 577, cast(s32)420)
+    if descriptor < 0 { return false }
+    written: s64 = WriteBytes(descriptor, text)
+    RawClose(descriptor)
+    return written == cast(s64)text.count
+}
+
+RemoveFile :: (path: string) -> bool {
+    bytes: [4096]u8
+    if !CopyCString(path, bytes[:]) { return false }
+    return RawUnlink(*bytes[0]) == 0
+}
+
+// ------------------------------------------------------------- directories
+
+// Creates a directory (mode 0755). Returns false when it cannot.
+MakeDirectory :: (path: string) -> bool {
+    bytes: [4096]u8
+    if !CopyCString(path, bytes[:]) { return false }
+    return RawMakeDirectory(*bytes[0], 493) == 0
+}
+
+// Creates a private directory from a template ending in XXXXXX and returns
+// its path, which lives in the template's storage.
+MakeTemporaryDirectory :: (template: []u8) -> string {
+    if RawMakeTemporaryDirectory(*template[0]) == null { return "" }
+    return TextUntilNul(template)
+}
+
+NameBytes :: struct {
+    bytes: [256]u8
+}
+
+DirectoryEntries :: struct {
+    names: [256]NameBytes
+    is_directory: [256]bool
+    count: s32
+}
+
+// The names in a directory, sorted, without "." and "..". Returns false when
+// it cannot be opened.
+ListDirectory :: (path: string, entries: *DirectoryEntries) -> bool {
+    bytes: [4096]u8
+    entries.count = 0
+    if !CopyCString(path, bytes[:]) { return false }
+    directory: *void = RawOpenDirectory(*bytes[0])
+    if directory == null { return false }
+    while true {
+        entry: *u8 = RawReadDirectory(directory)
+        if entry == null { break }
+        // struct dirent on Linux: d_type is byte 18 and d_name starts at 19.
+        name: string = TextFromCString(*entry[19])
+        if name == "." || name == ".." { continue }
+        if entries.count >= 256 || name.count >= 255 { continue }
+        SetText(entries.names[entries.count].bytes[:], name)
+        entries.is_directory[entries.count] = entry[18] == 4
+        entries.count += 1
+    }
+    RawCloseDirectory(directory)
+    SortEntries(entries)
+    return true
+}
+
+SortEntries :: (entries: *DirectoryEntries) {
+    outer: s32 = 1
+    while outer < entries.count {
+        inner: s32 = outer
+        while inner > 0 && TextBefore(TextUntilNul(entries.names[inner].bytes[:]),
+            TextUntilNul(entries.names[inner - 1].bytes[:])) {
+            swap_name: NameBytes = entries.names[inner]
+            entries.names[inner] = entries.names[inner - 1]
+            entries.names[inner - 1] = swap_name
+            swap_kind: bool = entries.is_directory[inner]
+            entries.is_directory[inner] = entries.is_directory[inner - 1]
+            entries.is_directory[inner - 1] = swap_kind
+            inner -= 1
+        }
+        outer += 1
+    }
+}
+
+// Deletes a directory and everything under it. Symbolic links are removed,
+// never followed.
+RemoveTree :: (path: string) {
+    entries: DirectoryEntries
+    if !ListDirectory(path, *entries) { return }
+    index: s32 = 0
+    while index < entries.count {
+        child: [4096]u8
+        SetText(child[:], path)
+        AppendText(child[:], "/")
+        AppendText(child[:], TextUntilNul(entries.names[index].bytes[:]))
+        if entries.is_directory[index] {
+            RemoveTree(TextUntilNul(child[:]))
+        } else {
+            RemoveFile(TextUntilNul(child[:]))
+        }
+        index += 1
+    }
+    bytes: [4096]u8
+    if CopyCString(path, bytes[:]) { RawRemoveDirectory(*bytes[0]) }
+}
+
+// --------------------------------------------------------------- processes
+
+SleepMilliseconds :: (milliseconds: s32) {
+    RawSleep(cast(u32)milliseconds * 1000)
+}
+
+// Runs a program to completion and returns its exit status; anything it
+// writes to standard output is copied into output.
+Run :: (arguments: []string, output: []u8) -> CaptureResult {
+    return CaptureOutput(arguments, output)
+}
+
+// Starts a program and returns its process id. Its standard output and error
+// go to the log file; standard input is left alone.
+Spawn :: (arguments: []string, log_path: string) -> s32 {
+    bytes: [16]ArgumentBytes
+    pointers: [17]PointerSlot
+    log: [4096]u8
+    Check(arguments.count > 0 && arguments.count <= 16, "too many arguments")
+    Check(CopyCString(log_path, log[:]), "log path is too long")
+    index: s32 = 0
+    while index < cast(s32)arguments.count {
+        Check(CopyCString(arguments[index], bytes[index].bytes[:]),
+            "argument is too long")
+        pointers[index].value = *bytes[index].bytes[0]
+        index += 1
+    }
+    pointers[index].value = null
+    pid: s32 = RawFork()
+    if pid == 0 {
+        descriptor: s32 = RawOpen(*log[0], 577, cast(s32)420)
+        if descriptor >= 0 {
+            RawDup2(descriptor, 1)
+            RawDup2(descriptor, 2)
+            RawClose(descriptor)
+        }
+        RawExecvp(*bytes[0].bytes[0], *pointers[0])
+        RawExit(127)
+    }
+    return pid
+}
+
+// Runs a program to completion with its output discarded and returns its exit
+// status (128 plus the signal number when a signal ended it).
+RunQuiet :: (arguments: []string) -> s32 {
+    pid: s32 = Spawn(arguments, "/dev/null")
+    if pid < 0 { return 127 }
+    status: s32 = 0
+    if RawWaitPid(pid, *status, 0) != pid { return 127 }
+    if (status & 127) != 0 { return 128 + (status & 127) }
+    return (status >> 8) & 255
+}
+
+// Whether a started program is still running.
+IsRunning :: (pid: s32) -> bool {
+    status: s32 = 0
+    return RawWaitPid(pid, *status, 1) == 0
+}
+
+// Asks a program to quit (SIGTERM), waits up to ten seconds, and stops it
+// for good if it does not. Returns its exit status, or 128 plus the signal
+// number when a signal ended it.
+Terminate :: (pid: s32) -> s32 {
+    RawKill(pid, 15)
+    status: s32 = 0
+    waited: s32 = 0
+    attempts: s32 = 0
+    while attempts < 200 {
+        waited = RawWaitPid(pid, *status, 1)
+        if waited != 0 { break }
+        SleepMilliseconds(50)
+        attempts += 1
+    }
+    if waited == 0 {
+        RawKill(pid, 9)
+        RawWaitPid(pid, *status, 0)
+    }
+    if (status & 127) != 0 { return 128 + (status & 127) }
+    return (status >> 8) & 255
+}

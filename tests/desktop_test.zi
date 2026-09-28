@@ -1,0 +1,475 @@
+// Exercises the Workbook desktop app on a private X display.
+//
+// The app runs only under xvfb-run with DISPLAY and WAYLAND_DISPLAY removed,
+// so the test can never send input to a real desktop. It checks one captured
+// frame, then edits cells with the keyboard and mouse, saves with Ctrl+S, and
+// reads the saved file back with the headless cell command. Run it from the
+// repository root after `make`.
+#load "test_support.zi";
+#load "csv_table.zi";
+#load "screenshot.zi";
+
+AppPath :: "build/workbook-desktop";
+CellPath :: "build/cell";
+FixturePath :: "tests/fixtures/operators.gnumeric";
+WindowName :: "Kryon Ziran";
+PrivateMarker :: "WORKBOOK_TEST_PRIVATE_DISPLAY";
+
+// Grid geometry from src/app.zi, in window pixels.
+GridLeft :: 76;
+GridTop :: 128;
+ColumnWidth :: 110;
+RowHeight :: 28;
+
+// The toolbar buttons all share one row; the sheet tabs sit under the grid.
+ToolbarY :: 30;
+TabY :: 538;
+TabLeft :: 24;
+TabWidth :: 104;
+
+Background :: 0xF8FAFC;
+HeaderFill :: 0xEDF4FC;
+SelectedFill :: 0xDCEBFF;
+White :: 0xFFFFFF;
+
+TwoSheets :: #string END
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:SheetNameIndex><gnm:SheetName>First</gnm:SheetName><gnm:SheetName>Second</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets>
+    <gnm:Sheet><gnm:Name>First</gnm:Name><gnm:MaxCol>0</gnm:MaxCol><gnm:MaxRow>0</gnm:MaxRow>
+      <gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell></gnm:Cells>
+    </gnm:Sheet>
+    <gnm:Sheet><gnm:Name>Second</gnm:Name><gnm:MaxCol>0</gnm:MaxCol><gnm:MaxRow>0</gnm:MaxRow>
+      <gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">2</gnm:Cell></gnm:Cells>
+    </gnm:Sheet>
+  </gnm:Sheets>
+</gnm:Workbook>
+END;
+
+app_pid: s32 = 0;
+window_id: [64]u8;
+data_directory: [4096]u8;
+saved_path: [4096]u8;
+log_path: [4096]u8;
+
+// ---------------------------------------------------------------- xdotool
+
+// Runs xdotool with up to six arguments after its name; empty ones are
+// skipped. Any failure stops the test.
+Xdotool :: (a: string, b: string, c: string, d: string, e: string, f: string) {
+    arguments: [7]string
+    count: s32 = 1
+    arguments[0] = "xdotool"
+    if a.count > 0 {
+        arguments[count] = a
+        count += 1
+    }
+    if b.count > 0 {
+        arguments[count] = b
+        count += 1
+    }
+    if c.count > 0 {
+        arguments[count] = c
+        count += 1
+    }
+    if d.count > 0 {
+        arguments[count] = d
+        count += 1
+    }
+    if e.count > 0 {
+        arguments[count] = e
+        count += 1
+    }
+    if f.count > 0 {
+        arguments[count] = f
+        count += 1
+    }
+    if RunQuiet(arguments[0:count]) != 0 {
+        WriteText(2, "xdotool ")
+        WriteText(2, a)
+        WriteText(2, " failed\n")
+        ShowLog()
+        Fail("an input event could not be sent")
+    }
+}
+
+NumberText :: (buffer: []u8, value: s32) -> string {
+    SetText(buffer, "")
+    AppendNumber(buffer, value)
+    return TextUntilNul(buffer)
+}
+
+WindowId :: () -> string {
+    return TextUntilNul(window_id[:])
+}
+
+ShowLog :: () {
+    log: [8192]u8
+    length: s32 = ReadWholeFile(TextUntilNul(log_path[:]), log[:])
+    if length > 0 {
+        WriteText(2, "--- the app's output:\n")
+        WriteText(2, TextView(log[0:length]))
+        WriteText(2, "\n---\n")
+    }
+}
+
+Key :: (name: string) {
+    Xdotool("key", name, "", "", "", "")
+    SleepMilliseconds(200)
+}
+
+TypeText :: (text: string) {
+    Xdotool("type", "--delay", "90", text, "", "")
+    SleepMilliseconds(250)
+}
+
+MoveMouse :: (x: s32, y: s32) {
+    x_text: [16]u8
+    y_text: [16]u8
+    Xdotool("mousemove", "--window", WindowId(), NumberText(x_text[:], x),
+        NumberText(y_text[:], y), "")
+    SleepMilliseconds(200)
+}
+
+// Clicks a button. It is held for a few frames, as a hand holds it: a Kryon
+// button activates on a release that follows a press it saw.
+Press :: (x: s32, y: s32) {
+    MoveMouse(x, y)
+    Xdotool("mousedown", "1", "", "", "", "")
+    SleepMilliseconds(120)
+    Xdotool("mouseup", "1", "", "", "", "")
+    SleepMilliseconds(300)
+}
+
+CellCenterX :: (column: s32) -> s32 {
+    return GridLeft + column * ColumnWidth + ColumnWidth / 2
+}
+
+CellCenterY :: (row: s32) -> s32 {
+    return GridTop + row * RowHeight + RowHeight / 2
+}
+
+ClickCell :: (row: s32, column: s32) {
+    Press(CellCenterX(column), CellCenterY(row))
+}
+
+DoubleClickCell :: (row: s32, column: s32) {
+    MoveMouse(CellCenterX(column), CellCenterY(row))
+    Xdotool("click", "--repeat", "2", "--delay", "90", "1")
+    SleepMilliseconds(300)
+}
+
+ToolbarX :: (name: string) -> s32 {
+    if name == "Save" { return 282 }
+    if name == "Insert row" { return 370 }
+    if name == "Delete row" { return 474 }
+    if name == "Insert column" { return 588 }
+    if name == "Delete column" { return 712 }
+    Fail("unknown toolbar button")
+    return 0
+}
+
+ToolbarButton :: (name: string) {
+    Press(ToolbarX(name), ToolbarY)
+}
+
+SheetTab :: (index: s32) {
+    Press(TabLeft + TabWidth * index + TabWidth / 2, TabY)
+}
+
+Save :: () {
+    Key("ctrl+s")
+    SleepMilliseconds(400)
+}
+
+// ------------------------------------------------------------ the session
+
+StartApp :: (directory: string) {
+    SetText(data_directory[:], directory)
+    SetText(saved_path[:], directory)
+    AppendText(saved_path[:], "/workbook.gnumeric")
+    SetText(log_path[:], directory)
+    AppendText(log_path[:], "/app.log")
+    SetEnvironment("WORKBOOK_DIR", directory)
+    UnsetEnvironment("KRYON_CAPTURE_PATH")
+    command: [1]string = .{AppPath}
+    app_pid = Spawn(command[:], TextUntilNul(log_path[:]))
+    Check(app_pid > 0, "the app could not be started")
+    cleanup_pid = app_pid
+    FindWindow()
+    Xdotool("windowfocus", WindowId(), "", "", "", "")
+    SleepMilliseconds(500)
+}
+
+FindWindow :: () {
+    attempts: s32 = 0
+    while attempts < 100 {
+        output: [1024]u8
+        search: [4]string = .{"xdotool", "search", "--name", WindowName}
+        result: CaptureResult = Run(search[:], output[:])
+        if result.code == 0 && result.length > 0 {
+            end: s32 = 0
+            while end < result.length && output[end] != 10 { end += 1 }
+            SetText(window_id[:], TextView(output[0:end]))
+            return
+        }
+        if !IsRunning(app_pid) {
+            ShowLog()
+            Fail("the app exited early")
+        }
+        SleepMilliseconds(100)
+        attempts += 1
+    }
+    ShowLog()
+    Fail("the app window did not appear")
+}
+
+// Quits the app with SIGTERM and returns its exit status.
+StopApp :: () -> s32 {
+    status: s32 = Terminate(app_pid)
+    app_pid = 0
+    cleanup_pid = 0
+    return status
+}
+
+// -------------------------------------------------------------- the checks
+
+// The saved workbook's first sheet, evaluated by the cell command, must begin
+// with the expected rows (CSV text; empty cells at the end of a row may be
+// left out).
+ExpectRows :: (expected: string, message: string) {
+    Check(PathExists(TextUntilNul(saved_path[:])), "Ctrl+S did not write workbook.gnumeric")
+    output: [65536]u8
+    command: [3]string = .{CellPath, "eval", TextUntilNul(saved_path[:])}
+    result: CaptureResult = Run(command[:], output[:])
+    Check(result.code == 0 && !result.error && !result.truncated,
+        "the cell command could not evaluate the saved workbook")
+    Check(ParseCsv(0, TextView(output[0:result.length])), "the saved rows are too large")
+    Check(ParseCsv(1, expected), "the expected rows are too large")
+    heading: [512]u8
+    SetText(heading[:], "FAIL: ")
+    AppendText(heading[:], message)
+    if !CompareCsv(CsvUsedRows(1), "saved", "expected", TextUntilNul(heading[:])) {
+        Fail(message)
+    }
+    SayWith("edit: ", message)
+}
+
+// The saved workbook's sheets and their sizes, as `cell info` prints them.
+ExpectSizes :: (expected: string, message: string) {
+    output: [4096]u8
+    command: [3]string = .{CellPath, "info", TextUntilNul(saved_path[:])}
+    result: CaptureResult = Run(command[:], output[:])
+    Check(result.code == 0 && !result.error, "the cell command could not read the saved workbook")
+    actual: string = TextView(output[0:result.length])
+    if actual != expected {
+        WriteText(2, "sheets and sizes, expected:\n")
+        WriteText(2, expected)
+        WriteText(2, "got:\n")
+        WriteText(2, actual)
+        Fail(message)
+    }
+}
+
+Drive :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1",
+        "the driver sends input events; run the desktop test, which starts it on a private display")
+    StartApp(directory)
+
+    // Typing over the selected cell starts an edit; Enter commits and moves
+    // down. A formula recalculates from the cell above it.
+    TypeText("5")
+    Key("Return")
+    TypeText("=A1*2")
+    Key("Return")
+    Save()
+    ExpectRows("5\n10\n", "typed values and a formula")
+
+    // A click selects a cell; typing replaces its value.
+    ClickCell(2, 2)
+    TypeText("hello")
+    Key("Return")
+    Save()
+    ExpectRows("5\n10\n,,hello\n", "click, type, and save")
+
+    // Escape leaves a cell as it was.
+    ClickCell(0, 1)
+    TypeText("zzz")
+    Key("Escape")
+    Save()
+    ExpectRows("5\n10\n,,hello\n", "Escape cancels an edit")
+
+    // A double click edits the existing formula in place.
+    DoubleClickCell(1, 0)
+    TypeText("+1")
+    Key("Return")
+    Save()
+    ExpectRows("5\n11\n,,hello\n", "double click edits a formula")
+
+    // Delete clears the selected cell; the formula below follows it. The
+    // export starts at the first row that shows anything, which is now A2.
+    ClickCell(0, 0)
+    Key("Delete")
+    Save()
+    ExpectRows("1\n,,hello\n", "Delete clears a cell")
+
+    // The toolbar buttons edit the sheet's structure at the selection.
+    // "hello" sits in row 3 and column C, so the sheet is 3 by 3.
+    ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "the sheet starts 3 by 3")
+    ClickCell(1, 1)
+    ToolbarButton("Insert row")
+    ToolbarButton("Save")
+    ExpectSizes("1 sheet(s)\nSheet1: 4 rows x 3 cols\n", "Insert row adds a row")
+    ToolbarButton("Delete row")
+    ToolbarButton("Save")
+    ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "Delete row removes it")
+    ToolbarButton("Insert column")
+    ToolbarButton("Save")
+    ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 4 cols\n", "Insert column adds a column")
+    ToolbarButton("Delete column")
+    ToolbarButton("Save")
+    ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "Delete column removes it")
+    Say("edit: toolbar buttons insert and delete rows and columns")
+
+    Check(StopApp() == 0, "the app did not exit cleanly")
+    Say("session: the app exited cleanly on SIGTERM")
+    return 0
+}
+
+DriveTabs :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1",
+        "the driver sends input events; run the desktop test, which starts it on a private display")
+    saved: [4096]u8
+    SetText(saved[:], directory)
+    AppendText(saved[:], "/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(saved[:]), TwoSheets), "cannot write the two-sheet workbook")
+    StartApp(directory)
+    ExpectSizes("2 sheet(s)\nFirst: 1 rows x 1 cols\nSecond: 1 rows x 1 cols\n", "two sheets to start")
+
+    // The second tab makes that sheet current: an edit lands in it.
+    SheetTab(1)
+    ClickCell(2, 1)
+    TypeText("7")
+    Key("Return")
+    Save()
+    ExpectSizes("2 sheet(s)\nFirst: 1 rows x 1 cols\nSecond: 3 rows x 2 cols\n", "the second tab edits the second sheet")
+
+    // And back: the first sheet takes the next edit.
+    SheetTab(0)
+    ClickCell(0, 3)
+    TypeText("4")
+    Key("Return")
+    Save()
+    ExpectSizes("2 sheet(s)\nFirst: 1 rows x 4 cols\nSecond: 3 rows x 2 cols\n", "the first tab edits the first sheet")
+    Say("tabs: each tab edits its own sheet")
+
+    Check(StopApp() == 0, "the app did not exit cleanly")
+    return 0
+}
+
+// ------------------------------------------------------------ the frame check
+
+CheckFrame :: (work: string) {
+    directory: [4096]u8
+    SetText(directory[:], work)
+    AppendText(directory[:], "/frame")
+    Check(MakeDirectory(TextUntilNul(directory[:])), "cannot create the frame directory")
+    copy: [4096]u8
+    SetText(copy[:], TextUntilNul(directory[:]))
+    AppendText(copy[:], "/workbook.gnumeric")
+    fixture: [65536]u8
+    length: s32 = ReadWholeFile(FixturePath, fixture[:])
+    Check(length > 0, "cannot read the fixture")
+    Check(WriteWholeFile(TextUntilNul(copy[:]), TextView(fixture[0:length])),
+        "cannot copy the fixture")
+    capture: [4096]u8
+    SetText(capture[:], work)
+    AppendText(capture[:], "/frame.png")
+    SetEnvironment("WORKBOOK_DIR", TextUntilNul(directory[:]))
+    SetEnvironment("KRYON_CAPTURE_PATH", TextUntilNul(capture[:]))
+    command: [5]string = .{"timeout", "120", "xvfb-run", "-a", AppPath}
+    Check(RunQuiet(command[:]) == 0, "the app could not render a frame")
+    UnsetEnvironment("WORKBOOK_DIR")
+    UnsetEnvironment("KRYON_CAPTURE_PATH")
+
+    failure: [256]u8
+    Check(ReadScreenshot(TextUntilNul(capture[:]), failure[:]), TextUntilNul(failure[:]))
+    Check(screenshot_width == 960 && screenshot_height == 600, "the frame is not 960 by 600")
+    Check(PixelAt(10, 10) == Background, "the window background")
+    Check(PixelAt(GridLeft + 90, GridTop - 24) == HeaderFill, "the column header")
+    // A1 is selected, B1 is not; the fixture fills A1 ("10") and B1
+    // ("alpha") and leaves column F empty.
+    Check(PixelAt(GridLeft + 90, GridTop + 20) == SelectedFill, "the selected cell A1")
+    Check(PixelAt(GridLeft + ColumnWidth + 90, GridTop + 20) == White, "the unselected cell B1")
+    Check(DarkPixels(GridLeft + 2, GridTop + 2, ColumnWidth - 4, RowHeight - 4) > 10,
+        "the text of A1")
+    Check(DarkPixels(GridLeft + 5 * ColumnWidth + 2, GridTop + 2, ColumnWidth - 4,
+        RowHeight - 4) == 0, "the empty cell F1")
+    Say("frame: layout, selection, and cell text rendered")
+}
+
+// ----------------------------------------------------------------- the run
+
+RunSession :: (self: string, mode: string, directory: string) {
+    output: [65536]u8
+    command: [9]string = .{"timeout", "240", "xvfb-run", "-a", "env",
+        "WORKBOOK_TEST_PRIVATE_DISPLAY=1", self, mode, directory}
+    result: CaptureResult = Run(command[:], output[:])
+    WriteText(1, TextView(output[0:result.length]))
+    Check(result.code == 0 && !result.error, "the desktop session failed")
+}
+
+RunAll :: (self: string) -> s32 {
+    Check(OnPath("xdotool"), "install xdotool to test the desktop app")
+    Check(OnPath("xvfb-run"), "install xvfb-run to test the desktop app")
+    Check(IsExecutable(AppPath), "build first: build/workbook-desktop is missing")
+    Check(IsExecutable(CellPath), "build first: build/cell is missing")
+    // Nothing may reach a real display.
+    UnsetEnvironment("DISPLAY")
+    UnsetEnvironment("WAYLAND_DISPLAY")
+    UnsetEnvironment("XAUTHORITY")
+    UnsetEnvironment("KRYON_CAPTURE_PATH")
+
+    template: [4096]u8
+    parent: string = Environment("TMPDIR")
+    if parent.count == 0 { parent = "/tmp" }
+    SetText(template[:], parent)
+    AppendText(template[:], "/workbook-desktop-XXXXXX")
+    work_buffer: [4096]u8
+    work: string = MakeTemporaryDirectory(template[:])
+    Check(work.count > 0, "cannot create a temporary directory")
+    SetText(work_buffer[:], work)
+    SetText(cleanup_directory[:], work)
+    work = TextUntilNul(work_buffer[:])
+
+    CheckFrame(work)
+
+    edit: [4096]u8
+    SetText(edit[:], work)
+    AppendText(edit[:], "/edit")
+    Check(MakeDirectory(TextUntilNul(edit[:])), "cannot create the edit directory")
+    RunSession(self, "--drive", TextUntilNul(edit[:]))
+
+    tabs: [4096]u8
+    SetText(tabs[:], work)
+    AppendText(tabs[:], "/tabs")
+    Check(MakeDirectory(TextUntilNul(tabs[:])), "cannot create the tabs directory")
+    RunSession(self, "--drive-tabs", TextUntilNul(tabs[:]))
+
+    RemoveTree(work)
+    cleanup_directory[0] = 0
+    Say("desktop app: rendering, keyboard and mouse editing, and saving passed")
+    return 0
+}
+
+#program_export
+main :: (argc: s32, argv: **s8) -> s32 {
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive" {
+        return Drive(TextFromCString(cast(*u8)argv[2]))
+    }
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-tabs" {
+        return DriveTabs(TextFromCString(cast(*u8)argv[2]))
+    }
+    return RunAll(TextFromCString(cast(*u8)argv[0]))
+}

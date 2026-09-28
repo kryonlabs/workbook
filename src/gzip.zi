@@ -505,3 +505,69 @@ GzipDecompress :: (data: *u8, len: u64, out_len: *u64) -> *u8 {
     MemoryFree(cast(*void)w.buf)
     return null
 }
+
+// Adler-32, the checksum that ends a zlib stream.
+Adler32 :: (data: *u8, len: u64) -> u32 {
+    low: u32 = 1
+    high: u32 = 0
+    index: u64 = 0
+    while index < len {
+        low = (low + cast(u32)data[index]) % 65521
+        high = (high + low) % 65521
+        index += 1
+    }
+    return (high << 16) | low
+}
+
+// Decompresses a zlib stream (RFC 1950): a two-byte header, deflate data, and
+// an Adler-32 checksum. Returns newly allocated bytes, released with
+// MemoryFree, and their length in out_len; null when the stream is not valid.
+ZlibDecompress :: (data: *u8, len: u64, out_len: *u64) -> *u8 {
+    r: BitReader
+    w: Window
+    header: s32
+    expected: u32
+    if out_len != null {
+        out_len.* = 0
+    }
+    if len < 6 {
+        return null
+    }
+    // Deflate (method 8), a header that is a multiple of 31, and no preset
+    // dictionary.
+    header = cast(s32)data[0] * 256 + cast(s32)data[1]
+    if (cast(s32)data[0] & 15) != 8 || header % 31 != 0 || (cast(s32)data[1] & 32) != 0 {
+        return null
+    }
+    r.data = data
+    r.len = len
+    r.pos = 2
+    r.bit = 0
+    r.bad = 0
+    w.buf = null
+    w.len = 0
+    w.cap = 0
+    w.bad = 0
+    if inflate_raw(*r, *w) == 0 {
+        MemoryFree(cast(*void)w.buf)
+        return null
+    }
+    align_byte(*r)
+    if r.pos + 4 > len {
+        MemoryFree(cast(*void)w.buf)
+        return null
+    }
+    expected = (cast(u32)data[r.pos] << 24) | (cast(u32)data[r.pos + 1] << 16) | (cast(u32)data[r.pos + 2] << 8) | cast(u32)data[r.pos + 3]
+    if Adler32(w.buf, w.len) != expected {
+        MemoryFree(cast(*void)w.buf)
+        return null
+    }
+    if window_push(*w, 0) != 0 {
+        if out_len != null {
+            out_len.* = w.len - 1
+        }
+        return w.buf
+    }
+    MemoryFree(cast(*void)w.buf)
+    return null
+}

@@ -1,0 +1,184 @@
+// Reads the 8-bit RGB or RGBA PNG that an application captures, and answers
+// questions about its pixels. Loaded after test_support.zi.
+Engine :: #import "engine";
+
+// Fixed arrays hold at most 1048576 elements, so the pixels, which can be
+// larger, are allocated once the size is known.
+ScreenshotFileLimit :: 1048576;
+ScreenshotPixelLimit :: 16777216;
+
+screenshot_file: [1048576]u8;
+screenshot_compressed: [1048576]u8;
+screenshot_pixels: *u8;
+screenshot_width: s32 = 0;
+screenshot_height: s32 = 0;
+screenshot_channels: s32 = 0;
+
+BigEndian :: (bytes: []u8, at: s32) -> u32 {
+    return (cast(u32)bytes[at] << 24) | (cast(u32)bytes[at + 1] << 16) |
+        (cast(u32)bytes[at + 2] << 8) | cast(u32)bytes[at + 3]
+}
+
+// Loads and decodes a captured frame. Returns false with the reason in
+// failure when the file is missing or is not a PNG this reader understands.
+ReadScreenshot :: (path: string, failure: []u8) -> bool {
+    length: s32 = ReadWholeFile(path, screenshot_file[:])
+    if length < 33 {
+        SetText(failure, "cannot read the capture")
+        return false
+    }
+    signature: [8]u8 = .{137, 80, 78, 71, 13, 10, 26, 10}
+    index: s32 = 0
+    while index < 8 {
+        if screenshot_file[index] != signature[index] {
+            SetText(failure, "the capture is not a PNG")
+            return false
+        }
+        index += 1
+    }
+    at: s32 = 8
+    packed: s32 = 0
+    depth: s32 = 0
+    color: s32 = 0
+    interlace: s32 = 0
+    have_header: bool = false
+    while at + 12 <= length {
+        chunk: s32 = cast(s32)BigEndian(screenshot_file[:], at)
+        if chunk < 0 || at + 12 + chunk > length {
+            SetText(failure, "the capture is truncated")
+            return false
+        }
+        kind: u32 = BigEndian(screenshot_file[:], at + 4)
+        body: s32 = at + 8
+        if kind == 0x49484452 {
+            screenshot_width = cast(s32)BigEndian(screenshot_file[:], body)
+            screenshot_height = cast(s32)BigEndian(screenshot_file[:], body + 4)
+            depth = cast(s32)screenshot_file[body + 8]
+            color = cast(s32)screenshot_file[body + 9]
+            interlace = cast(s32)screenshot_file[body + 12]
+            have_header = true
+        } else if kind == 0x49444154 {
+            if packed + chunk > ScreenshotFileLimit {
+                SetText(failure, "the capture is too large")
+                return false
+            }
+            index = 0
+            while index < chunk {
+                screenshot_compressed[packed + index] = screenshot_file[body + index]
+                index += 1
+            }
+            packed += chunk
+        } else if kind == 0x49454E44 {
+            break
+        }
+        at += 12 + chunk
+    }
+    if !have_header || depth != 8 || interlace != 0 || (color != 2 && color != 6) {
+        SetText(failure, "the capture is not an 8-bit RGB or RGBA PNG")
+        return false
+    }
+    screenshot_channels = 3
+    if color == 6 { screenshot_channels = 4 }
+    stride: s32 = screenshot_width * screenshot_channels
+    if screenshot_width <= 0 || screenshot_height <= 0 ||
+       stride * screenshot_height > ScreenshotPixelLimit {
+        SetText(failure, "the capture has unsupported dimensions")
+        return false
+    }
+    inflated: u64 = 0
+    raw: *u8 = Engine.ZlibDecompress(*screenshot_compressed[0], cast(u64)packed, *inflated)
+    if raw == null || inflated != cast(u64)((stride + 1) * screenshot_height) {
+        SetText(failure, "the capture's image data is damaged")
+        return false
+    }
+    if screenshot_pixels != null { RawFree(cast(*void)screenshot_pixels) }
+    screenshot_pixels = cast(*u8)RawMalloc(cast(u64)(stride * screenshot_height))
+    if screenshot_pixels == null {
+        RawFree(cast(*void)raw)
+        SetText(failure, "out of memory")
+        return false
+    }
+    Unfilter(raw, stride)
+    RawFree(cast(*void)raw)
+    return true
+}
+
+// Undoes the per-row PNG filters into screenshot_pixels.
+Unfilter :: (raw: *u8, stride: s32) {
+    row: s32 = 0
+    while row < screenshot_height {
+        kind: s32 = cast(s32)raw[row * (stride + 1)]
+        source: s32 = row * (stride + 1) + 1
+        target: s32 = row * stride
+        column: s32 = 0
+        while column < stride {
+            left: s32 = 0
+            up: s32 = 0
+            corner: s32 = 0
+            if column >= screenshot_channels {
+                left = cast(s32)screenshot_pixels[target + column - screenshot_channels]
+            }
+            if row > 0 {
+                up = cast(s32)screenshot_pixels[target - stride + column]
+                if column >= screenshot_channels {
+                    corner = cast(s32)screenshot_pixels[target - stride + column - screenshot_channels]
+                }
+            }
+            value: s32 = cast(s32)raw[source + column]
+            if kind == 1 {
+                value += left
+            } else if kind == 2 {
+                value += up
+            } else if kind == 3 {
+                value += (left + up) / 2
+            } else if kind == 4 {
+                value += Paeth(left, up, corner)
+            }
+            screenshot_pixels[target + column] = cast(u8)(value & 255)
+            column += 1
+        }
+        row += 1
+    }
+}
+
+Paeth :: (left: s32, up: s32, corner: s32) -> s32 {
+    estimate: s32 = left + up - corner
+    to_left: s32 = Distance(estimate, left)
+    to_up: s32 = Distance(estimate, up)
+    to_corner: s32 = Distance(estimate, corner)
+    if to_left <= to_up && to_left <= to_corner { return left }
+    if to_up <= to_corner { return up }
+    return corner
+}
+
+Distance :: (a: s32, b: s32) -> s32 {
+    if a > b { return a - b }
+    return b - a
+}
+
+// The pixel at (x, y) as 0xRRGGBB.
+PixelAt :: (x: s32, y: s32) -> u32 {
+    offset: s32 = (y * screenshot_width + x) * screenshot_channels
+    return (cast(u32)screenshot_pixels[offset] << 16) |
+        (cast(u32)screenshot_pixels[offset + 1] << 8) |
+        cast(u32)screenshot_pixels[offset + 2]
+}
+
+// How many pixels in a rectangle are dark enough to be text.
+DarkPixels :: (left: s32, top: s32, width: s32, height: s32) -> s32 {
+    count: s32 = 0
+    y: s32 = top
+    while y < top + height {
+        x: s32 = left
+        while x < left + width {
+            offset: s32 = (y * screenshot_width + x) * screenshot_channels
+            sum: s32 = cast(s32)screenshot_pixels[offset] +
+                cast(s32)screenshot_pixels[offset + 1] +
+                cast(s32)screenshot_pixels[offset + 2]
+            if sum < 330 { count += 1 }
+            x += 1
+        }
+        y += 1
+    }
+    return count
+}
