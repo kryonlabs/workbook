@@ -36,6 +36,7 @@ development packages installed.
     make test         # source audit, structure and conversion tests, desktop test on a private display, gnumeric parity
     make test-ci      # the same without parity, which is what CI runs
     make parity       # 1:1 evaluation tests against the installed gnumeric
+    make fuzz REFERENCE=PATH   # compare this cell with another on generated inputs
     make install      # install workbook, cell, and geld under ~/.local
     make deb          # build a Debian package
 
@@ -58,6 +59,19 @@ against `GNUMERIC_SSCONVERT`, or a local master build at
 `~/Tools/gnumeric-1.12.62`; the newest catalog functions exist only in a
 Gnumeric master build, so an older distribution Gnumeric reports those fixtures
 as different. CI therefore runs `make test-ci`.
+
+`tests/differential_fuzz.zi` checks one build of `cell` against another. Point
+`REFERENCE` at a build whose answers are right, for example `cell` built from an
+earlier commit, and `make fuzz` runs the current build and the reference on the
+same generated inputs, then reports each one they answer differently: random
+function calls on a fixed sheet, random CSV files, the fixtures with random
+damage, and workbooks whose sheets refer to each other. `SEED` and `COUNT`
+choose the inputs, and the program can also be run by hand:
+
+    build/differential_fuzz REFERENCE build/cell formulas 1 100
+    build/differential_fuzz REFERENCE build/cell check 'DAY(-2147483648.5)'
+
+A run that hangs is killed after `FUZZ_TIMEOUT` seconds (20 by default).
 
 ## editing
 

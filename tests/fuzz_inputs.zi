@@ -1,0 +1,927 @@
+// Input generators for differential_fuzz.zi: a seeded random source, pools of
+// spreadsheet values, and generators for formula workbooks, CSV files, damaged
+// copies of the fixtures, and workbooks with several sheets. It is loaded after
+// test_support.zi and shares that module.
+
+// ------------------------------------------------------------------ random
+
+random_state: u64 = 1;
+
+SeedRandom :: (seed: s64) {
+    random_state = cast(u64)seed
+}
+
+// splitmix64: every seed gives a different, well mixed sequence.
+NextRandom :: () -> u64 {
+    random_state = random_state + 11400714819323198485
+    z: u64 = random_state
+    z = (z ^ (z >> 30)) * 13787848793156543929
+    z = (z ^ (z >> 27)) * 10723151780598845931
+    return z ^ (z >> 31)
+}
+
+// A number from 0 up to but not including limit.
+Below :: (limit: s32) -> s32 {
+    return cast(s32)((NextRandom() >> 11) % cast(u64)limit)
+}
+
+// A number from low to high, both included.
+Between :: (low: s32, high: s32) -> s32 {
+    return low + Below(high - low + 1)
+}
+
+// True about percent times in a hundred.
+Chance :: (percent: s32) -> bool {
+    return Below(100) < percent
+}
+
+// ---------------------------------------------------------------- builders
+
+// Bytes being assembled in storage the caller owns. Appends past the end are
+// dropped, so a generator can never write out of bounds.
+Builder :: struct {
+    bytes: []u8
+    length: s32
+}
+
+UseStorage :: (builder: *Builder, storage: []u8) {
+    builder.bytes = storage
+    builder.length = 0
+}
+
+AddByte :: (builder: *Builder, value: u8) {
+    if builder.length < cast(s32)builder.bytes.count {
+        builder.bytes[builder.length] = value
+        builder.length += 1
+    }
+}
+
+AddText :: (builder: *Builder, text: string) {
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        AddByte(builder, text[index])
+        index += 1
+    }
+}
+
+// Text for an XML element: the characters markup uses are escaped.
+AddEscaped :: (builder: *Builder, text: string) {
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        value: u8 = text[index]
+        if value == 38 {
+            AddText(builder, "&amp;")
+        } else if value == 60 {
+            AddText(builder, "&lt;")
+        } else if value == 62 {
+            AddText(builder, "&gt;")
+        } else {
+            AddByte(builder, value)
+        }
+        index += 1
+    }
+}
+
+// Function names are lower case in the manifest and upper case in formulas.
+AddUpper :: (builder: *Builder, text: string) {
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        value: u8 = text[index]
+        if value >= 97 && value <= 122 { value -= 32 }
+        AddByte(builder, value)
+        index += 1
+    }
+}
+
+AddNumber :: (builder: *Builder, value: s64) {
+    digits: [24]u8
+    at: s32 = 24
+    magnitude: u64 = cast(u64)value
+    if value < 0 { magnitude = 0 - magnitude }
+    while true {
+        at -= 1
+        digits[at] = cast(u8)(48 + magnitude % 10)
+        magnitude = magnitude / 10
+        if magnitude == 0 { break }
+    }
+    if value < 0 {
+        at -= 1
+        digits[at] = 45
+    }
+    while at < 24 {
+        AddByte(builder, digits[at])
+        at += 1
+    }
+}
+
+AddRepeated :: (builder: *Builder, value: u8, count: s32) {
+    index: s32 = 0
+    while index < count {
+        AddByte(builder, value)
+        index += 1
+    }
+}
+
+// ------------------------------------------------------------------- pools
+
+// A pool is one string of items separated by '~'.
+PoolSize :: (pool: string) -> s32 {
+    size: s32 = 1
+    at: s32 = 0
+    while at < cast(s32)pool.count {
+        if pool[at] == 126 { size += 1 }
+        at += 1
+    }
+    return size
+}
+
+PoolItem :: (pool: string, index: s32) -> string {
+    start: s32 = 0
+    at: s32 = 0
+    item: s32 = 0
+    while at <= cast(s32)pool.count {
+        if at == cast(s32)pool.count || pool[at] == 126 {
+            if item == index { return pool[start:at] }
+            item += 1
+            start = at + 1
+        }
+        at += 1
+    }
+    return ""
+}
+
+Pick :: (pool: string) -> string {
+    return PoolItem(pool, Below(PoolSize(pool)))
+}
+
+// Numbers include the values on either side of the limits of 32-bit and
+// 64-bit integers, where conversions go wrong.
+NumberPool :: "0~1~2~3~5~7~10~-1~-3~0.5~-2.25~100~3.14159~1e10~1e-10~12~255~366~0.1~-0.5~2.5~1000000~2147483647~-2147483648~2147483648~-2147483649~-2147483648.5~-2147483648.9~2147483647.5~4294967295~4294967295.5~4294967296~9007199254740993~9223372036854775807~-9223372036854775808~1e19~1.8446744073709552e19~1e20~1e308~-1e308~5e-324~0.000001~65536~1048576~99999999";
+OddNumberPool :: "NaN~inf~-inf~1e999~-0~+7~007~5.~.5~12%~$5~1 000~0x1F~1_000~1e~--1~1.2.3~1,5~1e+308~4.9e-324~123456789012345678901234567890~3.0~2.50";
+StringPool :: "\"abc\"~\"\"~\"a b\"~\"12\"~\"TRUE\"~\"Hello, World\"~\"x\"~\"2024-01-15\"~\"  padded  \"~\"a,b;c\"~\"ÿ\"~\"%d\"";
+LogicalPool :: "TRUE~FALSE";
+ReferencePool :: "A1~A2~B1~B2~C1~D1~D2~D3~$A$1~A8~B8~E1";
+RangePool :: "A1:A5~A1:B4~C1:C4~A1:D3~B1:B8~A1:A8~D1:D5~A2:B3";
+ErrorPool :: "#N/A~#DIV/0!~#VALUE!~#NUM!~#REF!~#NAME?";
+// Expressions whose value is NaN or infinite, or close to it, and so ends up in
+// functions that turn numbers into integers.
+SpecialPool :: "ATANH(2)~ACOS(2)~ASIN(-2)~ACOSH(0)~ATANH(1)~ATANH(-1)~LN(-1)~SQRT(-1)~0/0~1/0~-1/0~10^400~-(10^400)~EXP(1000)~LOG(0)~FACT(170)~2^1023*2~-(2^1023*2)~1e308*10~SUM(1e308,1e308)";
+OperatorPool :: "+~-~*~/~^~&~=~<>~<~>~<=~>=";
+DatePool :: "2024-01-15~1/15/2024~15.01.2024~Jan 15 2024~2024-13-45~12:30~12:30:45~2024-01-15 12:30~1/2~00:00:00~1899-12-31~9999-12-31~24:00~-1:00~2024-02-30~1900-02-29";
+BoolPool :: "TRUE~true~False~FALSE~yes~T";
+TextPool :: "hello~ padded ~a\"b~line1\nline2~comma,inside~semi;colon~tab\there~ÿ~日本語~😀~  ~A1~=~'quoted~@~#N/A~#DIV/0!~#REF!~#VALUE!~#NAME?~#NUM!~-~+~'~\\~&amp;~<b>~]]>~<![CDATA[x]]>~a\rb~\"~\"\"~,~;~\t";
+CsvFormulaPool :: "=1+1~=A1+B1~=SUM(A1:A3)~=IF(A1>2,\"y\",\"n\")~=A1&B1~=#REF!~=1/0~=NA()~=UPPER(A1)~=ROW()~=COLUMN()~=A1:B2~=INDEX(A1:B2,2,2)~=TEXT(A1,\"0.00\")~=\"unterminated~=(~=SUM(~=+~=A1+~= 1~==1~=1;2~=SUM(A1;A2)~='Sheet1'!A1~=Sheet1!A1~=$A$1~=R1C1~=A0~=ZZZ999999~=A1:A1000000~=-A1~=A1^2~=A1%~=AVERAGE(A1:C3)~=CONCATENATE(A1,B1)~=LEN(A1)~=VLOOKUP(A1,A1:B5,2,0)~=A1=B1~=A1<>B1~=SUM(A:A)~=SUM(1:1)~=SUM(A1:INDEX(A1:A5,3))~=MOD(A1,0)~=A1/A2~=NOW()-NOW()~=DATE(2024,1,A1)~=TEXT(A1,\"yyyy-mm-dd\")~=ROUND(A1,B1)~=IFERROR(A1/0,\"e\")~=MID(A1,B1,C1)~=LEFT(A1,B1)~=REPT(A1,B1)";
+ValueTypePool :: "10~20~30~40~50~60~70~80~90~100~110~120~-1~0~999~abc~";
+IndexPool :: "0~1~255~256~257~65535~65536~65537~1048575~1048576~99999999~-1~2147483647~4294967296~abc~";
+JunkPool :: "<~>~&~\"~'~/~=~;~ ~\n~\t";
+
+// ----------------------------------------------------------------- formulas
+
+manifest_bytes: [131072]u8;
+name_start: [4096]s32;
+name_length: [4096]s32;
+name_count: s32 = 0;
+
+// Names whose results change from run to run, which no comparison can use.
+Volatile :: (name: string) -> bool {
+    return name == "now" || name == "today" || name == "info" || name == "cell" ||
+    name == "hyperlink" || name == "unix2date" || name == "date2unix" ||
+    name == "n" || name == "t" || StartsWith(name, "rand") ||
+    StartsWith(name, "r.r")
+}
+
+// Reads the function names the engine implements from the manifest, leaving
+// out the volatile ones. Returns false when there is nothing to draw from.
+LoadFunctionNames :: (path: string) -> bool {
+    length: s32 = ReadWholeFile(path, manifest_bytes[:])
+    if length <= 0 { return false }
+    at: s32 = 0
+    while at < length {
+        start: s32 = at
+        while at < length && manifest_bytes[at] != 10 { at += 1 }
+        end: s32 = at
+        at += 1
+        while start < end && (manifest_bytes[start] == 32 || manifest_bytes[start] == 9) { start += 1 }
+        while end > start && (manifest_bytes[end - 1] == 32 || manifest_bytes[end - 1] == 13) { end -= 1 }
+        if end > start && !Volatile(TextView(manifest_bytes[start:end])) && name_count < 4096 {
+            name_start[name_count] = start
+            name_length[name_count] = end - start
+            name_count += 1
+        }
+    }
+    return name_count > 0
+}
+
+RandomFunctionName :: () -> string {
+    index: s32 = Below(name_count)
+    return TextView(manifest_bytes[name_start[index]:name_start[index] + name_length[index]])
+}
+
+// A literal: a number, string, logical, error, cell reference, or a value that
+// is not a finite number.
+AddLiteral :: (builder: *Builder) {
+    kind: s32 = Below(100)
+    if kind < 45 {
+        AddText(builder, Pick(NumberPool))
+    } else if kind < 65 {
+        AddText(builder, Pick(StringPool))
+    } else if kind < 72 {
+        AddText(builder, Pick(LogicalPool))
+    } else if kind < 80 {
+        AddText(builder, Pick(ErrorPool))
+    } else if kind < 95 {
+        AddText(builder, Pick(ReferencePool))
+    } else {
+        AddText(builder, Pick(SpecialPool))
+    }
+}
+
+AddArgument :: (builder: *Builder, depth: s32) {
+    kind: s32 = Below(100)
+    if kind < 50 {
+        AddLiteral(builder)
+    } else if kind < 68 {
+        AddText(builder, Pick(RangePool))
+    } else if kind < 78 && depth < 2 {
+        AddCall(builder, depth + 1)
+    } else if kind < 88 {
+        AddText(builder, "(")
+        AddLiteral(builder)
+        AddText(builder, Pick(OperatorPool))
+        AddLiteral(builder)
+        AddText(builder, ")")
+    } else if kind < 92 {
+        AddText(builder, "-")
+        AddLiteral(builder)
+    } else {
+        AddLiteral(builder)
+        AddText(builder, "%")
+    }
+}
+
+ArgumentCount :: () -> s32 {
+    kind: s32 = Below(9)
+    if kind == 0 { return 0 }
+    if kind <= 2 { return 1 }
+    if kind <= 4 { return 2 }
+    if kind <= 6 { return 3 }
+    if kind == 7 { return 4 }
+    return 5
+}
+
+// A call of a random function with random arguments, some of them calls.
+AddCall :: (builder: *Builder, depth: s32) {
+    AddUpper(builder, RandomFunctionName())
+    AddText(builder, "(")
+    count: s32 = ArgumentCount()
+    index: s32 = 0
+    while index < count {
+        if index > 0 { AddText(builder, ",") }
+        AddArgument(builder, depth)
+        index += 1
+    }
+    AddText(builder, ")")
+}
+
+// The formulas of one workbook, each in its own storage.
+FormulasPerFile :: 40;
+formula_text: [64][2048]u8;
+formula_length: [64]s32;
+
+GenerateFormula :: (index: s32) {
+    builder: Builder
+    UseStorage(*builder, formula_text[index][:])
+    AddCall(*builder, 0)
+    formula_length[index] = builder.length
+}
+
+FormulaOf :: (index: s32) -> string {
+    return TextView(formula_text[index][0:formula_length[index]])
+}
+
+// A workbook with one fixed sheet of numbers, text, logicals, and errors, and
+// the formulas first to first + count - 1 in column F.
+AddFormulaWorkbook :: (builder: *Builder, first: s32, count: s32) {
+    AddText(builder, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    AddText(builder, "<gnm:Workbook xmlns:gnm=\"http://www.gnumeric.org/v10.dtd\">\n")
+    AddText(builder, "<gnm:SheetNameIndex><gnm:SheetName>Fuzz</gnm:SheetName></gnm:SheetNameIndex>\n")
+    AddText(builder, "<gnm:Sheets><gnm:Sheet><gnm:Name>Fuzz</gnm:Name><gnm:MaxCol>5</gnm:MaxCol><gnm:MaxRow>")
+    AddNumber(builder, cast(s64)count)
+    AddText(builder, "</gnm:MaxRow>\n<gnm:Cells>\n")
+    numbers: string = "10~20~30~-5~2.5~0~100~7"
+    row: s32 = 0
+    while row < 8 {
+        AddText(builder, "<gnm:Cell Row=\"")
+        AddNumber(builder, cast(s64)row)
+        AddText(builder, "\" Col=\"0\" ValueType=\"40\">")
+        AddText(builder, PoolItem(numbers, row))
+        AddText(builder, "</gnm:Cell>\n")
+        row += 1
+    }
+    // Column B mixes text and numbers; row 3 stays empty.
+    texts: string = "alpha~Beta gamma~3~~12.5~x~2024-01-15~5"
+    kinds: string = "60~60~40~60~40~60~60~40"
+    row = 0
+    while row < 8 {
+        if row != 3 {
+            AddText(builder, "<gnm:Cell Row=\"")
+            AddNumber(builder, cast(s64)row)
+            AddText(builder, "\" Col=\"1\" ValueType=\"")
+            AddText(builder, PoolItem(kinds, row))
+            AddText(builder, "\">")
+            AddText(builder, PoolItem(texts, row))
+            AddText(builder, "</gnm:Cell>\n")
+        }
+        row += 1
+    }
+    logicals: string = "TRUE~FALSE~TRUE~FALSE"
+    row = 0
+    while row < 4 {
+        AddText(builder, "<gnm:Cell Row=\"")
+        AddNumber(builder, cast(s64)row)
+        AddText(builder, "\" Col=\"2\" ValueType=\"20\">")
+        AddText(builder, PoolItem(logicals, row))
+        AddText(builder, "</gnm:Cell>\n")
+        row += 1
+    }
+    AddText(builder, "<gnm:Cell Row=\"0\" Col=\"3\" ValueType=\"60\">  padded </gnm:Cell>\n")
+    AddText(builder, "<gnm:Cell Row=\"1\" Col=\"3\" ValueType=\"60\">12</gnm:Cell>\n")
+    AddText(builder, "<gnm:Cell Row=\"3\" Col=\"3\">=1/0</gnm:Cell>\n")
+    AddText(builder, "<gnm:Cell Row=\"4\" Col=\"3\">=NA()</gnm:Cell>\n")
+    index: s32 = 0
+    while index < count {
+        AddText(builder, "<gnm:Cell Row=\"")
+        AddNumber(builder, cast(s64)index)
+        AddText(builder, "\" Col=\"5\">=")
+        AddEscaped(builder, FormulaOf(first + index))
+        AddText(builder, "</gnm:Cell>\n")
+        index += 1
+    }
+    AddText(builder, "</gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>\n")
+}
+
+// ---------------------------------------------------------------------- CSV
+
+// Bytes that are not text in any encoding, or not valid UTF-8.
+AddBrokenBytes :: (builder: *Builder) {
+    kind: s32 = Below(8)
+    if kind == 0 {
+        AddByte(builder, 195)
+        AddByte(builder, 40)
+    } else if kind == 1 {
+        AddByte(builder, 255)
+        AddByte(builder, 254)
+    } else if kind == 2 {
+        AddByte(builder, 237)
+        AddByte(builder, 160)
+        AddByte(builder, 128)
+    } else if kind == 3 {
+        AddByte(builder, 248)
+        AddByte(builder, 136)
+        AddByte(builder, 128)
+        AddByte(builder, 128)
+        AddByte(builder, 128)
+    } else if kind == 4 {
+        AddByte(builder, 192)
+        AddByte(builder, 175)
+    } else if kind == 5 {
+        AddByte(builder, 128)
+    } else if kind == 6 {
+        AddText(builder, "abc")
+        AddByte(builder, 255)
+        AddText(builder, "def")
+    } else {
+        AddByte(builder, 226)
+        AddByte(builder, 130)
+    }
+}
+
+// Characters that are awkward to type into a literal, and very long text.
+AddAwkwardText :: (builder: *Builder) {
+    kind: s32 = Below(9)
+    if kind == 0 {
+        AddByte(builder, 127)
+    } else if kind == 1 {
+        AddByte(builder, 1)
+    } else if kind == 2 {
+        AddByte(builder, 31)
+    } else if kind == 3 {
+        AddByte(builder, 194)
+        AddByte(builder, 160)
+    } else if kind == 4 {
+        AddByte(builder, 226)
+        AddByte(builder, 128)
+        AddByte(builder, 139)
+    } else if kind == 5 {
+        AddByte(builder, 239)
+        AddByte(builder, 187)
+        AddByte(builder, 191)
+    } else if kind == 6 {
+        index: s32 = 0
+        while index < 300 {
+            AddByte(builder, 195)
+            AddByte(builder, 169)
+            index += 1
+        }
+    } else if kind == 7 {
+        AddRepeated(builder, 120, 1000)
+    } else {
+        AddBrokenBytes(builder)
+    }
+}
+
+// One cell's text: a number, date, logical, text, broken bytes, a formula, or
+// nothing.
+AddCellValue :: (builder: *Builder) {
+    kind: s32 = Below(100)
+    if kind < 30 {
+        if Chance(70) {
+            AddText(builder, Pick(NumberPool))
+        } else {
+            AddText(builder, Pick(OddNumberPool))
+        }
+    } else if kind < 38 {
+        AddText(builder, Pick(DatePool))
+    } else if kind < 42 {
+        AddText(builder, Pick(BoolPool))
+    } else if kind < 65 {
+        if Chance(85) {
+            AddText(builder, Pick(TextPool))
+        } else {
+            AddAwkwardText(builder)
+        }
+    } else if kind < 70 {
+        AddBrokenBytes(builder)
+    } else if kind < 90 {
+        AddText(builder, Pick(CsvFormulaPool))
+    }
+}
+
+cell_storage: [16384]u8;
+cell: Builder;
+
+// The text in the cell builder so far.
+CellText :: () -> string {
+    return TextView(cell_storage[0:cell.length])
+}
+
+Contains :: (text: string, value: u8) -> bool {
+    index: s32 = 0
+    while index < cast(s32)text.count {
+        if text[index] == value { return true }
+        index += 1
+    }
+    return false
+}
+
+// A CSV file of random cells: odd separators and line endings, quotes used and
+// misused, ragged rows, blank lines, and sometimes a byte order mark.
+AddCsvFile :: (builder: *Builder) {
+    rows: s32 = Between(1, 30)
+    cols: s32 = Between(1, 12)
+    separators: string = ",~,~,~,~;~\t~|"
+    separator: u8 = PoolItem(separators, Below(7))[0]
+    line_ends: string = "\n~\n~\r\n~\r"
+    line_end: string = PoolItem(line_ends, Below(4))
+    ragged: bool = Chance(30)
+    always_quote: bool = Chance(20)
+    if Chance(10) {
+        AddByte(builder, 239)
+        AddByte(builder, 187)
+        AddByte(builder, 191)
+    }
+    row: s32 = 0
+    while row < rows {
+        width: s32 = cols
+        if ragged { width = Between(0, cols) }
+        col: s32 = 0
+        while col < width {
+            if col > 0 { AddByte(builder, separator) }
+            cell.length = 0
+            AddCellValue(*cell)
+            value: string = CellText()
+            needs: bool = Contains(value, separator) || Contains(value, 34) ||
+            Contains(value, 10) || Contains(value, 13)
+            if needs || always_quote || Chance(5) {
+                AddByte(builder, 34)
+                // Now and then the quote is left open, or unescaped inside.
+                if Chance(3) {
+                    AddText(builder, value)
+                } else if Chance(3) {
+                    AddText(builder, value)
+                    AddByte(builder, 34)
+                } else {
+                    index: s32 = 0
+                    while index < cast(s32)value.count {
+                        if value[index] == 34 { AddByte(builder, 34) }
+                        AddByte(builder, value[index])
+                        index += 1
+                    }
+                    AddByte(builder, 34)
+                }
+            } else {
+                AddText(builder, value)
+            }
+            col += 1
+        }
+        row += 1
+        if row < rows || Chance(70) { AddText(builder, line_end) }
+        if Chance(5) { AddText(builder, line_end) }
+    }
+}
+
+// ----------------------------------------------------------- damaged fixtures
+
+content_storage: [1048576]u8;
+scratch_storage: [1048576]u8;
+content: Builder;
+
+// The text in the content builder so far.
+ContentText :: () -> string {
+    return TextView(content_storage[0:content.length])
+}
+
+fixture_bytes: [262144]u8;
+fixture_start: [64]s32;
+fixture_length: [64]s32;
+fixture_count: s32 = 0;
+
+// Reads every fixture that is plain XML; the gzip one has the same document.
+LoadFixtures :: (directory: string) -> bool {
+    entries: DirectoryEntries
+    if !ListDirectory(directory, *entries) { return false }
+    used: s32 = 0
+    index: s32 = 0
+    while index < entries.count {
+        file: string = TextUntilNul(entries.names[index].bytes[:])
+        index += 1
+        if !EndsWith(file, ".gnumeric") || EndsWith(file, "_gzip.gnumeric") { continue }
+        if fixture_count >= 64 { break }
+        path: [4096]u8
+        SetText(path[:], directory)
+        AppendText(path[:], "/")
+        AppendText(path[:], file)
+        room: s32 = cast(s32)fixture_bytes.count - used
+        length: s32 = ReadWholeFile(TextUntilNul(path[:]), fixture_bytes[used:cast(s32)fixture_bytes.count])
+        if length <= 0 || length >= room { continue }
+        fixture_start[fixture_count] = used
+        fixture_length[fixture_count] = length
+        fixture_count += 1
+        used += length
+    }
+    return fixture_count > 0
+}
+
+// Replaces bytes start up to end of the content with text.
+Splice :: (start: s32, end: s32, text: string) {
+    tail: s32 = content.length - end
+    index: s32 = 0
+    while index < tail {
+        scratch_storage[index] = content.bytes[end + index]
+        index += 1
+    }
+    content.length = start
+    AddText(*content, text)
+    index = 0
+    while index < tail {
+        AddByte(*content, scratch_storage[index])
+        index += 1
+    }
+}
+
+// The first place at or after from where marker starts, or -1.
+FindMarker :: (marker: string, from: s32) -> s32 {
+    at: s32 = from
+    while at + cast(s32)marker.count <= content.length {
+        matches: bool = true
+        index: s32 = 0
+        while index < cast(s32)marker.count {
+            if content.bytes[at + index] != marker[index] {
+                matches = false
+                break
+            }
+            index += 1
+        }
+        if matches { return at }
+        at += 1
+    }
+    return -1
+}
+
+// A random place where marker starts, or -1 when it does not occur.
+RandomMarker :: (marker: string) -> s32 {
+    found: s32 = FindMarker(marker, Below(content.length))
+    if found < 0 { found = FindMarker(marker, 0) }
+    return found
+}
+
+// Gives an attribute another value. The marker is the attribute's name with the
+// quote that opens its value.
+ReplaceAttribute :: (marker: string, pool: string) {
+    at: s32 = RandomMarker(marker)
+    if at < 0 { return }
+    start: s32 = at + cast(s32)marker.count
+    end: s32 = start
+    while end < content.length && content.bytes[end] != 34 { end += 1 }
+    Splice(start, end, Pick(pool))
+}
+
+// Gives a cell other contents: a number, text, a date, or a formula.
+ReplaceCellText :: () {
+    at: s32 = RandomMarker("</gnm:Cell>")
+    if at < 0 { return }
+    start: s32 = at
+    while start > 0 && content.bytes[start - 1] != 62 { start -= 1 }
+    cell.length = 0
+    kind: s32 = Below(100)
+    if kind < 35 {
+        AddText(*cell, Pick(NumberPool))
+    } else if kind < 50 {
+        AddEscaped(*cell, Pick(TextPool))
+    } else if kind < 60 {
+        AddText(*cell, Pick(DatePool))
+    } else {
+        AddEscaped(*cell, Pick(CsvFormulaPool))
+    }
+    Splice(start, at, CellText())
+}
+
+// Whether a byte can be part of a function name.
+NameByte :: (value: u8) -> bool {
+    return (value >= 65 && value <= 90) || (value >= 48 && value <= 57) || value == 95 || value == 46
+}
+
+// Calls another function of the catalog by the name of one already called.
+ReplaceFunctionName :: () {
+    attempts: s32 = 0
+    at: s32 = Below(content.length)
+    while attempts < 50 {
+        at = FindMarker("(", at)
+        if at < 0 { at = FindMarker("(", 0) }
+        if at < 0 { return }
+        start: s32 = at
+        while start > 0 && NameByte(content.bytes[start - 1]) { start -= 1 }
+        if start < at && content.bytes[start] >= 65 && content.bytes[start] <= 90 {
+            cell.length = 0
+            AddUpper(*cell, RandomFunctionName())
+            Splice(start, at, CellText())
+            return
+        }
+        at += 1
+        attempts += 1
+    }
+}
+
+line_start: [8192]s32;
+line_end: [8192]s32;
+
+// Exchanges two lines of the document.
+SwapLines :: () {
+    lines: s32 = 0
+    at: s32 = 0
+    while at < content.length && lines < 8192 {
+        line_start[lines] = at
+        while at < content.length && content.bytes[at] != 10 { at += 1 }
+        line_end[lines] = at
+        lines += 1
+        at += 1
+    }
+    if lines < 3 { return }
+    first: s32 = Below(lines)
+    second: s32 = Below(lines)
+    if first == second { return }
+    total: s32 = content.length
+    index: s32 = 0
+    while index < total {
+        scratch_storage[index] = content.bytes[index]
+        index += 1
+    }
+    content.length = 0
+    line: s32 = 0
+    while line < lines {
+        source: s32 = line
+        if line == first { source = second }
+        if line == second { source = first }
+        index = line_start[source]
+        while index < line_end[source] {
+            AddByte(*content, scratch_storage[index])
+            index += 1
+        }
+        if line + 1 < lines || line_end[lines - 1] < total { AddByte(*content, 10) }
+        line += 1
+    }
+}
+
+// One kind of damage, chosen at random: a changed, removed, repeated, or
+// inserted run of bytes, a cut, or a change to one thing the loader reads.
+Damage :: () {
+    if content.length == 0 { return }
+    kind: s32 = Below(100)
+    at: s32 = Below(content.length)
+    if kind < 10 {
+        content.bytes[at] = cast(u8)Below(256)
+    } else if kind < 18 {
+        end: s32 = at + Between(1, 40)
+        if end > content.length { end = content.length }
+        Splice(at, end, "")
+    } else if kind < 26 {
+        count: s32 = Between(1, 60)
+        if at + count > content.length { count = content.length - at }
+        cell.length = 0
+        index: s32 = 0
+        while index < count {
+            AddByte(*cell, content.bytes[at + index])
+            index += 1
+        }
+        Splice(at, at, CellText())
+    } else if kind < 31 {
+        cell.length = 0
+        count: s32 = Between(1, 4)
+        index: s32 = 0
+        while index < count {
+            AddText(*cell, Pick(JunkPool))
+            index += 1
+        }
+        Splice(at, at, CellText())
+    } else if kind < 34 {
+        content.length = at
+    } else if kind < 46 {
+        ReplaceAttribute("ValueType=\"", ValueTypePool)
+    } else if kind < 56 {
+        if Chance(50) {
+            ReplaceAttribute(" Row=\"", IndexPool)
+        } else {
+            ReplaceAttribute(" Col=\"", IndexPool)
+        }
+    } else if kind < 74 {
+        ReplaceCellText()
+    } else if kind < 90 {
+        ReplaceFunctionName()
+    } else {
+        SwapLines()
+    }
+}
+
+// A fixture with one to five kinds of damage.
+AddDamagedFixture :: () {
+    UseStorage(*content, content_storage[:])
+    which: s32 = Below(fixture_count)
+    index: s32 = 0
+    while index < fixture_length[which] {
+        AddByte(*content, fixture_bytes[fixture_start[which] + index])
+        index += 1
+    }
+    damages: s32 = 1
+    kind: s32 = Below(6)
+    if kind == 2 { damages = 2 }
+    if kind == 3 { damages = 3 }
+    if kind == 4 { damages = 5 }
+    index = 0
+    while index < damages {
+        Damage()
+        index += 1
+    }
+}
+
+// ------------------------------------------------------------ several sheets
+
+SheetNamePool :: "Sheet1~Sheet2~Sheet3~My Sheet~it's~a-b~Ünï~日本~S 1~1abc~A1~R1C1~TRUE~~xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx~a'b~a\"b~a&b~a<b>~a!b~Sheet1~SUM~$A$1~-~a:b~ééééééééééééééééééé";
+NumberedSheets :: "Sheet1~Sheet2~Sheet3~Sheet4";
+SheetFormulaPool :: "=SUM(@!A1:B3)~=@!A1+@!B2~=A1+@!A1~=SUM(Sheet1:Sheet3!A1:A3)~=SUM(Sheet1:Sheet3!A1)~=INDIRECT(\"@!A1\")~=INDIRECT(B1)~=SHEET()~=SHEETS()~=SHEET(@!A1)~=SHEETS(@!A1:B2)~=ROW(@!B5)~=COLUMN(@!C1)~=AVERAGE(@!A1:A10)~=VLOOKUP(A1,@!A1:B5,2,0)~=INDEX(@!A1:C3,2,2)~=OFFSET(@!A1,1,1)~=SUMIF(@!A1:A5,\">2\")~=COUNTA(@!A1:Z100)~=@!A1&\"x\"~=@!A1:B2~=@!#REF!~=MAX(@!A:A)~=ROWS(@!A1:B7)~=COLUMNS(@!A1:E1)~=ADDRESS(1,1,1,1,\"@\")~=INDIRECT(\"'@'!B2\")~=INDIRECT(ADDRESS(2,2,4,1,\"@\"))~=TRANSPOSE(@!A1:B2)~=SUMPRODUCT(@!A1:A3,@!B1:B3)~=MATCH(2,@!A1:A9,0)~=CHOOSE(2,@!A1,@!A2,@!A3)~=IF(@!A1>1,@!B1,@!C1)~=A1~=B1*2~=SUM(A1:A5)~=$A$1+1~=C3";
+
+// A name that needs no quotes in a reference: letters and digits, not starting
+// with a digit.
+PlainName :: (name: string) -> bool {
+    if name.count == 0 || (name[0] >= 48 && name[0] <= 57) { return false }
+    index: s32 = 0
+    while index < cast(s32)name.count {
+        value: u8 = name[index]
+        if !((value >= 48 && value <= 57) || (value >= 65 && value <= 90) || (value >= 97 && value <= 122)) {
+            return false
+        }
+        index += 1
+    }
+    return true
+}
+
+// A sheet reference, without the '!': usually one of the workbook's sheets,
+// sometimes another name or one that does not exist, quoted when it must be.
+AddSheetReference :: (builder: *Builder, names: []string) {
+    kind: s32 = Below(100)
+    name: string = "Nope"
+    if kind < 60 {
+        name = names[Below(cast(s32)names.count)]
+    } else if kind < 80 {
+        name = Pick(SheetNamePool)
+    }
+    if PlainName(name) && Chance(80) {
+        AddText(builder, name)
+        return
+    }
+    AddByte(builder, 39)
+    index: s32 = 0
+    while index < cast(s32)name.count {
+        if name[index] == 39 { AddByte(builder, 39) }
+        AddByte(builder, name[index])
+        index += 1
+    }
+    AddByte(builder, 39)
+}
+
+// A formula from a template: "@!" stands for a sheet reference and a lone "@"
+// for a sheet name.
+AddSheetFormula :: (builder: *Builder, template: string, names: []string, own: string) {
+    index: s32 = 0
+    while index < cast(s32)template.count {
+        value: u8 = template[index]
+        if value == 64 && index + 1 < cast(s32)template.count && template[index + 1] == 33 {
+            AddSheetReference(builder, names)
+            AddByte(builder, 33)
+            index += 1
+        } else if value == 64 {
+            if Chance(50) {
+                AddText(builder, own)
+            } else {
+                AddText(builder, names[Below(cast(s32)names.count)])
+            }
+        } else {
+            AddByte(builder, value)
+        }
+        index += 1
+    }
+}
+
+// A workbook of one to four sheets, some with odd names, whose formulas refer
+// to each other's cells and ranges.
+AddMultiSheetWorkbook :: () {
+    UseStorage(*content, content_storage[:])
+    count: s32 = 1 + Below(4)
+    if Chance(40) { count = 2 + Below(3) }
+    names: [4]string
+    plain: bool = Chance(70)
+    index: s32 = 0
+    while index < count {
+        if plain {
+            names[index] = PoolItem(NumberedSheets, index)
+        } else {
+            names[index] = Pick(SheetNamePool)
+        }
+        index += 1
+    }
+    AddText(*content, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    AddText(*content, "<gnm:Workbook xmlns:gnm=\"http://www.gnumeric.org/v10.dtd\">\n<gnm:SheetNameIndex>")
+    index = 0
+    while index < count {
+        AddText(*content, "<gnm:SheetName>")
+        AddEscaped(*content, names[index])
+        AddText(*content, "</gnm:SheetName>")
+        index += 1
+    }
+    AddText(*content, "</gnm:SheetNameIndex>\n<gnm:Sheets>\n")
+    sheet: s32 = 0
+    while sheet < count {
+        rows: s32 = Between(1, 10)
+        cols: s32 = Between(1, 6)
+        AddText(*content, "<gnm:Sheet><gnm:Name>")
+        AddEscaped(*content, names[sheet])
+        AddText(*content, "</gnm:Name><gnm:MaxCol>")
+        AddNumber(*content, cast(s64)cols)
+        AddText(*content, "</gnm:MaxCol><gnm:MaxRow>")
+        AddNumber(*content, cast(s64)rows)
+        AddText(*content, "</gnm:MaxRow><gnm:Cells>")
+        cells: s32 = Between(2, 25)
+        while cells > 0 {
+            cells -= 1
+            AddText(*content, "<gnm:Cell Row=\"")
+            AddNumber(*content, cast(s64)Below(rows))
+            AddText(*content, "\" Col=\"")
+            AddNumber(*content, cast(s64)Below(cols))
+            kind: s32 = Below(100)
+            if kind < 35 {
+                AddText(*content, "\" ValueType=\"40\">")
+                AddText(*content, Pick(NumberPool))
+            } else if kind < 50 {
+                AddText(*content, "\" ValueType=\"60\">")
+                AddEscaped(*content, Pick(TextPool))
+            } else if kind < 55 {
+                AddText(*content, "\" ValueType=\"20\">")
+                AddText(*content, Pick(LogicalPool))
+            } else {
+                AddText(*content, "\">")
+                cell.length = 0
+                AddSheetFormula(*cell, Pick(SheetFormulaPool), names[0:count], names[sheet])
+                AddEscaped(*content, CellText())
+            }
+            AddText(*content, "</gnm:Cell>\n")
+        }
+        AddText(*content, "</gnm:Cells></gnm:Sheet>\n")
+        sheet += 1
+    }
+    AddText(*content, "</gnm:Sheets></gnm:Workbook>\n")
+}
+
+// Sets up the builders the generators use.
+StartGenerators :: () {
+    UseStorage(*cell, cell_storage[:])
+    UseStorage(*content, content_storage[:])
+}
