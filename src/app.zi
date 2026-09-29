@@ -57,7 +57,16 @@ KeyUp :: 0x40000052;
 KeyHome :: 0x4000004A;
 KeyEnd :: 0x4000004D;
 KeyA :: 97;
+KeyC :: 99;
 KeyS :: 115;
+KeyV :: 118;
+KeyX :: 120;
+
+// The cell menu: open, and where the secondary button was released.
+grid_menu_open: bool = false;
+grid_menu_x: float32 = 0.0;
+grid_menu_y: float32 = 0.0;
+clipboard_text: [8192]u8;
 
 workbook: *Engine.Workbook;
 sheet_index: s32 = 0;
@@ -110,9 +119,10 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     was_editing: bool = edit_focused
     DrawFormulaBar(session, viewport, key, control, typed[:], typed_length)
     if !was_editing {
-        HandleGridKeys(key, typed[:], typed_length)
+        HandleGridKeys(key, control, typed[:], typed_length)
     }
     DrawGrid(session, viewport)
+    DrawGridMenu(session, key == KeyEscape)
     return 0
 }
 
@@ -411,12 +421,58 @@ CommitCell :: () {
     AppendCellName(status[:], selected_row, selected_column)
 }
 
+// The selected cell's source goes to the system clipboard.
+CopyCell :: () {
+    SystemClipboardSet(CellSource(sheet_index, selected_row, selected_column))
+}
+
+CutCell :: () {
+    CopyCell()
+    ClearCell()
+}
+
+// Pastes the clipboard's text from the selected cell: tabs separate columns and
+// lines separate rows, so cells copied from another spreadsheet keep their layout.
+PasteCells :: () {
+    text: string = SystemClipboardText(clipboard_text[:])
+    if text.count == 0 { return }
+    row: s32 = 0
+    column: s32 = 0
+    cell: [256]u8
+    length: s32 = 0
+    at: s32 = 0
+    while at <= cast(s32)text.count {
+        byte: u8 = 10
+        if at < cast(s32)text.count { byte = text[at] }
+        if byte == 9 || byte == 10 {
+            cell[length] = 0
+            if !(byte == 10 && length == 0 && at == cast(s32)text.count) {
+                Engine.WorkbookSetCell(workbook, sheet_index, selected_row + row,
+                    selected_column + column, cast(*s8)*cell[0])
+            }
+            length = 0
+            if byte == 9 { column += 1 } else {
+                row += 1
+                column = 0
+            }
+        } else if byte != 13 && length < CellTextMax - 1 {
+            cell[length] = byte
+            length += 1
+        }
+        at += 1
+    }
+    Changed("Pasted")
+}
+
 ClearCell :: () {
     edit[0] = 0
     CommitCell()
 }
 
-HandleGridKeys :: (key: s32, typed: []u8, typed_length: s32) {
+HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
+    if control && key == KeyC { CopyCell() }
+    if control && key == KeyX { CutCell() }
+    if control && key == KeyV { PasteCells() }
     if key == KeyUp { SelectCell(selected_row - 1, selected_column) }
     if key == KeyDown { SelectCell(selected_row + 1, selected_column) }
     if key == KeyLeft { SelectCell(selected_row, selected_column - 1) }
@@ -643,6 +699,9 @@ RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
         field.input.backspace = key == KeyBackspace
         field.input.delete_forward = key == KeyDelete
         field.input.select_all = control && key == KeyA
+        field.input.copy = control && key == KeyC
+        field.input.cut = control && key == KeyX
+        field.input.paste = control && key == KeyV
         field.input.commit = key == KeyEnter
         field.input.escape = key == KeyEscape
     }
@@ -737,7 +796,20 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     pointer: PointerFrame = PointerSample(session)
     body: Rectangle = Rectangle.{table.x + RowHeaderWidth, table.y + HeaderHeight,
         table.width - RowHeaderWidth, table.height - HeaderHeight}
-    if pointer.released && PointInBounds(pointer.x, pointer.y, body) {
+    secondary: SecondaryPointerFrame = SecondaryPointerSample(session)
+    if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
+        // The secondary button selects the cell under it and opens the menu.
+        row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
+        clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
+        if row < rows && clicked < columns && clicked < scroll_column + visible_columns {
+            SelectCell(row, clicked)
+            edit_focused = false
+            grid_menu_open = true
+            grid_menu_x = pointer.x
+            grid_menu_y = pointer.y
+        }
+    }
+    if pointer.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
         row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
         clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
         if row < rows && clicked < columns &&
@@ -752,6 +824,59 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         }
     }
     if frames_since_click < 1000 { frames_since_click += 1 }
+}
+
+// The cell menu. Commands act on the selected cell, which the menu's own
+// click selected first.
+DrawGridMenu :: (session: Session, escape: bool) {
+    if !grid_menu_open { return }
+    items: [9]ContextMenuItem
+    items[0].id = 1
+    items[0].label = "Cut"
+    items[1].id = 2
+    items[1].label = "Copy"
+    items[2].id = 3
+    items[2].label = "Paste"
+    items[2].disabled = !SystemClipboardHasText()
+    items[3].id = 4
+    items[3].label = "Clear"
+    items[4].separator = true
+    items[5].id = 6
+    items[5].label = "Insert row"
+    items[6].id = 7
+    items[6].label = "Delete row"
+    items[7].id = 8
+    items[7].label = "Insert column"
+    items[8].id = 9
+    items[8].label = "Delete column"
+    props: ContextMenuProps
+    props.key = cast(u64)1200
+    props.open = true
+    props.x = grid_menu_x
+    props.y = grid_menu_y
+    props.escape = escape
+    result: ContextMenuResult = ContextMenu(session, props, items[0:9])
+    if !result.open { grid_menu_open = false }
+    if result.activated_id == 1 { CutCell() }
+    if result.activated_id == 2 { CopyCell() }
+    if result.activated_id == 3 { PasteCells() }
+    if result.activated_id == 4 { ClearCell() }
+    if result.activated_id == 6 {
+        Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
+        Changed("Row inserted")
+    }
+    if result.activated_id == 7 {
+        Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
+        Changed("Row deleted")
+    }
+    if result.activated_id == 8 {
+        Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
+        Changed("Column inserted")
+    }
+    if result.activated_id == 9 {
+        Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
+        Changed("Column deleted")
+    }
 }
 
 // The grid takes its colors from the installed style, so it follows the theme.

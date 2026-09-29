@@ -19,16 +19,16 @@
       "url": "https://github.com/raysan5/raylib.git"
     },
     {
-      "commit": "f05f66be3bdecf99f1914ebb775a61bc075adfb8",
+      "commit": "c8005d34be0f46ccf24044df3f27e057007b864f",
       "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "pc53d3b6af5d09f9a",
+      "id": "p67a92b9967bf22db",
       "name": "Kryon",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kryon.git"
     }
   ],
   "root": {
-    "dependencies": {"Kryon": "pc53d3b6af5d09f9a", "mingcute": "p56788fa3dab3e73a"},
+    "dependencies": {"Kryon": "p67a92b9967bf22db", "mingcute": "p56788fa3dab3e73a"},
     "name": "workbook"
   },
   "toolchain": {
