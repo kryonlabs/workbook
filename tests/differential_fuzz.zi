@@ -1,0 +1,674 @@
+// Differential fuzz: run two cell binaries on generated inputs and report every
+// input they answer differently.
+//
+//   build/differential_fuzz REFERENCE CANDIDATE formulas SEED COUNT
+//   build/differential_fuzz REFERENCE CANDIDATE csv SEED COUNT
+//   build/differential_fuzz REFERENCE CANDIDATE xml SEED COUNT
+//   build/differential_fuzz REFERENCE CANDIDATE multi SEED COUNT
+//   build/differential_fuzz REFERENCE CANDIDATE check FORMULA...
+//
+// REFERENCE is the cell binary whose answers are right, such as a build of an
+// earlier commit; CANDIDATE is the one being checked. A mode makes COUNT inputs
+// from SEED, so a run can be repeated:
+//   formulas  workbooks of 40 random function calls on a fixed sheet, evaluated
+//   csv       random CSV files: odd separators, quotes, line endings, bytes
+//   xml       the fixtures with random damage: bytes, attributes, cells, names
+//   multi     workbooks with several sheets whose formulas refer to each other
+// The file modes run eval, copy, and info on every input and compare the exit
+// status, both output streams, and the file written. When a workbook of
+// formulas differs, each formula is run alone to find the ones that do. check
+// evaluates the given formulas on the fixed sheet and prints both results.
+//
+// A run that takes longer than FUZZ_TIMEOUT seconds (20 by default) is killed.
+// Run it from the repository root: it reads tests/fixtures and
+// tests/functions-manifest.txt. Exit status 1 means the candidate answers
+// differently or crashes where the reference does not. Inputs that differ stay
+// in a scratch directory whose path is printed.
+#load "test_support.zi";
+#load "fuzz_inputs.zi";
+
+reference_buffer: [4096]u8;
+candidate_buffer: [4096]u8;
+work_buffer: [4096]u8;
+
+// A run that takes longer is killed; FUZZ_TIMEOUT sets the seconds. Damaged input
+// must not take the machine down either, so a run may use 3 GiB of memory and
+// 15 seconds of processor time.
+timeout_milliseconds: s32 = 20000;
+MemoryLimit :: 3221225472;
+CpuSecondsLimit :: 15;
+
+// The commands of cell that the file modes run on every input.
+CommandEval :: 0;
+CommandCopy :: 1;
+CommandInfo :: 2;
+
+// How two runs compare. The first is agreement; the crashes on both sides or
+// only in the reference are the reference's failures, and a result that
+// changes when the reference runs again says nothing about the candidate.
+LabelNone :: 0;
+LabelBothCrash :: 1;
+LabelReferenceCrash :: 2;
+LabelCrash :: 3;
+LabelExit :: 4;
+LabelStdout :: 5;
+LabelOutput :: 6;
+LabelStderr :: 7;
+LabelNondeterministic :: 8;
+Labels :: 9;
+
+LabelName :: (label: s32) -> string {
+    if label == LabelBothCrash { return "both-crash" }
+    if label == LabelReferenceCrash { return "reference-crash" }
+    if label == LabelCrash { return "CRASH" }
+    if label == LabelExit { return "EXIT" }
+    if label == LabelStdout { return "STDOUT" }
+    if label == LabelOutput { return "OUTPUT" }
+    if label == LabelStderr { return "STDERR" }
+    if label == LabelNondeterministic { return "reference-nondeterministic" }
+    return "same"
+}
+
+// A difference the candidate is responsible for.
+IsReal :: (label: s32) -> bool {
+    return label >= LabelCrash && label <= LabelStderr
+}
+
+counts: [Labels]s32;
+
+// ------------------------------------------------------------ running a binary
+
+// What one run did: how it ended, and the length and hash of everything it
+// wrote. The bytes themselves stay in the buffers of the run's slot.
+Result :: struct {
+    crashed: bool
+    timed_out: bool
+    signal: s32
+    code: s32
+    out_length: s32
+    out_hash: u64
+    err_length: s32
+    err_hash: u64
+    file_length: s32
+    file_hash: u64
+}
+
+// Slot 0 holds the reference, slot 1 the candidate, and slot 2 the reference
+// run a second time.
+out_bytes: [3][65536]u8;
+err_bytes: [3][65536]u8;
+file_bytes_0: [1048576]u8;
+file_bytes_1: [1048576]u8;
+file_bytes_2: [1048576]u8;
+
+FileBytes :: (slot: s32) -> []u8 {
+    if slot == 0 { return file_bytes_0[:] }
+    if slot == 1 { return file_bytes_1[:] }
+    return file_bytes_2[:]
+}
+
+// FNV-1a over the first length bytes.
+Hash :: (bytes: []u8, length: s32) -> u64 {
+    hash: u64 = 14695981039346656037
+    index: s32 = 0
+    while index < length {
+        hash = (hash ^ cast(u64)bytes[index]) * 1099511628211
+        index += 1
+    }
+    return hash
+}
+
+ResourceLimit :: struct {
+    soft: u64
+    hard: u64
+}
+
+RawSetLimit :: (resource: s32, limit: *ResourceLimit) -> s32 #foreign libc "setrlimit";
+
+// Starts a program with its output streams in files, under a memory and CPU
+// limit so damaged input cannot take the machine down with it.
+SpawnLimited :: (arguments: []string, out_path: string, err_path: string) -> s32 {
+    bytes: [8]ArgumentBytes
+    pointers: [9]PointerSlot
+    out_file: [4096]u8
+    err_file: [4096]u8
+    Check(arguments.count > 0 && arguments.count <= 8, "too many arguments")
+    Check(CopyCString(out_path, out_file[:]) && CopyCString(err_path, err_file[:]),
+        "path is too long")
+    index: s32 = 0
+    while index < cast(s32)arguments.count {
+        Check(CopyCString(arguments[index], bytes[index].bytes[:]),
+            "argument is too long")
+        pointers[index].value = *bytes[index].bytes[0]
+        index += 1
+    }
+    pointers[index].value = null
+    pid: s32 = RawFork()
+    if pid == 0 {
+        nothing: [16]u8
+        Check(CopyCString("/dev/null", nothing[:]), "path is too long")
+        descriptor: s32 = RawOpen(*nothing[0], 0)
+        if descriptor >= 0 {
+            RawDup2(descriptor, 0)
+            RawClose(descriptor)
+        }
+        // O_WRONLY | O_CREAT | O_TRUNC, mode 0644
+        descriptor = RawOpen(*out_file[0], 577, cast(s32)420)
+        if descriptor >= 0 {
+            RawDup2(descriptor, 1)
+            RawClose(descriptor)
+        }
+        descriptor = RawOpen(*err_file[0], 577, cast(s32)420)
+        if descriptor >= 0 {
+            RawDup2(descriptor, 2)
+            RawClose(descriptor)
+        }
+        memory: ResourceLimit
+        memory.soft = MemoryLimit
+        memory.hard = MemoryLimit
+        RawSetLimit(9, *memory)
+        cpu: ResourceLimit
+        cpu.soft = CpuSecondsLimit
+        cpu.hard = CpuSecondsLimit
+        RawSetLimit(0, *cpu)
+        RawExecvp(*bytes[0].bytes[0], *pointers[0])
+        RawExit(127)
+    }
+    return pid
+}
+
+// Waits for a program to end and returns its wait status, or -1 when it ran
+// past the time limit and was killed.
+WaitLimited :: (pid: s32) -> s32 {
+    status: s32 = 0
+    waited: s32 = 0
+    pause: s32 = 100
+    while true {
+        if RawWaitPid(pid, *status, 1) == pid { return status }
+        if waited >= timeout_milliseconds * 1000 { break }
+        RawSleep(cast(u32)pause)
+        waited += pause
+        if pause < 2000 { pause = pause * 2 }
+    }
+    RawKill(pid, 9)
+    RawWaitPid(pid, *status, 0)
+    return -1
+}
+
+WorkFile :: (buffer: []u8, name: string) -> string {
+    SetText(buffer, TextUntilNul(work_buffer[:]))
+    AppendText(buffer, "/")
+    AppendText(buffer, name)
+    return TextUntilNul(buffer)
+}
+
+// Runs a program and gathers what it did into the buffers of a slot. output is
+// the file it writes, or "" when it writes none.
+RunProgram :: (arguments: []string, slot: s32, output: string) -> Result {
+    result: Result
+    out_file: [4096]u8
+    err_file: [4096]u8
+    out_path: string = WorkFile(out_file[:], "stdout")
+    err_path: string = WorkFile(err_file[:], "stderr")
+    if output.count > 0 { RemoveFile(output) }
+    pid: s32 = SpawnLimited(arguments, out_path, err_path)
+    if pid < 0 {
+        result.crashed = true
+        return result
+    }
+    status: s32 = WaitLimited(pid)
+    if status < 0 {
+        result.crashed = true
+        result.timed_out = true
+    } else if (status & 127) != 0 {
+        result.crashed = true
+        result.signal = status & 127
+    } else {
+        result.code = (status >> 8) & 255
+    }
+    result.out_length = ReadWholeFile(out_path, out_bytes[slot][:])
+    if result.out_length < 0 { result.out_length = 0 }
+    result.out_hash = Hash(out_bytes[slot][:], result.out_length)
+    result.err_length = ReadWholeFile(err_path, err_bytes[slot][:])
+    if result.err_length < 0 { result.err_length = 0 }
+    result.err_hash = Hash(err_bytes[slot][:], result.err_length)
+    result.file_length = -1
+    if output.count > 0 {
+        result.file_length = ReadWholeFile(output, FileBytes(slot))
+        if result.file_length >= 0 {
+            result.file_hash = Hash(FileBytes(slot), result.file_length)
+        }
+    }
+    return result
+}
+
+// Runs one command of cell on an input. The file it writes, if any, is output.
+RunCommand :: (command: s32, binary: string, slot: s32, input: string, output: string) -> Result {
+    if command == CommandEval {
+        arguments: [5]string = .{binary, "eval", input, "-o", output}
+        return RunProgram(arguments[:], slot, output)
+    }
+    if command == CommandCopy {
+        arguments: [4]string = .{binary, "copy", input, output}
+        return RunProgram(arguments[:], slot, output)
+    }
+    arguments: [3]string = .{binary, "info", input}
+    return RunProgram(arguments[:], slot, "")
+}
+
+SameResult :: (a: *Result, b: *Result) -> bool {
+    return a.crashed == b.crashed && a.timed_out == b.timed_out && a.signal == b.signal &&
+    a.code == b.code && a.out_length == b.out_length && a.out_hash == b.out_hash &&
+    a.err_length == b.err_length && a.err_hash == b.err_hash &&
+    a.file_length == b.file_length && a.file_hash == b.file_hash
+}
+
+// Why two runs differ, most serious first.
+Classify :: (reference: *Result, candidate: *Result) -> s32 {
+    if SameResult(reference, candidate) { return LabelNone }
+    if reference.crashed && candidate.crashed { return LabelBothCrash }
+    if reference.crashed { return LabelReferenceCrash }
+    if candidate.crashed { return LabelCrash }
+    if reference.code != candidate.code { return LabelExit }
+    if reference.out_length != candidate.out_length || reference.out_hash != candidate.out_hash {
+        return LabelStdout
+    }
+    if reference.file_length != candidate.file_length || reference.file_hash != candidate.file_hash {
+        return LabelOutput
+    }
+    return LabelStderr
+}
+
+last_reference: Result;
+last_candidate: Result;
+
+// Runs a command on both binaries and says how they compare. A real
+// difference is checked once more against the reference, whose C code may not
+// give the same answer twice. The two results stay in last_reference and
+// last_candidate, their bytes in slots 0 and 1.
+Compare :: (command: s32, input: string, output: string) -> s32 {
+    reference_path: string = TextUntilNul(reference_buffer[:])
+    candidate_path: string = TextUntilNul(candidate_buffer[:])
+    last_reference = RunCommand(command, reference_path, 0, input, output)
+    last_candidate = RunCommand(command, candidate_path, 1, input, output)
+    label: s32 = Classify(*last_reference, *last_candidate)
+    if IsReal(label) {
+        again: Result = RunCommand(command, reference_path, 2, input, output)
+        if !SameResult(*again, *last_reference) { label = LabelNondeterministic }
+    }
+    return label
+}
+
+// -------------------------------------------------------------------- report
+
+Hex :: (value: s32) -> u8 {
+    if value < 10 { return cast(u8)(48 + value) }
+    return cast(u8)(87 + value)
+}
+
+// Prints the line of bytes that holds offset at, with a prefix. Anything that
+// is not plain ASCII is written as \xNN.
+PrintLineAt :: (prefix: string, bytes: []u8, length: s32, at: s32) {
+    start: s32 = at
+    while start > 0 && start <= length && bytes[start - 1] != 10 { start -= 1 }
+    end: s32 = at
+    while end < length && bytes[end] != 10 { end += 1 }
+    if end - start > 150 { end = start + 150 }
+    line: [1024]u8
+    SetText(line[:], prefix)
+    shown: s32 = cast(s32)TextUntilNul(line[:]).count
+    index: s32 = start
+    while index < end && shown < 1000 {
+        value: u8 = bytes[index]
+        if value == 92 {
+            line[shown] = 92
+            line[shown + 1] = 92
+            shown += 2
+        } else if value >= 32 && value < 127 {
+            line[shown] = value
+            shown += 1
+        } else {
+            line[shown] = 92
+            line[shown + 1] = 120
+            line[shown + 2] = Hex(cast(s32)(value >> 4))
+            line[shown + 3] = Hex(cast(s32)(value & 15))
+            shown += 4
+        }
+        index += 1
+    }
+    line[shown] = 0
+    Say(TextUntilNul(line[:]))
+}
+
+// Says where two byte strings first differ, and shows the line in each.
+PrintDifference :: (reference: []u8, reference_length: s32, candidate: []u8, candidate_length: s32) {
+    at: s32 = 0
+    while at < reference_length && at < candidate_length && reference[at] == candidate[at] {
+        at += 1
+    }
+    lines: s32 = 1
+    index: s32 = 0
+    while index < at {
+        if reference[index] == 10 { lines += 1 }
+        index += 1
+    }
+    line: [128]u8
+    SetText(line[:], "   first difference at byte ")
+    AppendNumber(line[:], at)
+    AppendText(line[:], ", line ")
+    AppendNumber(line[:], lines)
+    Say(TextUntilNul(line[:]))
+    PrintLineAt("      reference: ", reference, reference_length, at)
+    PrintLineAt("      candidate: ", candidate, candidate_length, at)
+}
+
+// How a run ended: "exit 0", "signal 6", or "timeout".
+AppendEnding :: (line: []u8, result: *Result) {
+    if result.timed_out {
+        AppendText(line, "timeout")
+    } else if result.crashed {
+        AppendText(line, "signal ")
+        AppendNumber(line, result.signal)
+    } else {
+        AppendText(line, "exit ")
+        AppendNumber(line, result.code)
+    }
+}
+
+// Reports a difference that last_reference and last_candidate hold. what names
+// the command, and input the file or formula it ran on.
+ReportDifference :: (label: s32, what: string, input: string) {
+    line: [2048]u8
+    SetText(line[:], LabelName(label))
+    AppendText(line[:], " ")
+    AppendText(line[:], what)
+    AppendText(line[:], " ")
+    AppendText(line[:], input)
+    Say(TextUntilNul(line[:]))
+    SetText(line[:], "   reference ")
+    AppendEnding(line[:], *last_reference)
+    AppendText(line[:], ", candidate ")
+    AppendEnding(line[:], *last_candidate)
+    Say(TextUntilNul(line[:]))
+    if label == LabelStdout {
+        PrintDifference(out_bytes[0][:], last_reference.out_length,
+            out_bytes[1][:], last_candidate.out_length)
+    } else if label == LabelOutput {
+        PrintDifference(FileBytes(0), last_reference.file_length,
+            FileBytes(1), last_candidate.file_length)
+    } else if label == LabelStderr {
+        PrintDifference(err_bytes[0][:], last_reference.err_length,
+            err_bytes[1][:], last_candidate.err_length)
+    }
+}
+
+// The last field of the first line of an output: what one formula gave.
+PrintValue :: (result: *Result, slot: s32) {
+    if result.timed_out || result.crashed {
+        WriteText(1, "<crash>")
+        return
+    }
+    if result.file_length < 0 {
+        WriteText(1, "<no output>")
+        return
+    }
+    bytes: []u8 = FileBytes(slot)
+    end: s32 = 0
+    while end < result.file_length && bytes[end] != 10 { end += 1 }
+    start: s32 = end
+    while start > 0 && bytes[start - 1] != 44 { start -= 1 }
+    WriteText(1, TextView(bytes[start:end]))
+}
+
+// ---------------------------------------------------------------------- modes
+
+// Whether any real difference was seen, for the exit status.
+found: bool = false;
+
+Tally :: (label: s32) {
+    counts[label] += 1
+    if IsReal(label) { found = true }
+}
+
+// The line that ends a run: what was made, and what differed.
+PrintSummary :: (mode: string, seed: s32, made: s32, unit: string) {
+    line: [512]u8
+    SetText(line[:], mode)
+    AppendText(line[:], " seed ")
+    AppendNumber(line[:], seed)
+    AppendText(line[:], ": ")
+    AppendNumber(line[:], made)
+    AppendText(line[:], " ")
+    AppendText(line[:], unit)
+    AppendText(line[:], "; ")
+    listed: bool = false
+    label: s32 = 1
+    while label < Labels {
+        if counts[label] > 0 {
+            if listed { AppendText(line[:], ", ") }
+            AppendText(line[:], LabelName(label))
+            AppendText(line[:], "=")
+            AppendNumber(line[:], counts[label])
+            listed = true
+        }
+        label += 1
+    }
+    if !listed { AppendText(line[:], "no differences") }
+    Say(TextUntilNul(line[:]))
+}
+
+// Random function calls on the fixed sheet, forty to a workbook.
+FuzzFormulas :: (seed: s32, count: s32) {
+    path_buffer: [4096]u8
+    output_buffer: [4096]u8
+    path: string = WorkFile(path_buffer[:], "formulas.gnumeric")
+    output: string = WorkFile(output_buffer[:], "formulas.csv")
+    file: s32 = 0
+    while file < count {
+        file += 1
+        index: s32 = 0
+        while index < FormulasPerFile {
+            GenerateFormula(index)
+            index += 1
+        }
+        UseStorage(*content, content_storage[:])
+        AddFormulaWorkbook(*content, 0, FormulasPerFile)
+        Check(WriteWholeFile(path, ContentText()), "cannot write the workbook")
+        if Compare(CommandEval, path, output) == LabelNone { continue }
+        // Find the formulas that differ on their own.
+        index = 0
+        while index < FormulasPerFile {
+            UseStorage(*content, content_storage[:])
+            AddFormulaWorkbook(*content, index, 1)
+            Check(WriteWholeFile(path, ContentText()), "cannot write the workbook")
+            label: s32 = Compare(CommandEval, path, output)
+            if label != LabelNone {
+                Tally(label)
+                if IsReal(label) { ReportDifference(label, "formula", FormulaOf(index)) }
+            }
+            index += 1
+        }
+    }
+    PrintSummary("formulas", seed, count * FormulasPerFile, "formulas")
+}
+
+ModeCsv :: 0;
+ModeXml :: 1;
+ModeMulti :: 2;
+
+// Generated files, each run through eval, copy, and info.
+FuzzFiles :: (mode: s32, name: string, seed: s32, count: s32) {
+    input_buffer: [4096]u8
+    csv_buffer: [4096]u8
+    gnumeric_buffer: [4096]u8
+    csv_output: string = WorkFile(csv_buffer[:], "output.csv")
+    gnumeric_output: string = WorkFile(gnumeric_buffer[:], "output.gnumeric")
+    extension: string = ".gnumeric"
+    if mode == ModeCsv { extension = ".csv" }
+    made: s32 = 0
+    while made < count {
+        if mode == ModeCsv {
+            UseStorage(*content, content_storage[:])
+            AddCsvFile(*content)
+        } else if mode == ModeXml {
+            AddDamagedFixture()
+        } else {
+            AddMultiSheetWorkbook()
+        }
+        name_buffer: [256]u8
+        SetText(name_buffer[:], name)
+        AppendText(name_buffer[:], "-")
+        AppendNumber(name_buffer[:], seed)
+        AppendText(name_buffer[:], "-")
+        AppendNumber(name_buffer[:], made)
+        AppendText(name_buffer[:], extension)
+        input: string = WorkFile(input_buffer[:], TextUntilNul(name_buffer[:]))
+        Check(WriteWholeFile(input, ContentText()), "cannot write the input")
+        kept: bool = false
+        command: s32 = CommandEval
+        while command <= CommandInfo {
+            output: string = ""
+            what: string = "info"
+            if command == CommandEval {
+                output = csv_output
+                what = "eval"
+            } else if command == CommandCopy {
+                output = gnumeric_output
+                what = "copy"
+            }
+            label: s32 = Compare(command, input, output)
+            if label != LabelNone {
+                Tally(label)
+                if IsReal(label) {
+                    ReportDifference(label, what, input)
+                    kept = true
+                }
+            }
+            command += 1
+        }
+        if !kept { RemoveFile(input) }
+        made += 1
+    }
+    PrintSummary(name, seed, count, "inputs")
+}
+
+// Evaluates formulas given on the command line on the fixed sheet and shows
+// what each binary made of them.
+CheckFormulas :: (argc: s32, argv: **s8) {
+    path_buffer: [4096]u8
+    output_buffer: [4096]u8
+    path: string = WorkFile(path_buffer[:], "check.gnumeric")
+    output: string = WorkFile(output_buffer[:], "check.csv")
+    argument: s32 = 4
+    while argument < argc {
+        text: string = TextFromCString(cast(*u8)argv[argument])
+        argument += 1
+        SetText(formula_text[0][:], text)
+        formula_length[0] = cast(s32)TextUntilNul(formula_text[0][:]).count
+        // A formula is typed with its leading '=' left off.
+        if formula_length[0] > 0 && formula_text[0][0] == 61 {
+            index: s32 = 1
+            while index <= formula_length[0] {
+                formula_text[0][index - 1] = formula_text[0][index]
+                index += 1
+            }
+            formula_length[0] -= 1
+        }
+        UseStorage(*content, content_storage[:])
+        AddFormulaWorkbook(*content, 0, 1)
+        Check(WriteWholeFile(path, ContentText()), "cannot write the workbook")
+        label: s32 = Compare(CommandEval, path, output)
+        WriteText(1, FormulaOf(0))
+        WriteText(1, "  reference=")
+        PrintValue(*last_reference, 0)
+        WriteText(1, "  candidate=")
+        PrintValue(*last_candidate, 1)
+        if label != LabelNone {
+            WriteText(1, "  <-- ")
+            WriteText(1, LabelName(label))
+            if IsReal(label) { found = true }
+        }
+        WriteText(1, "\n")
+    }
+}
+
+Usage :: () {
+    WriteText(2, "usage: differential_fuzz REFERENCE CANDIDATE formulas|csv|xml|multi SEED COUNT\n")
+    WriteText(2, "       differential_fuzz REFERENCE CANDIDATE check FORMULA...\n")
+}
+
+// A decimal number from an argument, or a failure.
+ParseNumber :: (text: string) -> s32 {
+    value: s32 = 0
+    index: s32 = 0
+    Check(text.count > 0 && text.count < 10, "SEED, COUNT and FUZZ_TIMEOUT are decimal numbers")
+    while index < cast(s32)text.count {
+        Check(text[index] >= 48 && text[index] <= 57, "SEED, COUNT and FUZZ_TIMEOUT are decimal numbers")
+        value = value * 10 + cast(s32)(text[index] - 48)
+        index += 1
+    }
+    return value
+}
+
+#program_export
+main :: (argc: s32, argv: **s8) -> s32 {
+    if argc < 5 {
+        Usage()
+        return 2
+    }
+    mode: string = TextFromCString(cast(*u8)argv[3])
+    checking: bool = mode == "check"
+    if !checking && (argc != 6 || !(mode == "formulas" || mode == "csv" || mode == "xml" || mode == "multi")) {
+        Usage()
+        return 2
+    }
+    SetText(reference_buffer[:], TextFromCString(cast(*u8)argv[1]))
+    SetText(candidate_buffer[:], TextFromCString(cast(*u8)argv[2]))
+    Check(IsExecutable(TextUntilNul(reference_buffer[:])), "REFERENCE is not an executable file")
+    Check(IsExecutable(TextUntilNul(candidate_buffer[:])), "CANDIDATE is not an executable file")
+
+    template: [4096]u8
+    parent: string = Environment("TMPDIR")
+    if parent.count == 0 { parent = "/tmp" }
+    SetText(template[:], parent)
+    AppendText(template[:], "/workbook-fuzz-XXXXXX")
+    work: string = MakeTemporaryDirectory(template[:])
+    Check(work.count > 0, "cannot create a temporary directory")
+    SetText(work_buffer[:], work)
+    SetText(cleanup_directory[:], work)
+    StartGenerators()
+    seconds: string = Environment("FUZZ_TIMEOUT")
+    if seconds.count > 0 { timeout_milliseconds = ParseNumber(seconds) * 1000 }
+
+    if checking {
+        CheckFormulas(argc, argv)
+    } else {
+        seed: s32 = ParseNumber(TextFromCString(cast(*u8)argv[4]))
+        count: s32 = ParseNumber(TextFromCString(cast(*u8)argv[5]))
+        SeedRandom(cast(s64)seed)
+        if mode == "formulas" || mode == "xml" {
+            Check(LoadFunctionNames("tests/functions-manifest.txt"),
+                "cannot read tests/functions-manifest.txt; run from the repository root")
+        }
+        if mode == "formulas" {
+            FuzzFormulas(seed, count)
+        } else if mode == "csv" {
+            FuzzFiles(ModeCsv, "csv", seed, count)
+        } else if mode == "xml" {
+            Check(LoadFixtures("tests/fixtures"),
+                "cannot read tests/fixtures; run from the repository root")
+            FuzzFiles(ModeXml, "xml", seed, count)
+        } else {
+            FuzzFiles(ModeMulti, "multi", seed, count)
+        }
+    }
+
+    if found {
+        WriteText(1, "the inputs that differ are in ")
+        Say(TextUntilNul(work_buffer[:]))
+        return 1
+    }
+    cleanup_directory[0] = 0
+    RemoveTree(TextUntilNul(work_buffer[:]))
+    return 0
+}

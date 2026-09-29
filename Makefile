@@ -11,7 +11,7 @@ DIST_DIR ?= dist
 
 APP := build/workbook-desktop
 CELL := build/cell
-TESTS := source_audit_test structure_test conversion_test desktop_test parity_test
+TESTS := source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
 SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 
@@ -20,7 +20,7 @@ SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 # has the same layout.
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-.PHONY: build cell check run test test-ci structure-test conversion-test desktop-test parity audit install deb clean
+.PHONY: build cell check run test test-ci structure-test conversion-test desktop-test parity fuzz audit install deb clean
 
 build: $(APP) $(CELL)
 
@@ -69,6 +69,17 @@ test: test-ci parity
 
 parity: cell build/parity_test
 	@build/parity_test
+
+# Compares this build of cell with another on generated inputs. REFERENCE is the
+# binary whose answers are right, for example one built from an earlier commit;
+# SEED and COUNT choose the inputs. See tests/differential_fuzz.zi.
+SEED ?= 1
+COUNT ?= 200
+fuzz: cell build/differential_fuzz
+	@test -n "$(REFERENCE)" || { echo "set REFERENCE to the cell binary to compare with"; exit 2; }
+	@for mode in formulas csv xml multi; do \
+		build/differential_fuzz $(REFERENCE) $(CELL) $$mode $(SEED) $(COUNT) || exit 1; \
+	done
 
 # Installs the editor, its desktop entry, the geld finance profile, and cell
 # under PREFIX (default ~/.local). geld is a link to workbook that opens the
