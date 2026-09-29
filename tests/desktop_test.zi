@@ -144,6 +144,21 @@ Press :: (x: s32, y: s32) {
     SleepMilliseconds(300)
 }
 
+// Opens the cell menu with the secondary button, held for a few frames.
+RightClick :: (x: s32, y: s32) {
+    MoveMouse(x, y)
+    Xdotool("mousedown", "3", "", "", "", "")
+    SleepMilliseconds(120)
+    Xdotool("mouseup", "3", "", "", "", "")
+    SleepMilliseconds(400)
+}
+
+// Chooses a command in the menu just opened at (x, y): its rows are 26 high,
+// starting 4 below the pointer, and it opens with Cut, Copy, Paste.
+MenuCommand :: (x: s32, y: s32, row: s32) {
+    Press(x + 30, y + 17 + row * 26)
+}
+
 CellCenterX :: (column: s32) -> s32 {
     return GridLeft + column * ColumnWidth + ColumnWidth / 2
 }
@@ -333,6 +348,21 @@ Drive :: (directory: string) -> s32 {
     ToolbarButton("Save")
     ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "Delete column removes it")
     Say("edit: toolbar buttons insert and delete rows and columns")
+
+    // The secondary button opens a menu on the cell under it. Copy takes
+    // "hello" from C3 to the system clipboard and Paste puts it in D1.
+    RightClick(CellCenterX(2), CellCenterY(2))
+    MenuCommand(CellCenterX(2), CellCenterY(2), 1)
+    RightClick(CellCenterX(3), CellCenterY(0))
+    MenuCommand(CellCenterX(3), CellCenterY(0), 2)
+    Save()
+    ExpectRows(",,,hello\n1\n,,hello\n", "the cell menu copies and pastes")
+    // Cut takes "hello" out of C3, leaving it on the clipboard.
+    RightClick(CellCenterX(2), CellCenterY(2))
+    MenuCommand(CellCenterX(2), CellCenterY(2), 0)
+    Save()
+    ExpectRows(",,,hello\n1\n", "the cell menu cuts")
+    Say("edit: the cell menu copies, pastes, and cuts")
 
     Check(StopApp() == 0, "the app did not exit cleanly")
     Say("session: the app exited cleanly on SIGTERM")
