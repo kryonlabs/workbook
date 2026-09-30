@@ -224,10 +224,10 @@ QuadPowFrac :: (r: *Quad, x: *Quad, y: *Quad) {
     qr: Quad
     qy: Quad = y.*
     dy: float64
-    x1m: s32
+    x1m: bool
     one: Quad = Quad.{1.0, 0.0}
-    x1m = cast(s32)(Fabs(QuadVal(x)) >= 0.5)
-    if x1m != 0 {
+    x1m = Fabs(QuadVal(x)) >= 0.5
+    if x1m {
         QuadSub(*qx, x, *one)
     } else {
         qx = x.*
@@ -240,7 +240,7 @@ QuadPowFrac :: (r: *Quad, x: *Quad, y: *Quad) {
                 break
             }
             QuadAdd(*qy, *qy, *qy)
-            if x1m != 0 {
+            if x1m {
                 QuadSqrt1pm1(*qx, *qx)
                 if QuadVal(*qx) == 0 {
                     break
@@ -248,7 +248,7 @@ QuadPowFrac :: (r: *Quad, x: *Quad, y: *Quad) {
             } else {
                 QuadSqrt(*qx, *qx)
                 if QuadVal(*qx) >= 0.5 {
-                    x1m = 1
+                    x1m = true
                     QuadSub(*qx, *qx, *one)
                 }
             }
@@ -256,7 +256,7 @@ QuadPowFrac :: (r: *Quad, x: *Quad, y: *Quad) {
                 qp: Quad
                 QuadSub(*qy, *qy, *one)
                 QuadMul(*qp, *qx, *qr)
-                if x1m != 0 {
+                if x1m {
                     QuadAdd(*qr, *qr, *qp)
                 } else {
                     qr = qp
