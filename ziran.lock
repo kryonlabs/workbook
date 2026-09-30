@@ -2,14 +2,6 @@
   "format": 1,
   "packages": [
     {
-      "commit": "d41ead8184b0a9ccfb2a8c15d0bb6d1f10c39b68",
-      "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p35304beeea423bea",
-      "name": "Kryon",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/kryon.git"
-    },
-    {
       "commit": "933691600cf10e81b1f53d9919dbcb371c1968e1",
       "dependencies": {},
       "id": "p56788fa3dab3e73a",
@@ -27,8 +19,16 @@
       "url": "https://github.com/raysan5/raylib.git"
     },
     {
+      "commit": "eba5a07370e6fb8260274a867e8cc7edcd67b89c",
+      "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "id": "pa609145f4004c02f",
+      "name": "kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
       "commit": "92aafbc138b600b84cffac40bb24031ec0b39d4a",
-      "dependencies": {"kryon": "p35304beeea423bea"},
+      "dependencies": {"kryon": "pa609145f4004c02f"},
       "id": "pc8db43b9ad293188",
       "name": "Kss",
       "ref": "master",
@@ -36,11 +36,11 @@
     }
   ],
   "root": {
-    "dependencies": {"Kryon": "p35304beeea423bea", "kss": "pc8db43b9ad293188", "mingcute": "p56788fa3dab3e73a"},
+    "dependencies": {"kryon": "pa609145f4004c02f", "kss": "pc8db43b9ad293188", "mingcute": "p56788fa3dab3e73a"},
     "name": "workbook"
   },
   "toolchain": {
-    "commit": "07f12a10e844614acfcb61a808f054c2deb4be3e",
+    "commit": "c0e0e9847d9bf7c5e4368ec2745c3e7262323b50",
     "ref": "master",
     "url": "https://github.com/ziranlang/ziran.git"
   }

@@ -43,13 +43,13 @@ development packages installed.
     cell eval FILE    # evaluate a .gnumeric/.csv file and print CSV
     geld              # the finance profile: a link to workbook
 
-Update the pinned dependencies with `ziran update Kryon` or `ziran update ziran`
+Update the pinned dependencies with `ziran update kryon` or `ziran update ziran`
 and commit the new `ziran.lock`. To build against sibling checkouts while
 developing Kryon or Ziran, put their paths in an ignored `ziran.local.toml`:
 
     [overrides]
-    Kryon = "../kryon"
-    ziran = "../ziran"
+    kryon = "../kryon"
+    ziran = "../../ziranlang/ziran"
 
 `make test` needs `xvfb-run`, `xdotool`, and `gnumeric` (for `ssconvert`). The
 desktop test (`tests/desktop_test.zi`) runs the editor only on a private Xvfb

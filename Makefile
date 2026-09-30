@@ -26,7 +26,7 @@ build: $(APP) $(CELL)
 
 # The desktop editor: Ziran generates C for Kryon's SDL and Cairo host.
 $(APP): $(SOURCES)
-	@$(ZIRAN) tool Kryon build
+	@$(ZIRAN) build
 
 # A headless program: Ziran generates C for one entry, then cc links it.
 # $(call program,entry,source,output)
@@ -46,12 +46,12 @@ $(TEST_PROGRAMS): build/%: tests/%.zi $(SOURCES) $(wildcard tests/*.zi)
 	$(call program,$*,tests/$*.zi,$@)
 
 check:
-	@$(ZIRAN) tool Kryon check
+	@$(ZIRAN) check
 	@$(ZIRAN) check --project src/cell.zi
 	@for test in $(TESTS); do $(ZIRAN) check --project tests/$$test.zi || exit 1; done
 
 run:
-	@$(ZIRAN) tool Kryon run
+	@$(ZIRAN) run
 
 audit: build/source_audit_test
 	@build/source_audit_test
