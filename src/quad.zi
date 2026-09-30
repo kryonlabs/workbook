@@ -889,21 +889,22 @@ quad_agm_internal :: (res: *Quad, method: s32, x: *Quad) {
     qrp = one
     qrp.h = 0
     qrp.l = 0
-    if method == AGM_ARCSIN {
-        quad_ihypot(*dpk[0], x)
-        gp = one
-        qnum = x.*
-    } else if method == AGM_ARCCOS {
-        dpk[0] = x.*
-        gp = one
-        quad_ihypot(*qnum, x)
-    } else if method == AGM_ARCTAN {
-        dpk[0] = one
-        QuadHypot(*gp, x, *one)
-        qnum = x.*
-    } else {
-        QuadInit(res, NotANumber())
-        return
+    if method == {
+        case AGM_ARCSIN;
+            quad_ihypot(*dpk[0], x)
+            gp = one
+            qnum = x.*
+        case AGM_ARCCOS;
+            dpk[0] = x.*
+            gp = one
+            quad_ihypot(*qnum, x)
+        case AGM_ARCTAN;
+            dpk[0] = one
+            QuadHypot(*gp, x, *one)
+            qnum = x.*
+        case;
+            QuadInit(res, NotANumber())
+            return
     }
     {
         n = 1
