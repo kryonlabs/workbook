@@ -1,4 +1,5 @@
 [package]
+tool = "kryon"
 name = "workbook"
 entry = "src/app.zi"
 module_roots = ["src", "tests"]
@@ -8,7 +9,7 @@ bridge_modules = ["app"]
 git = "https://github.com/ziranlang/ziran.git"
 ref = "master"
 
-[dependencies.Kryon]
+[dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
 ref = "master"
 
@@ -21,16 +22,15 @@ git = "https://github.com/kryonlabs/kss.git"
 ref = "master"
 
 [install]
-tool = "Kryon"
 bin = "workbook"
 
-[tool.Kryon]
+[tool.kryon]
 default_profile = "desktop"
 
-[tool.Kryon.profiles.desktop]
+[tool.kryon.profiles.desktop]
 backend = "desktop"
 
-[tool.Kryon.install]
+[tool.kryon.install]
 profile = "desktop"
 name = "Workbook"
 comment = "Spreadsheet editor compatible with Gnumeric"
