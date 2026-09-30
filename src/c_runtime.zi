@@ -373,9 +373,9 @@ GrowLiteralTable :: () {
 CompareLiteral :: (text: *s8, literal: string, limit: s64, fold: bool) -> s32 {
     index: s64 = 0
     while limit < 0 || index < limit {
-        left: s32 = cast(s32)cast(u8)text[index]
+        left: s32 = cast(u8)text[index]
         right: s32 = 0
-        if index < literal.count { right = cast(s32)literal[index] }
+        if index < literal.count { right = literal[index] }
         if fold {
             left = LowerByte(left)
             right = LowerByte(right)

@@ -10,7 +10,7 @@ crc32_table :: (index: u32) -> u64 {
             i = 0
             while i < 256 {
                 k: u32
-                c = cast(u64)i
+                c = i
                 {
                     k = 0
                     while k < 8 {
@@ -181,9 +181,9 @@ huff_decode :: (r: *BitReader, h: *Huff) -> s32 {
         len = 1
         while len < 16 {
             code |= cast(s32)read_bits(r, 1)
-            count: s32 = cast(s32)h.counts[len]
+            count: s32 = h.counts[len]
             if (code - count) < first {
-                return cast(s32)h.symbols[index + (code - first)]
+                return h.symbols[index + (code - first)]
             }
             index += count
             first += count
@@ -379,19 +379,19 @@ inflate_raw :: (r: *BitReader, w: *Window) -> s32 {
                         if ls >= 29 {
                             return 0
                         }
-                        length = cast(u32)LENGTH_BASE[ls] + read_bits(r, cast(s32)LENGTH_EXTRA[ls])
+                        length = cast(u32)LENGTH_BASE[ls] + read_bits(r, LENGTH_EXTRA[ls])
                         dsym = cast(u32)huff_decode(r, *dist)
                         if r.bad != 0 || cast(s32)dsym < 0 || dsym >= 30 {
                             return 0
                         }
-                        back = cast(u32)DIST_BASE[dsym] + read_bits(r, cast(s32)DIST_EXTRA[dsym])
+                        back = cast(u32)DIST_BASE[dsym] + read_bits(r, DIST_EXTRA[dsym])
                         if cast(u64)back > w.len || back == 0 || back > 32768 {
                             return 0
                         }
                         {
                             i = 0
                             while i < length {
-                                if !(window_push(w, window_at(w, cast(u64)back)) != 0) {
+                                if !(window_push(w, window_at(w, back)) != 0) {
                                     return 0
                                 }
                                 i += 1

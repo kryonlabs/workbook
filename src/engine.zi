@@ -356,7 +356,7 @@ TextLooksNumeric :: (text: *s8) -> s32 {
     if end == text {
         return 0
     }
-    while end != null && end.* != 0 && IsSpaceByte(cast(s32)(cast(u8)end.*)) != 0 {
+    while end != null && end.* != 0 && IsSpaceByte(cast(u8)end.*) != 0 {
         end = *end[1]
     }
     return cast(s32)(end.* == 0)
@@ -751,7 +751,7 @@ ParseColLetters :: (text: *s8, pos: *s32) -> s32 {
     col: s32 = 0
     start: s32 = pos[0]
     while text[pos[0]] != 0 {
-        ch: s32 = cast(s32)text[pos[0]]
+        ch: s32 = text[pos[0]]
         if ch >= 65 && ch <= 90 {
             col = col * 26 + (ch - 65 + 1)
         } else if ch >= 97 && ch <= 122 {
@@ -774,7 +774,7 @@ ParseRowDigits :: (text: *s8, pos: *s32) -> s32 {
     row: s32 = 0
     start: s32 = pos[0]
     while text[pos[0]] != 0 {
-        ch: s32 = cast(s32)text[pos[0]]
+        ch: s32 = text[pos[0]]
         if ch < 48 || ch > 57 {
             break
         }
@@ -850,7 +850,7 @@ ParseSheetPrefix :: (st: *EvalState, text: *s8, pos: *s32, sheet_out: **Sheet) -
     target: *Sheet = null
     quoted: s32 = 0
     inner: [160]s8
-    while IdentChar(cast(s32)text[end]) != 0 || text[end] == 32 {
+    while IdentChar(text[end]) != 0 || text[end] == 32 {
         end += 1
     }
     if text[end] != 33 || end == here {
@@ -1071,7 +1071,7 @@ EvalFunction :: (st: *EvalState, text: *s8, pos: *s32, name: *s8, name_len: s32)
     }
     i: s32 = 0
     while i < name_len {
-        lower[i] = cast(s8)LowerByte(cast(s32)(cast(u8)name[i]))
+        lower[i] = cast(s8)LowerByte(cast(u8)name[i])
         i += 1
     }
     lower[name_len] = 0
@@ -1133,7 +1133,7 @@ EvalFunction :: (st: *EvalState, text: *s8, pos: *s32, name: *s8, name_len: s32)
 
 EvalFactor :: (st: *EvalState, text: *s8, pos: *s32) -> Val {
     SkipFormulaSpace(text, pos)
-    ch: s32 = cast(s32)text[pos[0]]
+    ch: s32 = text[pos[0]]
     if ch == 0 {
         return ValError(ERR_VALUE)
     }
@@ -1185,7 +1185,7 @@ EvalFactor :: (st: *EvalState, text: *s8, pos: *s32) -> Val {
         }
         pos[0] = save
         endpos: s32 = pos[0]
-        while IdentChar(cast(s32)text[endpos]) != 0 {
+        while IdentChar(text[endpos]) != 0 {
             endpos += 1
         }
         if endpos == pos[0] {
@@ -1292,7 +1292,7 @@ EvalMul :: (st: *EvalState, text: *s8, pos: *s32) -> Val {
     left: Val = EvalPower(st, text, pos)
     while left.kind != VAL_ERROR {
         SkipFormulaSpace(text, pos)
-        op: s32 = cast(s32)text[pos[0]]
+        op: s32 = text[pos[0]]
         if op != 42 && op != 47 {
             break
         }
@@ -1326,7 +1326,7 @@ EvalAdd :: (st: *EvalState, text: *s8, pos: *s32) -> Val {
     left: Val = EvalMul(st, text, pos)
     while left.kind != VAL_ERROR {
         SkipFormulaSpace(text, pos)
-        op: s32 = cast(s32)text[pos[0]]
+        op: s32 = text[pos[0]]
         if op != 43 && op != 45 {
             break
         }
@@ -1662,7 +1662,7 @@ ShiftFormulaRefs :: (wb: *Workbook, home: *Sheet, target: *Sheet, text: *s8, by_
         return wb_strdup(text)
     }
     while text[i] != 0 {
-        ch: s32 = cast(s32)text[i]
+        ch: s32 = text[i]
         p: s32 = i
         sheet: *Sheet = home
         name: [160]s8
@@ -1687,7 +1687,7 @@ ShiftFormulaRefs :: (wb: *Workbook, home: *Sheet, target: *Sheet, text: *s8, by_
             }
             continue
         }
-        if i > 0 && (IdentChar(cast(s32)text[i - 1]) != 0 || text[i - 1] == 36 || text[i - 1] == 33) {
+        if i > 0 && (IdentChar(text[i - 1]) != 0 || text[i - 1] == 36 || text[i - 1] == 33) {
             ShiftEmitChar(out, *o, cap, text[i])
             i += 1
             continue
@@ -1721,7 +1721,7 @@ ShiftFormulaRefs :: (wb: *Workbook, home: *Sheet, target: *Sheet, text: *s8, by_
             }
         } else {
             q: s32 = p
-            while IdentChar(cast(s32)text[q]) != 0 {
+            while IdentChar(text[q]) != 0 {
                 q += 1
             }
             if q > p && text[q] == 33 && q - p < 160 {
@@ -1789,7 +1789,7 @@ ShiftFormulaRefs :: (wb: *Workbook, home: *Sheet, target: *Sheet, text: *s8, by_
                 }
             }
         }
-        if ok != 0 && (IdentChar(cast(s32)text[p]) != 0 || text[p] == 40) {
+        if ok != 0 && (IdentChar(text[p]) != 0 || text[p] == 40) {
             ok = 0
         }
         if ok == 0 {
@@ -2560,15 +2560,15 @@ FnProper :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
         return ValError(ERR_VALUE)
     }
     while text[i] != 0 {
-        is_alpha: s32 = cast(s32)(IsAlphaByte(cast(s32)(cast(u8)text[i])) != 0)
+        is_alpha: s32 = cast(s32)(IsAlphaByte(cast(u8)text[i]) != 0)
         if is_alpha != 0 && word_start != 0 {
-            out[i] = cast(s8)UpperByte(cast(s32)(cast(u8)text[i]))
+            out[i] = cast(s8)UpperByte(cast(u8)text[i])
         } else if is_alpha != 0 {
-            out[i] = cast(s8)LowerByte(cast(s32)(cast(u8)text[i]))
+            out[i] = cast(s8)LowerByte(cast(u8)text[i])
         } else {
             out[i] = text[i]
         }
-        word_start = cast(s32)(!(IsAlphaByte(cast(s32)(cast(u8)text[i])) != 0) && text[i] != 39)
+        word_start = cast(s32)(!(IsAlphaByte(cast(u8)text[i]) != 0) && text[i] != 39)
         i += 1
     }
     out[i] = 0
@@ -2701,7 +2701,7 @@ ParseRadix :: (text: *s8, base: s32) -> float64 {
         return 1e308
     }
     while text[i] != 0 {
-        d: s32 = CharToDigit(cast(s32)(cast(u8)text[i]))
+        d: s32 = CharToDigit(cast(u8)text[i])
         if d < 0 || d >= base {
             return 1e308
         }
@@ -5968,7 +5968,7 @@ FnUpper :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
     }
     i = 0
     while text[i] != 0 {
-        text[i] = cast(s8)UpperByte(cast(s32)(cast(u8)text[i]))
+        text[i] = cast(s8)UpperByte(cast(u8)text[i])
         i += 1
     }
     return ValString(wb_strdup(*text[0]))
@@ -5982,7 +5982,7 @@ FnLower :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
     }
     i = 0
     while text[i] != 0 {
-        text[i] = cast(s8)LowerByte(cast(s32)(cast(u8)text[i]))
+        text[i] = cast(s8)LowerByte(cast(u8)text[i])
         i += 1
     }
     return ValString(wb_strdup(*text[0]))
@@ -6191,7 +6191,7 @@ FnSearch :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
             if hay[i + j] == 0 {
                 break
             }
-            if LowerByte(cast(s32)(cast(u8)hay[i + j])) != LowerByte(cast(s32)(cast(u8)needle[j])) {
+            if LowerByte((cast(u8)hay[i + j])) != LowerByte(cast(u8)needle[j]) {
                 break
             }
             j += 1
@@ -6587,11 +6587,11 @@ ParseIsoDate :: (text: *s8, y: *s32, m: *s32, d: *s32) -> s32 {
             pos += 1
             continue
         }
-        if !(IsDigitByte(cast(s32)(cast(u8)text[pos])) != 0) {
+        if !(IsDigitByte(cast(u8)text[pos]) != 0) {
             return 0
         }
         value: s32 = 0
-        while IsDigitByte(cast(s32)(cast(u8)text[pos])) != 0 {
+        while IsDigitByte(cast(u8)text[pos]) != 0 {
             value = value * 10 + (cast(s32)text[pos] - 48)
             pos += 1
         }
@@ -9473,7 +9473,7 @@ ValToBase :: (value: *Val, places_v: *Val, src_base: s32, dest_base: s32, min_va
         if (flags & 8) != 0 && txt[0] == 0 {
             txt = CText("0")
         }
-        if V2BIsAlnum(cast(s32)txt[0]) == 0 {
+        if V2BIsAlnum(txt[0]) == 0 {
             return ValError(ERR_NUM)
         }
         len = cast(s32)TextLength(txt)
@@ -13467,13 +13467,13 @@ DbWildMatch :: (pat: *s8, s: *s8) -> s32 {
     ls: [256]s8
     i: s32 = 0
     while i < 63 && s[i] != 0 {
-        lc[i] = cast(s8)LowerByte(cast(s32)(cast(u8)s[i]))
+        lc[i] = cast(s8)LowerByte(cast(u8)s[i])
         i += 1
     }
     lc[i] = 0
     i = 0
     while i < 63 && pat[i] != 0 {
-        ls[i] = cast(s8)LowerByte(cast(s32)(cast(u8)pat[i]))
+        ls[i] = cast(s8)LowerByte(cast(u8)pat[i])
         i += 1
     }
     ls[i] = 0
@@ -14700,7 +14700,7 @@ Utf8Encode :: (cp: s32, out: *s8) -> s32 {
 }
 
 Utf8Decode1 :: (s: *s8) -> s32 {
-    b0: s32 = cast(s32)(cast(u8)s[0])
+    b0: s32 = cast(u8)s[0]
     if b0 < 128 {
         return b0
     }
@@ -15005,7 +15005,7 @@ FnEncodeurl :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
     }
     i = 0
     while txt[i] != 0 {
-        c = cast(s32)(cast(u8)txt[i])
+        c = cast(u8)txt[i]
         if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 || c == 46 || c == 95 || c == 126 || c == 33 || c == 36 || c == 38 || c == 39 || c == 40 || c == 41 || c == 42 || c == 43 || c == 44 || c == 59 || c == 61 || c == 58 || c == 64 || c == 47 {
             out[n] = cast(s8)c
             n += 1
@@ -15169,7 +15169,7 @@ FnNumbervalueUnused :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> 
     }
     i = 0
     while txt[i] != 0 {
-        c: s32 = cast(s32)(cast(u8)txt[i])
+        c: s32 = cast(u8)txt[i]
         if c == 32 {
             i += 1
             continue
@@ -15471,7 +15471,7 @@ CxParse :: (src_in: *s8, dst: *Cplx, unit: *s32) -> s32 {
         return 0
     }
     if (src[0] == 105 || src[0] == 106) && src[1] == 0 {
-        unit[0] = cast(s32)src[0]
+        unit[0] = src[0]
         dst.re = 0
         dst.im = x
         return 0
@@ -15507,7 +15507,7 @@ CxParse :: (src_in: *s8, dst: *Cplx, unit: *s32) -> s32 {
         y = 0 - y
     }
     if (src[0] == 105 || src[0] == 106) && src[1] == 0 {
-        unit[0] = cast(s32)src[0]
+        unit[0] = src[0]
         dst.re = x
         dst.im = y
         return 0
@@ -16403,7 +16403,7 @@ FnComplexFn :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
         if TextCompareLiteral(*suffix[0], "i") != 0 && TextCompareLiteral(*suffix[0], "j") != 0 {
             return ValError(ERR_VALUE)
         }
-        return CxVal(c, cast(s32)suffix[0])
+        return CxVal(c, suffix[0])
     }
     return CxVal(c, 105)
 }
@@ -21706,7 +21706,7 @@ FnTimevalue :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
         ni: s32 = 0
         cur: s32 = 0
         while text[i] != 0 && ni < 8 {
-            ch: s32 = cast(s32)text[i]
+            ch: s32 = text[i]
             if ch >= 48 && ch <= 57 {
                 cur = cur * 10 + (ch - 48)
             } else if ch == 58 {
@@ -24136,7 +24136,7 @@ RegexApplyReplacement :: (text: *s8, so: s32, eo: s32, repl: *s8, re: *RegexPatt
     n: s32 = 0
     i: s32 = 0
     while repl[i] != 0 && n < 480 {
-        c: s32 = cast(s32)repl[i]
+        c: s32 = repl[i]
         if (c == 92 || c == 36) && repl[i + 1] >= 48 && repl[i + 1] <= 57 {
             g: s32 = cast(s32)repl[i + 1] - 48
             gs: s32 = pm[g].rm_so
@@ -24341,7 +24341,7 @@ FnRegexReplace :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
 FoldAsciiInto :: (s: *s8, out: *s8) {
     i: s32 = 0
     while s[i] != 0 && i < 500 {
-        c: s32 = cast(s32)(cast(u8)s[i])
+        c: s32 = cast(u8)s[i]
         if c >= 65 && c <= 90 {
             c += 32
         }
@@ -24739,11 +24739,11 @@ WildXlMatch :: (pat: *s8, txt: *s8) -> s32 {
     pn: s32 = 0
     i: s32 = 0
     while pat[i] != 0 && pn < 126 {
-        c: s32 = cast(s32)(cast(u8)pat[i])
+        c: s32 = cast(u8)pat[i]
         lit: s32 = 0
         if c == 126 && (pat[i + 1] == 42 || pat[i + 1] == 63 || pat[i + 1] == 126) {
             i += 1
-            c = cast(s32)(cast(u8)pat[i])
+            c = cast(u8)pat[i]
             lit = 1
         }
         pc[pn] = c
@@ -24756,7 +24756,7 @@ WildXlMatch :: (pat: *s8, txt: *s8) -> s32 {
     star: s32 = -1
     mark: s32 = -1
     while txt[t] != 0 {
-        tc: s32 = cast(s32)(cast(u8)txt[t])
+        tc: s32 = cast(u8)txt[t]
         if p < pn && pl[p] == 0 && pc[p] == 42 {
             star = p
             p += 1
@@ -26065,7 +26065,7 @@ JisMapFull :: (c: s32, fc: s32) -> s32 {
 }
 
 Utf8Advance :: (s: *s8, i: s32) -> s32 {
-    b: s32 = cast(s32)(cast(u8)s[i])
+    b: s32 = cast(u8)s[i]
     if b == 0 {
         return i
     }
