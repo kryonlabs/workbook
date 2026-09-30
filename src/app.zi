@@ -44,18 +44,7 @@ Margin :: 24.0;
 TabsBottom :: 78.0;
 GridBottom :: 88.0;
 
-// The key codes every Kryon host reports.
-KeyTab :: 258;
-KeyEnter :: 257;
-KeyEscape :: 256;
-KeyDelete :: 261;
-KeyBackspace :: 259;
-KeyRight :: 262;
-KeyLeft :: 263;
-KeyDown :: 264;
-KeyUp :: 265;
-KeyHome :: 268;
-KeyEnd :: 269;
+// Kryon names the other keys; letters are their uppercase ASCII codes.
 KeyA :: 65;
 KeyC :: 67;
 KeyS :: 83;
