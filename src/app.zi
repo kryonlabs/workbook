@@ -1008,7 +1008,7 @@ HexValue :: (text: string, at: s32) -> s32 {
     value: s32 = 0
     index: s32 = 0
     while index < 4 {
-        byte: s32 = cast(s32)text[at + index]
+        byte: s32 = text[at + index]
         digit: s32 = 0
         if byte >= 48 && byte <= 57 { digit = byte - 48 }
         if byte >= 65 && byte <= 70 { digit = byte - 55 }
