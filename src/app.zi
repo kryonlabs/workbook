@@ -3,7 +3,7 @@
 using UI :: #import "Widgets";
 Engine :: #import "engine";
 Json :: #import "json_scan";
-SystemStyle :: #import "SystemStyle";
+SystemStyle :: #import "kss/SystemStyle";
 SystemThemeLinux :: #import "SystemThemeLinux";
 #import "byte_text_linux"
 #import "text_buffer"
