@@ -2,6 +2,14 @@
   "format": 1,
   "packages": [
     {
+      "commit": "d41ead8184b0a9ccfb2a8c15d0bb6d1f10c39b68",
+      "dependencies": {"raylib": "p5a77c9c35110e925"},
+      "id": "p35304beeea423bea",
+      "name": "Kryon",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
       "commit": "933691600cf10e81b1f53d9919dbcb371c1968e1",
       "dependencies": {},
       "id": "p56788fa3dab3e73a",
@@ -20,23 +28,15 @@
     },
     {
       "commit": "92aafbc138b600b84cffac40bb24031ec0b39d4a",
-      "dependencies": {"kryon": "pf3d53e0db9dd2db4"},
+      "dependencies": {"kryon": "p35304beeea423bea"},
       "id": "pc8db43b9ad293188",
       "name": "Kss",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kss.git"
-    },
-    {
-      "commit": "597de354616e3aec6d97c3a55f80aaa3a141f828",
-      "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "pf3d53e0db9dd2db4",
-      "name": "Kryon",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/kryon.git"
     }
   ],
   "root": {
-    "dependencies": {"Kryon": "pf3d53e0db9dd2db4", "kss": "pc8db43b9ad293188", "mingcute": "p56788fa3dab3e73a"},
+    "dependencies": {"Kryon": "p35304beeea423bea", "kss": "pc8db43b9ad293188", "mingcute": "p56788fa3dab3e73a"},
     "name": "workbook"
   },
   "toolchain": {
