@@ -14656,7 +14656,7 @@ FnClean :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
     }
     i = 0
     while txt[i] != 0 {
-        if cast(u8)txt[i] >= 32 {
+        if cast(u8)txt[i] >= #char " " {
             out[n] = txt[i]
             n += 1
         }
