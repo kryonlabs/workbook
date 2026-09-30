@@ -44,23 +44,23 @@ Margin :: 24.0;
 TabsBottom :: 78.0;
 GridBottom :: 88.0;
 
-// SDL key codes the desktop host reports.
-KeyTab :: 9;
-KeyEnter :: 13;
-KeyEscape :: 27;
-KeyDelete :: 127;
-KeyBackspace :: 8;
-KeyRight :: 0x4000004F;
-KeyLeft :: 0x40000050;
-KeyDown :: 0x40000051;
-KeyUp :: 0x40000052;
-KeyHome :: 0x4000004A;
-KeyEnd :: 0x4000004D;
-KeyA :: 97;
-KeyC :: 99;
-KeyS :: 115;
-KeyV :: 118;
-KeyX :: 120;
+// The key codes every Kryon host reports.
+KeyTab :: 258;
+KeyEnter :: 257;
+KeyEscape :: 256;
+KeyDelete :: 261;
+KeyBackspace :: 259;
+KeyRight :: 262;
+KeyLeft :: 263;
+KeyDown :: 264;
+KeyUp :: 265;
+KeyHome :: 268;
+KeyEnd :: 269;
+KeyA :: 65;
+KeyC :: 67;
+KeyS :: 83;
+KeyV :: 86;
+KeyX :: 88;
 
 // The cell menu: open, and where the secondary button was released.
 grid_menu_open: bool = false;
