@@ -51,7 +51,8 @@ developing Kryon or Ziran, put their paths in an ignored `ziran.local.toml`:
     kryon = "../kryon"
     ziran = "../../ziranlang/ziran"
 
-`make test` needs `xvfb-run`, `xdotool`, and `gnumeric` (for `ssconvert`). The
+`make test` needs `xvfb-run`, `xdotool`, `xfwm4`, `dbus-run-session`, `xmessage`,
+ImageMagick's `import`, and `gnumeric` (for `ssconvert`). The
 desktop test (`tests/desktop_test.zi`) runs the editor only on a private Xvfb
 display; it never opens a window on your desktop. Parity compares against the
 `ssconvert` on your path, or
@@ -59,6 +60,13 @@ against `GNUMERIC_SSCONVERT`, or a local master build at
 `~/Tools/gnumeric-1.12.62`; the newest catalog functions exist only in a
 Gnumeric master build, so an older distribution Gnumeric reports those fixtures
 as different. CI therefore runs `make test-ci`.
+
+The menu test also runs a private Xfce window manager and D-Bus session. It
+checks that the first right-click after another window has focus shows the
+menu, that commands act on the clicked cell, and that menus work after resizing.
+To verify the installed app, run:
+
+    WORKBOOK_TEST_APP="$HOME/.local/bin/workbook" build/desktop_test --menu-only
 
 `tests/differential_fuzz.zi` checks one build of `cell` against another. Point
 `REFERENCE` at a build whose answers are right, for example `cell` built from an
@@ -82,6 +90,8 @@ A run that hangs is killed after `FUZZ_TIMEOUT` seconds (20 by default).
     Esc               leave the formula bar without changing the cell
     Delete            clear the selected cell
     double click      edit the clicked cell in the formula bar
+    right click       open the cell menu, including when activating the window
+    Ctrl+C/X/V        copy, cut, or paste cells through the system clipboard
     wheel             scroll rows
     Ctrl+S            save
 

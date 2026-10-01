@@ -49,11 +49,32 @@ TwoSheets :: #string END
 </gnm:Workbook>
 END;
 
+MenuWorkbook :: #string END
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:SheetNameIndex><gnm:SheetName>Menu</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Menu</gnm:Name><gnm:MaxCol>12</gnm:MaxCol><gnm:MaxRow>29</gnm:MaxRow>
+    <gnm:Cells>
+      <gnm:Cell Row="0" Col="0" ValueType="40">7</gnm:Cell>
+      <gnm:Cell Row="1" Col="1" ValueType="40">11</gnm:Cell>
+      <gnm:Cell Row="7" Col="10" ValueType="40">42</gnm:Cell>
+      <gnm:Cell Row="29" Col="12" ValueType="40">1</gnm:Cell>
+    </gnm:Cells>
+  </gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>
+END;
+
 app_pid: s32 = 0;
 window_id: [64]u8;
 data_directory: [4096]u8;
 saved_path: [4096]u8;
 log_path: [4096]u8;
+
+DesktopAppPath :: () -> string {
+    override: string = Environment("WORKBOOK_TEST_APP")
+    if override.count > 0 { return override }
+    return AppPath
+}
 
 // ---------------------------------------------------------------- xdotool
 
@@ -153,6 +174,34 @@ RightClick :: (x: s32, y: s32) {
     SleepMilliseconds(400)
 }
 
+QuickRightClick :: (x: s32, y: s32) {
+    MoveMouse(x, y)
+    Xdotool("click", "3", "", "", "", "")
+    SleepMilliseconds(400)
+}
+
+// Capture our private test window, including the open menu. Force RGB8 so the
+// same PNG reader used by the frame test can inspect it.
+ExpectMenuVisible :: (x: s32, y: s32, width: s32, height: s32) {
+    path: [4096]u8
+    SetText(path[:], TextUntilNul(data_directory[:]))
+    AppendText(path[:], "/menu.png")
+    output: [4096]u8
+    SetText(output[:], "PNG24:")
+    AppendText(output[:], TextUntilNul(path[:]))
+    command: [7]string = .{"import", "-window", WindowId(), "-depth", "8",
+        "-silent", TextUntilNul(output[:])}
+    Check(RunQuiet(command[:]) == 0, "cannot capture the cell menu")
+    failure: [256]u8
+    Check(ReadScreenshot(TextUntilNul(path[:]), failure[:]), TextUntilNul(failure[:]))
+    Check(screenshot_width == width && screenshot_height == height,
+        "the desktop window did not resize")
+    Check(PixelAt(x + 150, y + 8) == White, "the cell menu panel is not visible")
+    Check(DarkPixels(x + 12, y + 4, 48, 26) > 10, "the Cut option is not visible")
+    Check(DarkPixels(x + 12, y + 30, 48, 26) > 10, "the Copy option is not visible")
+    Check(DarkPixels(x + 12, y + 82, 48, 26) > 10, "the Clear option is not visible")
+}
+
 // Chooses a command in the menu just opened at (x, y): its rows are 26 high,
 // starting 4 below the pointer, and it opens with Cut, Copy, Paste.
 MenuCommand :: (x: s32, y: s32, row: s32) {
@@ -209,8 +258,9 @@ StartApp :: (directory: string) {
     SetText(log_path[:], directory)
     AppendText(log_path[:], "/app.log")
     SetEnvironment("WORKBOOK_DIR", directory)
+    SetEnvironment("GELD_DIR", directory)
     UnsetEnvironment("KRYON_CAPTURE_PATH")
-    command: [1]string = .{AppPath}
+    command: [1]string = .{DesktopAppPath()}
     app_pid = Spawn(command[:], TextUntilNul(log_path[:]))
     Check(app_pid > 0, "the app could not be started")
     cleanup_pid = app_pid
@@ -400,6 +450,96 @@ DriveTabs :: (directory: string) -> s32 {
     return 0
 }
 
+ExpectSavedCell :: (row: s32, column: s32, expected: string) {
+    saved: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(saved, cast(*s8)*saved_path[0]) != 0,
+        "cannot read the menu test's saved workbook")
+    source: *s8 = Engine.WorkbookCellText(saved, 0, row, column)
+    actual: string = ""
+    if source != null { actual = TextFromCString(cast(*u8)source) }
+    Check(actual == expected, "the cell menu changed the wrong cell")
+    Engine.WorkbookFree(saved)
+}
+
+DriveMenus :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1",
+        "the menu driver requires the desktop test's private display")
+    fixture: [4096]u8
+    SetText(fixture[:], directory)
+    AppendText(fixture[:], "/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(fixture[:]), MenuWorkbook), "cannot write the menu fixture")
+    manager_log: [4096]u8
+    SetText(manager_log[:], directory)
+    AppendText(manager_log[:], "/window-manager.log")
+    manager_command: [3]string = .{"xfwm4", "--sm-client-disable", "--compositor=off"}
+    manager_pid: s32 = Spawn(manager_command[:], TextUntilNul(manager_log[:]))
+    Check(manager_pid > 0, "cannot start the private window manager")
+    SleepMilliseconds(500)
+    StartApp(directory)
+    Xdotool("windowmove", WindowId(), "20", "20", "", "")
+
+    helper_log: [4096]u8
+    SetText(helper_log[:], directory)
+    AppendText(helper_log[:], "/focus-helper.log")
+    helper_command: [6]string = .{"xmessage", "-title", "WorkbookFocusProbe",
+        "-geometry", "180x70+1400+900", "Private focus test"}
+    helper_pid: s32 = Spawn(helper_command[:], TextUntilNul(helper_log[:]))
+    Check(helper_pid > 0, "cannot start the focus helper")
+    helper_window: [64]u8
+    attempts: s32 = 0
+    while attempts < 100 {
+        output: [1024]u8
+        search: [5]string = .{"xdotool", "search", "--onlyvisible", "--name",
+            "^WorkbookFocusProbe$"}
+        result: CaptureResult = Run(search[:], output[:])
+        if result.code == 0 && result.length > 0 {
+            end: s32 = 0
+            while end < result.length && output[end] != 10 { end += 1 }
+            SetText(helper_window[:], TextView(output[0:end]))
+            break
+        }
+        SleepMilliseconds(100)
+        attempts += 1
+    }
+    Check(helper_window[0] != 0, "the focus helper window did not appear")
+    Xdotool("windowactivate", "--sync", TextUntilNul(helper_window[:]), "", "", "")
+    SleepMilliseconds(200)
+
+    // No windowfocus: the first right-click must both activate Workbook and
+    // show the menu on B2, even though A1 was selected before losing focus.
+    QuickRightClick(CellCenterX(1), CellCenterY(1))
+    ExpectMenuVisible(CellCenterX(1), CellCenterY(1), 960, 600)
+    MenuCommand(CellCenterX(1), CellCenterY(1), 1)
+    QuickRightClick(CellCenterX(3), CellCenterY(0))
+    MenuCommand(CellCenterX(3), CellCenterY(0), 2)
+    Save()
+    ExpectSavedCell(0, 3, "11")
+    QuickRightClick(CellCenterX(1), CellCenterY(1))
+    MenuCommand(CellCenterX(1), CellCenterY(1), 3)
+    Save()
+    ExpectSavedCell(1, 1, "")
+    ExpectSavedCell(0, 0, "7")
+    RightClick(CellCenterX(0), CellCenterY(0))
+    ExpectMenuVisible(CellCenterX(0), CellCenterY(0), 960, 600)
+    Key("Escape")
+
+    // K8 is beyond the original window width. The resized drawing and input
+    // coordinates must agree, and Clear must still act on that exact cell.
+    Xdotool("windowsize", WindowId(), "1440", "900", "", "")
+    SleepMilliseconds(500)
+    QuickRightClick(CellCenterX(10), CellCenterY(7))
+    ExpectMenuVisible(CellCenterX(10), CellCenterY(7), 1440, 900)
+    MenuCommand(CellCenterX(10), CellCenterY(7), 3)
+    Save()
+    ExpectSavedCell(7, 10, "")
+    ExpectSavedCell(0, 0, "7")
+    Check(StopApp() == 0, "the menu test app did not exit cleanly")
+    Terminate(helper_pid)
+    Terminate(manager_pid)
+    Say("menus: first focus click, visible options, clicked-cell commands, held clicks, and resize passed")
+    return 0
+}
+
 // ------------------------------------------------------------ the frame check
 
 CheckFrame :: (work: string) {
@@ -419,10 +559,12 @@ CheckFrame :: (work: string) {
     SetText(capture[:], work)
     AppendText(capture[:], "/frame.png")
     SetEnvironment("WORKBOOK_DIR", TextUntilNul(directory[:]))
+    SetEnvironment("GELD_DIR", TextUntilNul(directory[:]))
     SetEnvironment("KRYON_CAPTURE_PATH", TextUntilNul(capture[:]))
-    command: [5]string = .{"timeout", "120", "xvfb-run", "-a", AppPath}
+    command: [5]string = .{"timeout", "120", "xvfb-run", "-a", DesktopAppPath()}
     Check(RunQuiet(command[:]) == 0, "the app could not render a frame")
     UnsetEnvironment("WORKBOOK_DIR")
+    UnsetEnvironment("GELD_DIR")
     UnsetEnvironment("KRYON_CAPTURE_PATH")
 
     failure: [256]u8
@@ -445,7 +587,8 @@ CheckFrame :: (work: string) {
 
 RunSession :: (self: string, mode: string, directory: string) {
     output: [65536]u8
-    command: [9]string = .{"timeout", "240", "xvfb-run", "-a", "env",
+    command: [13]string = .{"timeout", "240", "xvfb-run", "-a", "-s",
+        "-screen 0 1600x1000x24", "dbus-run-session", "--", "env",
         "WORKBOOK_TEST_PRIVATE_DISPLAY=1", self, mode, directory}
     result: CaptureResult = Run(command[:], output[:])
     WriteText(1, TextView(output[0:result.length]))
@@ -491,16 +634,22 @@ InstallFixtureTheme :: (work: string) {
     UnsetEnvironment("GTK_THEME")
 }
 
-RunAll :: (self: string) -> s32 {
+RunAll :: (self: string, menus_only: bool) -> s32 {
     Check(OnPath("xdotool"), "install xdotool to test the desktop app")
     Check(OnPath("xvfb-run"), "install xvfb-run to test the desktop app")
-    Check(IsExecutable(AppPath), "build first: build/workbook-desktop is missing")
+    Check(OnPath("xfwm4") && OnPath("dbus-run-session") && OnPath("xmessage") &&
+        OnPath("import"), "install xfwm4, dbus, x11-utils, and imagemagick to test cell menus")
+    Check(IsExecutable(DesktopAppPath()), "the desktop app to test is missing")
     Check(IsExecutable(CellPath), "build first: build/cell is missing")
     // Nothing may reach a real display.
     UnsetEnvironment("DISPLAY")
     UnsetEnvironment("WAYLAND_DISPLAY")
     UnsetEnvironment("XAUTHORITY")
     UnsetEnvironment("KRYON_CAPTURE_PATH")
+    UnsetEnvironment("DBUS_SESSION_BUS_ADDRESS")
+    UnsetEnvironment("SESSION_MANAGER")
+    UnsetEnvironment("SDL_MOUSE_FOCUS_CLICKTHROUGH")
+    UnsetEnvironment("WORKBOOK_PROFILE")
 
     template: [4096]u8
     parent: string = Environment("TMPDIR")
@@ -515,19 +664,24 @@ RunAll :: (self: string) -> s32 {
     work = TextUntilNul(work_buffer[:])
 
     InstallFixtureTheme(work)
-    CheckFrame(work)
-
-    edit: [4096]u8
-    SetText(edit[:], work)
-    AppendText(edit[:], "/edit")
-    Check(MakeDirectory(TextUntilNul(edit[:])), "cannot create the edit directory")
-    RunSession(self, "--drive", TextUntilNul(edit[:]))
-
-    tabs: [4096]u8
-    SetText(tabs[:], work)
-    AppendText(tabs[:], "/tabs")
-    Check(MakeDirectory(TextUntilNul(tabs[:])), "cannot create the tabs directory")
-    RunSession(self, "--drive-tabs", TextUntilNul(tabs[:]))
+    if !menus_only {
+        CheckFrame(work)
+        edit: [4096]u8
+        SetText(edit[:], work)
+        AppendText(edit[:], "/edit")
+        Check(MakeDirectory(TextUntilNul(edit[:])), "cannot create the edit directory")
+        RunSession(self, "--drive", TextUntilNul(edit[:]))
+        tabs: [4096]u8
+        SetText(tabs[:], work)
+        AppendText(tabs[:], "/tabs")
+        Check(MakeDirectory(TextUntilNul(tabs[:])), "cannot create the tabs directory")
+        RunSession(self, "--drive-tabs", TextUntilNul(tabs[:]))
+    }
+    menus: [4096]u8
+    SetText(menus[:], work)
+    AppendText(menus[:], "/menus")
+    Check(MakeDirectory(TextUntilNul(menus[:])), "cannot create the menus directory")
+    RunSession(self, "--drive-menus", TextUntilNul(menus[:]))
 
     RemoveTree(work)
     cleanup_directory[0] = 0
@@ -543,5 +697,9 @@ main :: (argc: s32, argv: **s8) -> s32 {
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-tabs" {
         return DriveTabs(TextFromCString(cast(*u8)argv[2]))
     }
-    return RunAll(TextFromCString(cast(*u8)argv[0]))
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-menus" {
+        return DriveMenus(TextFromCString(cast(*u8)argv[2]))
+    }
+    menus_only: bool = argc == 2 && TextFromCString(cast(*u8)argv[1]) == "--menu-only"
+    return RunAll(TextFromCString(cast(*u8)argv[0]), menus_only)
 }
