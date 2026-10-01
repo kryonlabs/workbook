@@ -2,12 +2,15 @@
 //
 // The app runs only under xvfb-run with DISPLAY and WAYLAND_DISPLAY removed,
 // so the test can never send input to a real desktop. It checks one captured
-// frame, then edits cells with the keyboard and mouse, saves with Ctrl+S, and
-// reads the saved file back with the headless cell command. Run it from the
+// frame, then edits cells with the keyboard and mouse and reads automatic
+// and explicit saves back with the headless cell command. Run it from the
 // repository root after `make`.
 #load "test_support.zi";
 #load "csv_table.zi";
 #load "screenshot.zi";
+
+RawCurrentDirectory :: (output: *u8, size: u64) -> *u8 #foreign libc "getcwd";
+RawChangeDirectory :: (path: *u8) -> s32 #foreign libc "chdir";
 
 AppPath :: "build/workbook-desktop";
 CellPath :: "build/cell";
@@ -69,11 +72,17 @@ window_id: [64]u8;
 data_directory: [4096]u8;
 saved_path: [4096]u8;
 log_path: [4096]u8;
+absolute_cell_path: [4096]u8;
 
 DesktopAppPath :: () -> string {
     override: string = Environment("WORKBOOK_TEST_APP")
     if override.count > 0 { return override }
     return AppPath
+}
+
+HeadlessCellPath :: () -> string {
+    if absolute_cell_path[0] != 0 { return TextUntilNul(absolute_cell_path[:]) }
+    return CellPath
 }
 
 // ---------------------------------------------------------------- xdotool
@@ -252,13 +261,17 @@ Save :: () {
 // ------------------------------------------------------------ the session
 
 StartApp :: (directory: string) {
+    SetEnvironment("WORKBOOK_DIR", directory)
+    SetEnvironment("GELD_DIR", directory)
+    LaunchApp(directory, directory)
+}
+
+LaunchApp :: (directory: string, data: string) {
     SetText(data_directory[:], directory)
-    SetText(saved_path[:], directory)
+    SetText(saved_path[:], data)
     AppendText(saved_path[:], "/workbook.gnumeric")
     SetText(log_path[:], directory)
     AppendText(log_path[:], "/app.log")
-    SetEnvironment("WORKBOOK_DIR", directory)
-    SetEnvironment("GELD_DIR", directory)
     UnsetEnvironment("KRYON_CAPTURE_PATH")
     command: [1]string = .{DesktopAppPath()}
     app_pid = Spawn(command[:], TextUntilNul(log_path[:]))
@@ -306,9 +319,9 @@ StopApp :: () -> s32 {
 // with the expected rows (CSV text; empty cells at the end of a row may be
 // left out).
 ExpectRows :: (expected: string, message: string) {
-    Check(PathExists(TextUntilNul(saved_path[:])), "Ctrl+S did not write workbook.gnumeric")
+    Check(PathExists(TextUntilNul(saved_path[:])), "the app did not write workbook.gnumeric")
     output: [65536]u8
-    command: [3]string = .{CellPath, "eval", TextUntilNul(saved_path[:])}
+    command: [3]string = .{HeadlessCellPath(), "eval", TextUntilNul(saved_path[:])}
     result: CaptureResult = Run(command[:], output[:])
     Check(result.code == 0 && !result.error && !result.truncated,
         "the cell command could not evaluate the saved workbook")
@@ -326,7 +339,7 @@ ExpectRows :: (expected: string, message: string) {
 // The saved workbook's sheets and their sizes, as `cell info` prints them.
 ExpectSizes :: (expected: string, message: string) {
     output: [4096]u8
-    command: [3]string = .{CellPath, "info", TextUntilNul(saved_path[:])}
+    command: [3]string = .{HeadlessCellPath(), "info", TextUntilNul(saved_path[:])}
     result: CaptureResult = Run(command[:], output[:])
     Check(result.code == 0 && !result.error, "the cell command could not read the saved workbook")
     actual: string = TextView(output[0:result.length])
@@ -350,35 +363,30 @@ Drive :: (directory: string) -> s32 {
     Key("Return")
     TypeText("=A1*2")
     Key("Return")
-    Save()
-    ExpectRows("5\n10\n", "typed values and a formula")
+    ExpectRows("5\n10\n", "typed values and a formula save automatically")
 
     // A click selects a cell; typing replaces its value.
     ClickCell(2, 2)
     TypeText("hello")
     Key("Return")
-    Save()
-    ExpectRows("5\n10\n,,hello\n", "click, type, and save")
+    ExpectRows("5\n10\n,,hello\n", "click, type, and autosave")
 
     // Escape leaves a cell as it was.
     ClickCell(0, 1)
     TypeText("zzz")
     Key("Escape")
-    Save()
     ExpectRows("5\n10\n,,hello\n", "Escape cancels an edit")
 
     // A double click edits the existing formula in place.
     DoubleClickCell(1, 0)
     TypeText("+1")
     Key("Return")
-    Save()
     ExpectRows("5\n11\n,,hello\n", "double click edits a formula")
 
     // Delete clears the selected cell; the formula below follows it. The
     // export starts at the first row that shows anything, which is now A2.
     ClickCell(0, 0)
     Key("Delete")
-    Save()
     ExpectRows("1\n,,hello\n", "Delete clears a cell")
 
     // The toolbar buttons edit the sheet's structure at the selection.
@@ -386,16 +394,12 @@ Drive :: (directory: string) -> s32 {
     ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "the sheet starts 3 by 3")
     ClickCell(1, 1)
     ToolbarButton("Insert row")
-    ToolbarButton("Save")
     ExpectSizes("1 sheet(s)\nSheet1: 4 rows x 3 cols\n", "Insert row adds a row")
     ToolbarButton("Delete row")
-    ToolbarButton("Save")
     ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "Delete row removes it")
     ToolbarButton("Insert column")
-    ToolbarButton("Save")
     ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 4 cols\n", "Insert column adds a column")
     ToolbarButton("Delete column")
-    ToolbarButton("Save")
     ExpectSizes("1 sheet(s)\nSheet1: 3 rows x 3 cols\n", "Delete column removes it")
     Say("edit: toolbar buttons insert and delete rows and columns")
 
@@ -405,12 +409,10 @@ Drive :: (directory: string) -> s32 {
     MenuCommand(CellCenterX(2), CellCenterY(2), 1)
     RightClick(CellCenterX(3), CellCenterY(0))
     MenuCommand(CellCenterX(3), CellCenterY(0), 2)
-    Save()
     ExpectRows(",,,hello\n1\n,,hello\n", "the cell menu copies and pastes")
     // Cut takes "hello" out of C3, leaving it on the clipboard.
     RightClick(CellCenterX(2), CellCenterY(2))
     MenuCommand(CellCenterX(2), CellCenterY(2), 0)
-    Save()
     ExpectRows(",,,hello\n1\n", "the cell menu cuts")
     Say("edit: the cell menu copies, pastes, and cuts")
 
@@ -434,7 +436,6 @@ DriveTabs :: (directory: string) -> s32 {
     ClickCell(2, 1)
     TypeText("7")
     Key("Return")
-    Save()
     ExpectSizes("2 sheet(s)\nFirst: 1 rows x 1 cols\nSecond: 3 rows x 2 cols\n", "the second tab edits the second sheet")
 
     // And back: the first sheet takes the next edit.
@@ -442,11 +443,129 @@ DriveTabs :: (directory: string) -> s32 {
     ClickCell(0, 3)
     TypeText("4")
     Key("Return")
-    Save()
     ExpectSizes("2 sheet(s)\nFirst: 1 rows x 4 cols\nSecond: 3 rows x 2 cols\n", "the first tab edits the first sheet")
     Say("tabs: each tab edits its own sheet")
 
     Check(StopApp() == 0, "the app did not exit cleanly")
+    return 0
+}
+
+// Geld must keep the last edit through a restart without Enter or Save, and
+// must ignore a generic workbook in its launch directory. A fresh XDG base
+// also exercises creation of all the missing data-directory parents.
+DriveAutosave :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1",
+        "the autosave driver requires the desktop test's private display")
+    root: [4096]u8
+    Check(RawCurrentDirectory(*root[0], 4096) != null, "cannot find the repository directory")
+    SetText(absolute_cell_path[:], TextUntilNul(root[:]))
+    AppendText(absolute_cell_path[:], "/")
+    AppendText(absolute_cell_path[:], CellPath)
+    app: string = DesktopAppPath()
+    if app[0] != #char "/" {
+        absolute_app: [4096]u8
+        SetText(absolute_app[:], TextUntilNul(root[:]))
+        AppendText(absolute_app[:], "/")
+        AppendText(absolute_app[:], app)
+        SetEnvironment("WORKBOOK_TEST_APP", TextUntilNul(absolute_app[:]))
+    }
+    import_directory: [4096]u8
+    SetText(import_directory[:], directory)
+    AppendText(import_directory[:], "/import")
+    Check(MakeDirectory(TextUntilNul(import_directory[:])), "cannot create the legacy data directory")
+    legacy: [4096]u8
+    SetText(legacy[:], TextUntilNul(import_directory[:]))
+    AppendText(legacy[:], "/workbook.json")
+    legacy_text: string = "{\"rows\":[{\"label\":\"original\",\"units\":5}]}\n"
+    Check(WriteWholeFile(TextUntilNul(legacy[:]), legacy_text), "cannot write the legacy workbook")
+    generic: [4096]u8
+    SetText(generic[:], directory)
+    AppendText(generic[:], "/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(generic[:]), TwoSheets), "cannot write the generic workbook")
+    xdg: [4096]u8
+    SetText(xdg[:], directory)
+    AppendText(xdg[:], "/fresh/nested/share")
+    geld: [4096]u8
+    SetText(geld[:], TextUntilNul(xdg[:]))
+    AppendText(geld[:], "/geld")
+    SetEnvironment("WORKBOOK_PROFILE", "geld")
+    SetEnvironment("XDG_DATA_HOME", TextUntilNul(xdg[:]))
+    UnsetEnvironment("WORKBOOK_DIR")
+    UnsetEnvironment("GELD_DIR")
+    // Launch from beside the generic workbook; it must not become Geld's data.
+    working_directory: [4096]u8
+    Check(CopyCString(directory, working_directory[:]) &&
+        RawChangeDirectory(*working_directory[0]) == 0, "cannot enter the profile test directory")
+    LaunchApp(directory, TextUntilNul(geld[:]))
+    TypeText("23")
+    ExpectRows("23\n", "Geld autosaves an active edit in its own fresh data directory")
+    Check(StopApp() == 0, "the autosave app did not exit cleanly")
+    LaunchApp(directory, TextUntilNul(geld[:]))
+    Key("Return")
+    TypeText("+1")
+    Key("Return")
+    ExpectSavedCell(0, 0, "23+1")
+    ClickCell(0, 0)
+    TypeText("discard")
+    Key("Escape")
+    ExpectSavedCell(0, 0, "23+1")
+    ClickCell(0, 1)
+    TypeText("keep")
+    ClickCell(1, 1)
+    ExpectSavedCell(0, 1, "keep")
+    Key("Delete")
+    ClickCell(0, 1)
+    Key("Delete")
+    ExpectSavedCell(0, 1, "")
+    Check(StopApp() == 0, "the autosave app did not exit cleanly")
+
+    // An explicit Geld directory imports its legacy JSON once and writes the
+    // full spreadsheet format while preserving the original JSON.
+    SetEnvironment("GELD_DIR", TextUntilNul(import_directory[:]))
+    LaunchApp(directory, TextUntilNul(import_directory[:]))
+    steps: s32 = 0
+    while steps < 8 {
+        Key("Right")
+        steps += 1
+    }
+    TypeText("beyond legacy columns")
+    ExpectSavedCell(0, 1, "original")
+    ExpectSavedCell(0, 3, "5")
+    ExpectSavedCell(0, 8, "beyond legacy columns")
+    Check(StopApp() == 0, "the legacy import app did not exit cleanly")
+    LaunchApp(directory, TextUntilNul(import_directory[:]))
+    ExpectSavedCell(0, 8, "beyond legacy columns")
+    ClickCell(0, 1)
+    TypeText("updated")
+    Save()
+    ExpectSavedCell(0, 1, "updated")
+    Check(StopApp() == 0, "the reloaded import app did not exit cleanly")
+    original: [4096]u8
+    length: s32 = ReadWholeFile(TextUntilNul(legacy[:]), original[:])
+    Check(length == cast(s32)legacy_text.count && TextView(original[0:length]) == legacy_text,
+        "autosaving changed the legacy JSON")
+
+    // A temporarily unavailable data directory must retain pending changes
+    // and retry even when the user does not edit again.
+    blocker: [4096]u8
+    SetText(blocker[:], directory)
+    AppendText(blocker[:], "/blocked")
+    Check(WriteWholeFile(TextUntilNul(blocker[:]), "temporarily unavailable\n"),
+        "cannot create the unavailable-directory fixture")
+    retry_directory: [4096]u8
+    SetText(retry_directory[:], TextUntilNul(blocker[:]))
+    AppendText(retry_directory[:], "/geld")
+    SetEnvironment("GELD_DIR", TextUntilNul(retry_directory[:]))
+    LaunchApp(directory, TextUntilNul(retry_directory[:]))
+    TypeText("retry")
+    Check(!PathExists(TextUntilNul(saved_path[:])), "the unavailable directory accepted a save")
+    Check(RemoveFile(TextUntilNul(blocker[:])), "cannot restore the data directory")
+    SleepMilliseconds(3000)
+    ExpectSavedCell(0, 0, "retry")
+    Check(StopApp() == 0, "the retry app did not exit cleanly")
+    UnsetEnvironment("WORKBOOK_PROFILE")
+    UnsetEnvironment("GELD_DIR")
+    Say("autosave: live edits, restart, cancellation, selection, Geld isolation, legacy import, and retry passed")
     return 0
 }
 
@@ -676,6 +795,11 @@ RunAll :: (self: string, menus_only: bool) -> s32 {
         AppendText(tabs[:], "/tabs")
         Check(MakeDirectory(TextUntilNul(tabs[:])), "cannot create the tabs directory")
         RunSession(self, "--drive-tabs", TextUntilNul(tabs[:]))
+        autosave: [4096]u8
+        SetText(autosave[:], work)
+        AppendText(autosave[:], "/autosave")
+        Check(MakeDirectory(TextUntilNul(autosave[:])), "cannot create the autosave directory")
+        RunSession(self, "--drive-autosave", TextUntilNul(autosave[:]))
     }
     menus: [4096]u8
     SetText(menus[:], work)
@@ -699,6 +823,9 @@ main :: (argc: s32, argv: **s8) -> s32 {
     }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-menus" {
         return DriveMenus(TextFromCString(cast(*u8)argv[2]))
+    }
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-autosave" {
+        return DriveAutosave(TextFromCString(cast(*u8)argv[2]))
     }
     menus_only: bool = argc == 2 && TextFromCString(cast(*u8)argv[1]) == "--menu-only"
     return RunAll(TextFromCString(cast(*u8)argv[0]), menus_only)

@@ -29,6 +29,10 @@ MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
 OpenFile :: (path: *u8, flags: s32, mode: ..any) -> s32 #foreign libc "open";
 ReadFileBytes :: (descriptor: s32, output: *u8, count: u64) -> s64 #foreign libc "read";
 CloseFile :: (descriptor: s32) -> s32 #foreign libc "close";
+MakeTemporaryFile :: (path: *u8) -> s32 #foreign libc "mkstemp";
+SyncFile :: (descriptor: s32) -> s32 #foreign libc "fsync";
+RenameFile :: (source: *u8, destination: *u8) -> s32 #foreign libc "rename";
+RemoveFile :: (path: *u8) -> s32 #foreign libc "unlink";
 FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
 
 MaxRows :: 200;
@@ -64,9 +68,12 @@ selected_column: s32 = 0;
 scroll_row: s32 = 0;
 scroll_column: s32 = 0;
 dirty: bool = false;
+save_retry_frames: s32 = 0;
 
 // The formula bar edits a NUL-terminated copy of the selected cell's source.
 edit: [256]u8;
+// Live edits are saved too; Escape restores the value from before editing.
+edit_original: [256]u8;
 edit_cursor: s32 = 0;
 edit_anchor: s32 = 0;
 edit_scroll: s32 = 0;
@@ -96,7 +103,7 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     typed: [128]u8
     typed_length: s32 = TakeTypedText(session, typed[:])
     if control && key == KeyS {
-        SaveWorkbook()
+        SaveWorkbook(true)
         key = 0
     }
 
@@ -112,6 +119,14 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     }
     DrawGrid(session, viewport)
     DrawGridMenu(session, key == KeyEscape)
+    if dirty {
+        if save_retry_frames > 0 {
+            save_retry_frames -= 1
+        } else {
+            SaveWorkbook(false)
+        }
+    }
+    DrawStatus(session, viewport)
     return 0
 }
 
@@ -147,10 +162,9 @@ LoadWorkbook :: () {
         SetText(data_directory[:], TextFromCString(override))
         SetText(data_path[:], TextFromCString(override))
         AppendText(data_path[:], "/workbook.gnumeric")
-    } else if FileExists("workbook.gnumeric") {
+    } else if application == "workbook" &&
+        (FileExists("workbook.gnumeric") || FileExists("workbook.json")) {
         SetText(data_path[:], "workbook.gnumeric")
-    } else if FileExists("workbook.json") {
-        SetText(data_path[:], "workbook.json")
     } else {
         base: *u8 = EnvironmentValue(CPath("XDG_DATA_HOME"))
         if base != null && base[0] != 0 {
@@ -173,7 +187,7 @@ LoadWorkbook :: () {
     loaded: bool = false
     imported: bool = false
     legacy: [4096]u8
-    if PathAccess(*data_path[0], 0) != 0 && EndsWith(path, "/workbook.gnumeric") {
+    if PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
         // No workbook yet: import the older workbook.json beside it. It is
         // only read; the first save writes workbook.gnumeric.
         SetText(legacy[:], path[0:cast(s32)path.count - 8])
@@ -186,12 +200,7 @@ LoadWorkbook :: () {
     }
     if imported {
     } else if PathAccess(*data_path[0], 0) == 0 {
-        if EndsWith(path, ".json") {
-            Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
-            loaded = LoadLegacyJson(*data_path[0])
-        } else {
-            loaded = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) != 0
-        }
+        loaded = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) != 0
     }
     // A file supplies its own sheets; a new workbook starts with one.
     if Engine.WorkbookSheetCount(workbook) == 0 {
@@ -212,22 +221,54 @@ LoadWorkbook :: () {
     dirty = false
 }
 
-SaveWorkbook :: () {
-    path: string = TextUntilNul(data_path[:])
-    if data_directory[0] != 0 {
-        MakeDirectory(*data_directory[0], 493) // rwxr-xr-x
+// Creates every missing parent, including a fresh XDG data directory.
+EnsureDataDirectory :: () -> bool {
+    path: string = TextUntilNul(data_directory[:])
+    prefix: [1024]u8
+    at: s32 = 1
+    while at <= cast(s32)path.count {
+        if at == cast(s32)path.count || path[at] == #char "/" {
+            SetText(prefix[:], path[0:at])
+            if MakeDirectory(*prefix[0], 448) != 0 && PathAccess(*prefix[0], 0) != 0 {
+                return false
+            }
+        }
+        at += 1
     }
+    return true
+}
+
+SaveWorkbook :: (finish_edit: bool) {
+    if finish_edit && edit_focused {
+        CommitCell()
+        edit_focused = false
+        SelectCell(selected_row, selected_column)
+    }
+    path: string = TextUntilNul(data_path[:])
     saved: bool = false
-    if EndsWith(path, ".json") {
-        saved = SaveLegacyJson()
-    } else {
-        saved = Engine.WorkbookWriteGnumeric(workbook, cast(*s8)*data_path[0]) != 0
+    // Replace the previous file only after its replacement has been written
+    // and synced. A failed write leaves the last saved workbook intact.
+    temporary: [1100]u8
+    SetText(temporary[:], path)
+    AppendText(temporary[:], ".tmp-XXXXXX")
+    if EnsureDataDirectory() {
+        descriptor: s32 = MakeTemporaryFile(*temporary[0])
+        if descriptor >= 0 {
+            saved = Engine.WorkbookWriteGnumeric(workbook, cast(*s8)*temporary[0]) != 0
+            if saved { saved = SyncFile(descriptor) == 0 }
+            if CloseFile(descriptor) != 0 { saved = false }
+            if saved { saved = RenameFile(*temporary[0], *data_path[0]) == 0 }
+            if !saved { RemoveFile(*temporary[0]) }
+        }
     }
     if saved {
         SetText(status[:], "Saved ")
         dirty = false
+        save_retry_frames = 0
     } else {
         SetText(status[:], "Could not save ")
+        dirty = true
+        save_retry_frames = 120
     }
     AppendText(status[:], FileName(path))
 }
@@ -349,37 +390,6 @@ LoadLegacyJson :: (path: *u8) -> bool {
     return true
 }
 
-SaveLegacyJson :: () -> bool {
-    output: [65536]u8
-    SetText(output[:], "{\"rows\":[")
-    rows: s32 = Engine.WorkbookSheetRows(workbook, 0)
-    row: s32 = 0
-    while row < rows {
-        if row > 0 { AppendText(output[:], ",") }
-        AppendText(output[:], "{")
-        column: s32 = 0
-        while column < 8 {
-            if column > 0 { AppendText(output[:], ",") }
-            AppendJsonString(output[:], LegacyColumn(column))
-            AppendText(output[:], ":")
-            source: string = CellSource(0, row, column)
-            if source.count > 0 && source[0] == #char "=" {
-                AppendText(output[:], "{\"expr\":")
-                AppendJsonString(output[:], source[1:cast(s32)source.count])
-                AppendText(output[:], "}")
-            } else {
-                AppendJsonString(output[:], source)
-            }
-            column += 1
-        }
-        AppendText(output[:], "}")
-        row += 1
-    }
-    AppendText(output[:], "],\"format\":\"workbook-kry-1\"}\n")
-    if TextUntilNul(output[:]).count + 1 >= output.count { return false }
-    return Engine.WriteFileText(cast(*s8)*data_path[0], cast(*s8)*output[0])
-}
-
 // ------------------------------------------------------------------ editing
 
 CellSource :: (sheet: s32, row: s32, column: s32) -> string {
@@ -396,16 +406,21 @@ SelectCell :: (row: s32, column: s32) {
     selected_row = row
     selected_column = column
     SetText(edit[:], CellSource(sheet_index, row, column))
+    SetText(edit_original[:], TextUntilNul(edit[:]))
     edit_cursor = cast(s32)TextUntilNul(edit[:]).count
     edit_anchor = edit_cursor
     edit_scroll = 0
 }
 
 CommitCell :: () {
+    if CellSource(sheet_index, selected_row, selected_column) == TextUntilNul(edit[:]) {
+        return
+    }
     Engine.WorkbookSetCell(workbook, sheet_index, selected_row,
         selected_column, cast(*s8)*edit[0])
     Engine.WorkbookEvaluate(workbook)
     dirty = true
+    save_retry_frames = 0
     SetText(status[:], "Edited ")
     AppendCellName(status[:], selected_row, selected_column)
 }
@@ -456,6 +471,7 @@ PasteCells :: () {
 ClearCell :: () {
     edit[0] = 0
     CommitCell()
+    SelectCell(selected_row, selected_column)
 }
 
 HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
@@ -507,6 +523,7 @@ ApplyEdit :: (start: s32, end: s32, replacement: string) {
     edit[start + inserted + tail_length] = 0
     edit_cursor = start + inserted
     edit_anchor = edit_cursor
+    CommitCell()
 }
 
 // Collects this frame's typed codepoints as UTF-8.
@@ -558,7 +575,7 @@ DrawBackground :: (session: Session, viewport: Rectangle) {
 
 DrawToolbar :: (session: Session, viewport: Rectangle) {
     x: float32 = Margin
-    if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook() }
+    if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook(true) }
     if ToolbarIcon(session, 1002, RowAddIcon.Shape, *x, false) {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
         Changed("Row inserted")
@@ -575,6 +592,17 @@ DrawToolbar :: (session: Session, viewport: Rectangle) {
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed("Column deleted")
     }
+}
+
+DrawStatus :: (session: Session, viewport: Rectangle) {
+    label: TextProps
+    label.key = cast(u64)5
+    label.text = TextUntilNul(status[:])
+    label.font = Text14
+    label.disabled = !dirty
+    label.bounds = Rectangle.{Margin, viewport.height - 36.0,
+        viewport.width - Margin * 2.0, 20.0}
+    Text(session, label)
 }
 
 
@@ -597,6 +625,7 @@ ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
 Changed :: (message: string) {
     Engine.WorkbookEvaluate(workbook)
     dirty = true
+    save_retry_frames = 0
     SetText(status[:], message)
     SelectCell(selected_row, selected_column)
 }
@@ -658,6 +687,8 @@ DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
         EnsureVisible()
     }
     if result.escaped {
+        SetText(edit[:], TextUntilNul(edit_original[:]))
+        CommitCell()
         edit_focused = false
         SelectCell(selected_row, selected_column)
     }
@@ -937,31 +968,6 @@ AppendCellName :: (output: []u8, row: s32, column: s32) {
     number: [16]u8
     FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
     AppendText(output, TextUntilNul(number[:]))
-}
-
-AppendJsonString :: (output: []u8, value: string) {
-    AppendText(output, "\"")
-    index: s32 = 0
-    while index < cast(s32)value.count {
-        byte: u8 = value[index]
-        if byte == #char "\"" {
-            AppendText(output, "\\\"")
-        } else if byte == #char "\\" {
-            AppendText(output, "\\\\")
-        } else if byte == 10 {
-            AppendText(output, "\\n")
-        } else if byte == 9 {
-            AppendText(output, "\\t")
-        } else if byte < #char " " {
-            escaped: [8]u8
-            FormatBytes(*escaped[0], 8, cast(*u8)Engine.CText("\\u%04x"), cast(s32)byte)
-            AppendText(output, TextUntilNul(escaped[:]))
-        } else {
-            AppendText(output, value[index:index + 1])
-        }
-        index += 1
-    }
-    AppendText(output, "\"")
 }
 
 // Copies a JSON string's contents, decoding its escapes.

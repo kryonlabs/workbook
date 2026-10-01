@@ -100,6 +100,12 @@ formula bar. The toolbar provides save and row/column insertion and deletion,
 and the sheet tabs at the bottom switch sheets. Cells accept text, numbers, or
 formulas in the Gnumeric expression language.
 
+Changes save automatically, including the cell you are typing, pasted values,
+and inserted or deleted rows and columns. Clicking another cell or closing the
+app keeps the latest edit without requiring Enter or Ctrl+S. Escape restores
+the cell's value from before the edit. A failed save leaves the previous file
+intact, reports the failure in the status bar, and retries automatically.
+
 ## profiles
 
 `workbook` is the generic profile. `geld` is a link to the same program; it
@@ -116,12 +122,20 @@ The `profiles/*.json` files are profile metadata, not source code.
 
 ## data
 
-A workbook is saved as `workbook.gnumeric`. It loads from the first of:
+A workbook is saved as `workbook.gnumeric`. The generic profile loads from the
+first of:
 
-    WORKBOOK_DIR      generic workbook directory (GELD_DIR for the geld profile)
+    WORKBOOK_DIR      generic workbook directory
     workbook.gnumeric in the current directory
     workbook.json     in the current directory (the legacy profile format)
-    ~/.local/share/workbook/workbook.gnumeric   (~/.local/share/geld for geld)
+    ~/.local/share/workbook/workbook.gnumeric
+
+Geld always uses `GELD_DIR` when set, or `$XDG_DATA_HOME/geld` (default
+`~/.local/share/geld`). A workbook in the directory Geld was launched from
+does not replace its finance profile. Missing data directories are created
+automatically. Legacy `workbook.json` files are imported when no
+`workbook.gnumeric` exists beside them; subsequent changes go to
+`workbook.gnumeric`, keeping the original JSON intact.
 
 `workbook.json` holds private workbook data and is intentionally ignored by
 git. `workbook.example.json` is safe sample data for demos.
