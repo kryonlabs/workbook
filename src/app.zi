@@ -328,11 +328,22 @@ LegacyCell :: (text: string, value: s32, is_expression: bool, cell: []u8) {
 // The id column holds a ticker: the file names a coin by its market id, so
 // that becomes the coin's ticker, as EUR and PYG already are.
 LegacyTicker :: (cell: []u8) {
-    id: string = TextUntilNul(cell)
-    if id == "monero" { SetText(cell, "XMR") }
-    if id == "bitcoin" { SetText(cell, "BTC") }
-    if id == "ethereum" { SetText(cell, "ETH") }
-    if id == "litecoin" { SetText(cell, "LTC") }
+    ticker: string = ""
+    {
+        id: string = TextUntilNul(cell)
+        if id == "monero" {
+            ticker = "XMR"
+        } else if id == "bitcoin" {
+            ticker = "BTC"
+        } else if id == "ethereum" {
+            ticker = "ETH"
+        } else if id == "litecoin" {
+            ticker = "LTC"
+        }
+    }
+    if ticker != "" {
+        SetText(cell, ticker)
+    }
 }
 
 // Imports a legacy workbook.json: the rows, then the pending and final total
