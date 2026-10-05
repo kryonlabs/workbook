@@ -154,9 +154,14 @@ LoadWorkbook :: () {
     application: string = "workbook"
     override: *u8 = EnvironmentValue(CPath("WORKBOOK_DIR"))
     profile: *u8 = EnvironmentValue(CPath("WORKBOOK_PROFILE"))
-    if (profile != null && TextFromCString(profile) == "geld") || StartedAs("geld") {
-        application = "geld"
-        override = EnvironmentValue(CPath("GELD_DIR"))
+    profile_name: string = ""
+    if profile != null { profile_name = TextFromCString(profile) }
+    if StartedAs("geld") { profile_name = "geld" }
+    // Any named profile keeps its own data directory, the way geld does.
+    if profile_name != "workbook" && ProfileName(profile_name) {
+        application = profile_name
+        override = null
+        if profile_name == "geld" { override = EnvironmentValue(CPath("GELD_DIR")) }
     }
     if override != null && override[0] != 0 {
         SetText(data_directory[:], TextFromCString(override))
@@ -1034,6 +1039,16 @@ HexValue :: (text: string, at: s32) -> s32 {
         index += 1
     }
     return value
+}
+
+// A profile name is also a directory name: lowercase letters, digits, - and _.
+ProfileName :: (name: string) -> bool {
+    if name.count == 0 || name.count > 63 { return false }
+    for i: 0..cast(s32)name.count - 1 {
+        c: u8 = name[i]
+        if !((c >= #char "a" && c <= #char "z") || (c >= #char "0" && c <= #char "9") || c == #char "-" || c == #char "_") { return false }
+    }
+    return true
 }
 
 // Whether the program was started under the given name. `geld` is a link to
