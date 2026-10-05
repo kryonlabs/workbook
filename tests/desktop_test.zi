@@ -519,6 +519,17 @@ DriveAutosave :: (directory: string) -> s32 {
     ExpectSavedCell(0, 1, "")
     Check(StopApp() == 0, "the autosave app did not exit cleanly")
 
+    // Any other named profile keeps its own data directory the same way.
+    budget: [4096]u8
+    SetText(budget[:], TextUntilNul(xdg[:]))
+    AppendText(budget[:], "/budget")
+    SetEnvironment("WORKBOOK_PROFILE", "budget")
+    LaunchApp(directory, TextUntilNul(budget[:]))
+    TypeText("7")
+    ExpectRows("7\n", "a named profile autosaves in its own fresh data directory")
+    Check(StopApp() == 0, "the named profile app did not exit cleanly")
+    SetEnvironment("WORKBOOK_PROFILE", "geld")
+
     // An explicit Geld directory imports its legacy JSON once and writes the
     // full spreadsheet format while preserving the original JSON.
     SetEnvironment("GELD_DIR", TextUntilNul(import_directory[:]))
@@ -565,7 +576,7 @@ DriveAutosave :: (directory: string) -> s32 {
     Check(StopApp() == 0, "the retry app did not exit cleanly")
     UnsetEnvironment("WORKBOOK_PROFILE")
     UnsetEnvironment("GELD_DIR")
-    Say("autosave: live edits, restart, cancellation, selection, Geld isolation, legacy import, and retry passed")
+    Say("autosave: live edits, restart, cancellation, selection, Geld and named profile isolation, legacy import, and retry passed")
     return 0
 }
 

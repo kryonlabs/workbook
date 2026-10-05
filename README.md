@@ -110,8 +110,11 @@ intact, reports the failure in the status bar, and retries automatically.
 
 `workbook` is the generic profile. `geld` is a link to the same program; it
 opens the finance profile, with an independent data directory, because of the
-name it is started under (`WORKBOOK_PROFILE=geld workbook` does the same). Both
-run the same application:
+name it is started under (`WORKBOOK_PROFILE=geld workbook` does the same).
+`WORKBOOK_PROFILE=NAME workbook` opens any other profile the same way, with its
+data in `$XDG_DATA_HOME/NAME`; a name uses lowercase letters, digits, `-` and
+`_`. Harmony starts its Workbook profiles like this. All of them run the same
+application:
 
     D = units
     E = rate
