@@ -595,6 +595,22 @@ HeaderWorkbook :: #string END
 <?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:SheetNameIndex><gnm:SheetName>Headers</gnm:SheetName></gnm:SheetNameIndex><gnm:Sheets><gnm:Sheet><gnm:Name>Headers</gnm:Name><gnm:MaxCol>2</gnm:MaxCol><gnm:MaxRow>20</gnm:MaxRow><gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">11</gnm:Cell><gnm:Cell Row="0" Col="1" ValueType="40">12</gnm:Cell><gnm:Cell Row="1" Col="1" ValueType="40">22</gnm:Cell><gnm:Cell Row="20" Col="1" ValueType="40">212</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
 END;
 
+RowMenuWorkbook :: #string END
+<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:Sheets><gnm:Sheet><gnm:Name>Rows</gnm:Name><gnm:Cells><gnm:Cell Row="0" Col="1" ValueType="40">12</gnm:Cell><gnm:Cell Row="1" Col="1" ValueType="40">22</gnm:Cell><gnm:Cell Row="1" Col="2">=B2*2</gnm:Cell><gnm:Cell Row="20" Col="1" ValueType="40">212</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
+END;
+
+LargeHeaderWorkbook :: #string END
+<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:Sheets><gnm:Sheet><gnm:Name>Large</gnm:Name><gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell><gnm:Cell Row="1" Col="40" ValueType="40">88</gnm:Cell><gnm:Cell Row="220" Col="1" ValueType="40">99</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
+END;
+
+ReadOwnedWindowScreenshot :: (path: string) {
+    output: [4096]u8; SetText(output[:], "PNG24:"); AppendText(output[:], path)
+    command: [7]string = .{"import", "-window", WindowId(), "-depth", "8", "-silent", TextUntilNul(output[:])}
+    Check(RunQuiet(command[:]) == 0, "cannot capture the private test window")
+    failure: [256]u8
+    Check(ReadScreenshot(path, failure[:]), TextUntilNul(failure[:]))
+}
+
 // Header clicks select complete axes, including cells beyond the visible grid.
 DriveHeaders :: (directory: string) -> s32 {
     Check(Environment(PrivateMarker) == "1", "header checks require the private display")
@@ -602,13 +618,11 @@ DriveHeaders :: (directory: string) -> s32 {
     Check(WriteWholeFile(TextUntilNul(fixture[:]),HeaderWorkbook),"cannot write header fixture"); StartApp(directory)
     Press(GridLeft+ColumnWidth+55,GridTop-15)
     capture: [4096]u8; SetText(capture[:],directory); AppendText(capture[:],"/headers.png")
-    output: [4096]u8; SetText(output[:],"PNG24:"); AppendText(output[:],TextUntilNul(capture[:]))
-    command: [7]string=.{"import","-window",WindowId(),"-depth","8","-silent",TextUntilNul(output[:])}
-    Check(RunQuiet(command[:])==0,"cannot capture selected column")
-    failure: [256]u8; Check(ReadScreenshot(TextUntilNul(capture[:]),failure[:]),TextUntilNul(failure[:]))
+    ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
     Check(PixelAt(GridLeft+ColumnWidth+90,GridTop+7*RowHeight+20)==SelectedFill,"column selection includes every visible row")
     Check(PixelAt(GridLeft+90,GridTop+7*RowHeight+20)==White,"adjacent column stays unselected")
     Key("ctrl+c"); ClickCell(0,2); Key("ctrl+v"); Save()
+    {
     bytes: [65536]u8; evaluate: [3]string=.{HeadlessCellPath(),"eval",TextUntilNul(saved_path[:])}
     result:=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read copied column")
     Check(CsvCellText(0,0,2)=="12" && CsvCellText(0,1,2)=="22" && CsvCellText(0,20,2)=="212","copy includes offscreen column cells")
@@ -621,7 +635,33 @@ DriveHeaders :: (directory: string) -> s32 {
     // CSV export begins at the first nonempty row, now row 2.
     Check(CsvCellText(0,0,0)=="" && CsvCellText(0,0,2)=="22","row number selects the whole row")
     Check(CsvCellText(0,19,2)=="212","row delete preserves other rows")
-    Check(StopApp()==0,"header test app exits cleanly"); Say("headers: whole rows and columns, copy and delete passed"); return 0
+    Check(StopApp()==0,"header test app exits cleanly")
+    }
+
+    // Right-clicking a row number targets that row, regardless of the active cell.
+    Check(WriteWholeFile(TextUntilNul(fixture[:]),RowMenuWorkbook),"cannot write row menu fixture"); StartApp(directory)
+    x: s32 = cast(s32)(GridLeft-30); y:=CellCenterY(1)
+    QuickRightClick(x,y)
+    ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
+    Check(DarkPixels(x+12,y+4,110,26)>10 && DarkPixels(x+12,y+30,110,26)>10,"both insertion options are visible")
+    Check(PixelAt(GridLeft+3*ColumnWidth+90,CellCenterY(1))==SelectedFill,"right-click selects the complete row")
+    copied: [3]string=.{"cp",TextUntilNul(capture[:]),"build/row-menu.png"}; Check(RunQuiet(copied[:])==0,"cannot keep private row menu preview")
+    MenuCommand(x,y,0); Save()
+    ExpectSavedCell(0,1,"12"); ExpectSavedCell(1,1,""); ExpectSavedCell(2,1,"22"); ExpectSavedCell(2,2,"=B3*2"); ExpectSavedCell(21,1,"212")
+    y=CellCenterY(2); RightClick(x,y); MenuCommand(x,y,1); Save()
+    ExpectSavedCell(2,1,"22"); ExpectSavedCell(3,1,""); ExpectSavedCell(2,2,"=B3*2"); ExpectSavedCell(22,1,"212")
+    y=CellCenterY(3); QuickRightClick(x,y); MenuCommand(x,y,2); Save()
+    ExpectSavedCell(2,1,"22"); ExpectSavedCell(21,1,"212")
+    Check(StopApp()==0,"row menu test app exits cleanly")
+
+    // Whole selections also cover imported cells past the editor's view limits.
+    Check(WriteWholeFile(TextUntilNul(fixture[:]),LargeHeaderWorkbook),"cannot write large header fixture"); StartApp(directory)
+    Press(GridLeft-30,CellCenterY(1)); Key("Delete"); Save()
+    ExpectSavedCell(1,40,""); ExpectSavedCell(220,1,"99")
+    Press(GridLeft+ColumnWidth+55,GridTop-15); Key("Delete"); Save()
+    ExpectSavedCell(220,1,""); ExpectSavedCell(0,0,"1")
+    Check(StopApp()==0,"large header test app exits cleanly")
+    Say("headers: whole selections, offscreen cells, row insert above/below, formulas and neighboring data passed"); return 0
 }
 
 DriveMenus :: (directory: string) -> s32 {
