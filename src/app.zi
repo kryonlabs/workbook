@@ -65,6 +65,8 @@ workbook: *Engine.Workbook;
 sheet_index: s32 = 0;
 selected_row: s32 = 0;
 selected_column: s32 = 0;
+// A header selection covers every cell along that axis, including offscreen cells.
+selection_axis: s32 = 0; // 0 cell, 1 row, 2 column
 scroll_row: s32 = 0;
 scroll_column: s32 = 0;
 dirty: bool = false;
@@ -415,6 +417,7 @@ CellSource :: (sheet: s32, row: s32, column: s32) -> string {
 }
 
 SelectCell :: (row: s32, column: s32) {
+    selection_axis = 0
     if row < 0 { row = 0 }
     if column < 0 { column = 0 }
     if row >= MaxRows { row = MaxRows - 1 }
@@ -443,6 +446,22 @@ CommitCell :: () {
 
 // The selected cell's source goes to the system clipboard.
 CopyCell :: () {
+    if selection_axis != 0 {
+        text: [51201]u8; size: s32
+        first_row:=ifx selection_axis==2 then 0 else selected_row
+        last_row:=ifx selection_axis==2 then GridRows()-1 else selected_row
+        first_column:=ifx selection_axis==1 then 0 else selected_column
+        last_column:=ifx selection_axis==1 then GridColumns()-1 else selected_column
+        for row: first_row..last_row {
+            if row>first_row { text[size]=10; size+=1 }
+            for column: first_column..last_column {
+                if column>first_column { text[size]=9; size+=1 }
+                source:=CellSource(sheet_index,row,column)
+                for byte: source { if size<51200 { text[size]=byte; size+=1 } }
+            }
+        }
+        text[size]=0; SystemClipboardSet(TextUntilNul(text[:])); return
+    }
     SystemClipboardSet(CellSource(sheet_index, selected_row, selected_column))
 }
 
@@ -485,6 +504,14 @@ PasteCells :: () {
 }
 
 ClearCell :: () {
+    if selection_axis != 0 {
+        first_row:=ifx selection_axis==2 then 0 else selected_row
+        last_row:=ifx selection_axis==2 then GridRows()-1 else selected_row
+        first_column:=ifx selection_axis==1 then 0 else selected_column
+        last_column:=ifx selection_axis==1 then GridColumns()-1 else selected_column
+        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook,sheet_index,row,column,cast(*s8)Engine.CText("")) } }
+        Changed("Selection cleared"); return
+    }
     edit[0] = 0
     CommitCell()
     SelectCell(selected_row, selected_column)
@@ -500,10 +527,11 @@ HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
     if key == KeyRight || key == KeyTab {
         SelectCell(selected_row, selected_column + 1)
     }
-    if key == KeyEnter { edit_focused = true }
+    if key == KeyEnter { selection_axis = 0; edit_focused = true }
     if key == KeyDelete || key == KeyBackspace { ClearCell() }
     if typed_length > 0 {
         // Typing over a selected cell starts a new value, as in Gnumeric.
+        selection_axis = 0
         edit[0] = 0
         edit_cursor = 0
         edit_anchor = 0
@@ -802,7 +830,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         name: [8]u8
         AppendCellColumn(name[:], column)
         GridSquare(session, 20 + column, Rectangle.{ColumnX(table, column), table.y,
-                ColumnWidth, HeaderHeight}, HeaderBackground(), TextUntilNul(name[:]))
+                ColumnWidth, HeaderHeight}, ifx selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
         column += 1
     }
     shown: s32 = 0
@@ -812,7 +840,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         number: [16]u8
         FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
         GridSquare(session, 100 + row, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
-            HeaderBackground(), TextUntilNul(number[:]))
+            ifx selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
         column = scroll_column
         while column < scroll_column + visible_columns && column < columns {
             display: [256]u8
@@ -820,7 +848,9 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
                 cast(*s8)*display[0], 256)
             Engine.RoundForDisplay(cast(*s8)*display[0], 256)
             fill: Color = CellBackground()
-            if row == selected_row && column == selected_column { fill = SelectedBackground() }
+            if (selection_axis == 1 && row == selected_row) ||
+               (selection_axis == 2 && column == selected_column) ||
+               (row == selected_row && column == selected_column) { fill = SelectedBackground() }
             GridSquare(session, 1000 + row * 64 + column,
                 Rectangle.{ColumnX(table, column), y, ColumnWidth, RowHeight},
                 fill, TextUntilNul(display[:]))
@@ -832,6 +862,19 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     pointer: PointerFrame = PointerSample(session)
     body: Rectangle = Rectangle.{table.x + RowHeaderWidth, table.y + HeaderHeight,
         table.width - RowHeaderWidth, table.height - HeaderHeight}
+    if pointer.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, table) {
+        if pointer.y < body.y && pointer.x >= body.x {
+            clicked := scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
+            if clicked < columns && clicked < scroll_column + visible_columns {
+                SelectCell(selected_row, clicked); selection_axis = 2; edit_focused = false; frames_since_click = 1000
+            }
+        } else if pointer.x < body.x && pointer.y >= body.y {
+            row := scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
+            if row < rows && row < scroll_row + visible_rows {
+                SelectCell(row, selected_column); selection_axis = 1; edit_focused = false; frames_since_click = 1000
+            }
+        }
+    }
     secondary: SecondaryPointerFrame = SecondaryPointerSample(session)
     if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
         // The secondary button selects the cell under it and opens the menu.
