@@ -7,6 +7,7 @@ SystemStyle :: #import "kss/SystemStyle";
 SystemThemeLinux :: #import "SystemThemeLinux";
 #import "byte_text_linux"
 #import "text_buffer"
+#import "std/vec"
 
 SaveIcon :: #import "mingcute_regular_save_2";
 RowAddIcon :: #import "mingcute_extra_table_row_add";
@@ -59,6 +60,7 @@ KeyX :: 88;
 grid_menu_open: bool = false;
 grid_menu_x: float32 = 0.0;
 grid_menu_y: float32 = 0.0;
+grid_menu_row: bool = false;
 clipboard_text: [8192]u8;
 
 workbook: *Engine.Workbook;
@@ -444,23 +446,27 @@ CommitCell :: () {
     AppendCellName(status[:], selected_row, selected_column)
 }
 
-// The selected cell's source goes to the system clipboard.
+// Header commands cover the sheet's used extent, beyond the viewport limits.
+SelectionLastRow :: () -> s32 { return ifx selection_axis == 2 then Engine.WorkbookSheetRows(workbook, sheet_index) - 1 else selected_row }
+SelectionLastColumn :: () -> s32 { return ifx selection_axis == 1 then Engine.WorkbookSheetColumns(workbook, sheet_index) - 1 else selected_column }
+
+// The selection's source goes to the system clipboard as tab-separated cells.
 CopyCell :: () {
     if selection_axis != 0 {
-        text: [51201]u8; size: s32
+        text: Vec(u8); defer { VecFree(text) }
         first_row:=ifx selection_axis==2 then 0 else selected_row
-        last_row:=ifx selection_axis==2 then GridRows()-1 else selected_row
+        last_row:=SelectionLastRow()
         first_column:=ifx selection_axis==1 then 0 else selected_column
-        last_column:=ifx selection_axis==1 then GridColumns()-1 else selected_column
+        last_column:=SelectionLastColumn()
         for row: first_row..last_row {
-            if row>first_row { text[size]=10; size+=1 }
+            if row>first_row { unused VecPush(text, cast(u8)10) }
             for column: first_column..last_column {
-                if column>first_column { text[size]=9; size+=1 }
+                if column>first_column { unused VecPush(text, cast(u8)9) }
                 source:=CellSource(sheet_index,row,column)
-                for byte: source { if size<51200 { text[size]=byte; size+=1 } }
+                for byte: source { unused VecPush(text, byte) }
             }
         }
-        text[size]=0; SystemClipboardSet(TextUntilNul(text[:])); return
+        SystemClipboardSet(TextFromBytes(VecSlice(text, 0, text.count))); return
     }
     SystemClipboardSet(CellSource(sheet_index, selected_row, selected_column))
 }
@@ -506,9 +512,9 @@ PasteCells :: () {
 ClearCell :: () {
     if selection_axis != 0 {
         first_row:=ifx selection_axis==2 then 0 else selected_row
-        last_row:=ifx selection_axis==2 then GridRows()-1 else selected_row
+        last_row:=SelectionLastRow()
         first_column:=ifx selection_axis==1 then 0 else selected_column
-        last_column:=ifx selection_axis==1 then GridColumns()-1 else selected_column
+        last_column:=SelectionLastColumn()
         for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook,sheet_index,row,column,cast(*s8)Engine.CText("")) } }
         Changed("Selection cleared"); return
     }
@@ -876,6 +882,13 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         }
     }
     secondary: SecondaryPointerFrame = SecondaryPointerSample(session)
+    if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
+        row := scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
+        if row < rows && row < scroll_row + visible_rows {
+            SelectCell(row, selected_column); selection_axis = 1; edit_focused = false; frames_since_click = 1000
+            grid_menu_row = true; grid_menu_open = true; grid_menu_x = pointer.x; grid_menu_y = pointer.y
+        }
+    }
     if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
         // The secondary button selects the cell under it and opens the menu.
         row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
@@ -884,6 +897,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
             SelectCell(row, clicked)
             edit_focused = false
             grid_menu_open = true
+            grid_menu_row = false
             grid_menu_x = pointer.x
             grid_menu_y = pointer.y
         }
@@ -905,11 +919,11 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     if frames_since_click < 1000 { frames_since_click += 1 }
 }
 
-// The cell menu. Commands act on the selected cell, which the menu's own
-// click selected first.
+// A row number has a short row menu; cells keep the existing editing commands.
+// Every command acts on the row or cell selected by the right-click.
 DrawGridMenu :: (session: Session, escape: bool) {
     if !grid_menu_open { return }
-    items: [9]ContextMenuItem
+    items: [10]ContextMenuItem
     items[0].id = 1
     items[0].label = "Cut"
     items[1].id = 2
@@ -921,20 +935,29 @@ DrawGridMenu :: (session: Session, escape: bool) {
     items[3].label = "Clear"
     items[4].separator = true
     items[5].id = 6
-    items[5].label = "Insert row"
-    items[6].id = 7
-    items[6].label = "Delete row"
-    items[7].id = 8
-    items[7].label = "Insert column"
-    items[8].id = 9
-    items[8].label = "Delete column"
+    items[5].label = "Insert above"
+    items[6].id = 10
+    items[6].label = "Insert below"
+    items[7].id = 7
+    items[7].label = "Delete row"
+    items[8].id = 8
+    items[8].label = "Insert column"
+    items[9].id = 9
+    items[9].label = "Delete column"
+    count: s32 = 10
+    if grid_menu_row {
+        items[0].id = 6; items[0].label = "Insert above"
+        items[1].id = 10; items[1].label = "Insert below"
+        items[2].id = 7; items[2].label = "Delete row"; items[2].disabled = false
+        count = 3
+    }
     props: ContextMenuProps
     props.key = cast(u64)1200
     props.open = true
     props.x = grid_menu_x
     props.y = grid_menu_y
     props.escape = escape
-    result: ContextMenuResult = ContextMenu(session, props, items[0:9])
+    result: ContextMenuResult = ContextMenu(session, props, items[0:count])
     if !result.open { grid_menu_open = false }
     if result.activated_id == 1 { CutCell() }
     if result.activated_id == 2 { CopyCell() }
@@ -942,6 +965,11 @@ DrawGridMenu :: (session: Session, escape: bool) {
     if result.activated_id == 4 { ClearCell() }
     if result.activated_id == 6 {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
+        Changed("Row inserted")
+    }
+    if result.activated_id == 10 {
+        Engine.WorkbookInsertRow(workbook, sheet_index, selected_row + 1)
+        selected_row += 1
         Changed("Row inserted")
     }
     if result.activated_id == 7 {
