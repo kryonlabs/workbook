@@ -591,6 +591,39 @@ ExpectSavedCell :: (row: s32, column: s32, expected: string) {
     Engine.WorkbookFree(saved)
 }
 
+HeaderWorkbook :: #string END
+<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:SheetNameIndex><gnm:SheetName>Headers</gnm:SheetName></gnm:SheetNameIndex><gnm:Sheets><gnm:Sheet><gnm:Name>Headers</gnm:Name><gnm:MaxCol>2</gnm:MaxCol><gnm:MaxRow>20</gnm:MaxRow><gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">11</gnm:Cell><gnm:Cell Row="0" Col="1" ValueType="40">12</gnm:Cell><gnm:Cell Row="1" Col="1" ValueType="40">22</gnm:Cell><gnm:Cell Row="20" Col="1" ValueType="40">212</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
+END;
+
+// Header clicks select complete axes, including cells beyond the visible grid.
+DriveHeaders :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1", "header checks require the private display")
+    fixture: [4096]u8; SetText(fixture[:],directory); AppendText(fixture[:],"/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(fixture[:]),HeaderWorkbook),"cannot write header fixture"); StartApp(directory)
+    Press(GridLeft+ColumnWidth+55,GridTop-15)
+    capture: [4096]u8; SetText(capture[:],directory); AppendText(capture[:],"/headers.png")
+    output: [4096]u8; SetText(output[:],"PNG24:"); AppendText(output[:],TextUntilNul(capture[:]))
+    command: [7]string=.{"import","-window",WindowId(),"-depth","8","-silent",TextUntilNul(output[:])}
+    Check(RunQuiet(command[:])==0,"cannot capture selected column")
+    failure: [256]u8; Check(ReadScreenshot(TextUntilNul(capture[:]),failure[:]),TextUntilNul(failure[:]))
+    Check(PixelAt(GridLeft+ColumnWidth+90,GridTop+7*RowHeight+20)==SelectedFill,"column selection includes every visible row")
+    Check(PixelAt(GridLeft+90,GridTop+7*RowHeight+20)==White,"adjacent column stays unselected")
+    Key("ctrl+c"); ClickCell(0,2); Key("ctrl+v"); Save()
+    bytes: [65536]u8; evaluate: [3]string=.{HeadlessCellPath(),"eval",TextUntilNul(saved_path[:])}
+    result:=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read copied column")
+    Check(CsvCellText(0,0,2)=="12" && CsvCellText(0,1,2)=="22" && CsvCellText(0,20,2)=="212","copy includes offscreen column cells")
+    Press(GridLeft+ColumnWidth+55,GridTop-15); Key("Delete"); Save()
+    result=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read cleared column")
+    Check(CsvCellText(0,0,1)=="" && CsvCellText(0,1,1)=="" && CsvCellText(0,20,1)=="","delete clears the entire column")
+    Check(CsvCellText(0,0,0)=="11" && CsvCellText(0,20,2)=="212","column delete preserves neighboring columns")
+    Press(GridLeft-30,GridTop+14); Key("Delete"); Save()
+    result=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read cleared row")
+    // CSV export begins at the first nonempty row, now row 2.
+    Check(CsvCellText(0,0,0)=="" && CsvCellText(0,0,2)=="22","row number selects the whole row")
+    Check(CsvCellText(0,19,2)=="212","row delete preserves other rows")
+    Check(StopApp()==0,"header test app exits cleanly"); Say("headers: whole rows and columns, copy and delete passed"); return 0
+}
+
 DriveMenus :: (directory: string) -> s32 {
     Check(Environment(PrivateMarker) == "1",
         "the menu driver requires the desktop test's private display")
@@ -764,7 +797,7 @@ InstallFixtureTheme :: (work: string) {
     UnsetEnvironment("GTK_THEME")
 }
 
-RunAll :: (self: string, menus_only: bool) -> s32 {
+RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
     Check(OnPath("xdotool"), "install xdotool to test the desktop app")
     Check(OnPath("xvfb-run"), "install xvfb-run to test the desktop app")
     Check(OnPath("xfwm4") && OnPath("dbus-run-session") && OnPath("xmessage") &&
@@ -794,7 +827,7 @@ RunAll :: (self: string, menus_only: bool) -> s32 {
     work = TextUntilNul(work_buffer[:])
 
     InstallFixtureTheme(work)
-    if !menus_only {
+    if !menus_only && !headers_only {
         CheckFrame(work)
         edit: [4096]u8
         SetText(edit[:], work)
@@ -812,6 +845,10 @@ RunAll :: (self: string, menus_only: bool) -> s32 {
         Check(MakeDirectory(TextUntilNul(autosave[:])), "cannot create the autosave directory")
         RunSession(self, "--drive-autosave", TextUntilNul(autosave[:]))
     }
+    headers: [4096]u8; SetText(headers[:],work); AppendText(headers[:],"/headers")
+    Check(MakeDirectory(TextUntilNul(headers[:])),"cannot create header test directory")
+    RunSession(self,"--drive-headers",TextUntilNul(headers[:]))
+    if headers_only { RemoveTree(work); cleanup_directory[0]=0; return 0 }
     menus: [4096]u8
     SetText(menus[:], work)
     AppendText(menus[:], "/menus")
@@ -826,6 +863,7 @@ RunAll :: (self: string, menus_only: bool) -> s32 {
 
 #program_export
 main :: (argc: s32, argv: **s8) -> s32 {
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-headers" { return DriveHeaders(TextFromCString(cast(*u8)argv[2])) }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive" {
         return Drive(TextFromCString(cast(*u8)argv[2]))
     }
@@ -839,5 +877,6 @@ main :: (argc: s32, argv: **s8) -> s32 {
         return DriveAutosave(TextFromCString(cast(*u8)argv[2]))
     }
     menus_only: bool = argc == 2 && TextFromCString(cast(*u8)argv[1]) == "--menu-only"
-    return RunAll(TextFromCString(cast(*u8)argv[0]), menus_only)
+    headers_only: bool = argc == 2 && TextFromCString(cast(*u8)argv[1]) == "--headers-only"
+    return RunAll(TextFromCString(cast(*u8)argv[0]), menus_only, headers_only)
 }
