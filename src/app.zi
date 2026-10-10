@@ -874,7 +874,8 @@ CanPick :: () -> bool {
     before: s32 = start - 1
     while before > 0 && text[before] == #char " " { before -= 1 }
     operand: bool = false
-    for mark: "=(,;+-*/^&<>:" { if text[before] == mark { operand = true } }
+    marks: string = "=(,;+-*/^&<>:"
+    for mark: marks { if text[before] == mark { operand = true } }
     if !operand { return false }
     if end < cast(s32)text.count {
         next: u8 = text[end]
