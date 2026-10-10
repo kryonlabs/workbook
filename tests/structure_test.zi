@@ -29,6 +29,23 @@ Expect :: (workbook: *Engine.Workbook, row: s32, col: s32, expected: string) {
     }
 }
 
+Relocated :: (workbook: *Engine.Workbook, formula: string, by_row: s32, by_col: s32, expected: string) {
+    bytes: [256]u8
+    SetText(bytes[:], formula)
+    moved: *s8 = Engine.FormulaRelocate(workbook, cast(*s8)*bytes[0], by_row, by_col)
+    if Engine.TextCompareLiteral(moved, expected) != 0 {
+        WriteText(2, "relocating ")
+        WriteText(2, formula)
+        WriteText(2, " expected ")
+        WriteText(2, expected)
+        WriteText(2, " got ")
+        WriteText(2, TextFromCString(cast(*u8)moved))
+        WriteText(2, "\n")
+        Fail("formula was not relocated")
+    }
+    RawFree(cast(*void)moved)
+}
+
 #program_export
 main :: () -> s32 {
     workbook: *Engine.Workbook = Engine.WorkbookNew()
@@ -54,6 +71,32 @@ main :: () -> s32 {
     Expect(workbook, 0, 5, "=#REF!+A6")
     Engine.WorkbookInsertColumn(workbook, 0, 0)
     Expect(workbook, 0, 6, "=#REF!+B6")
+
+    // A copy or fill moves relative references with the cell; $-fixed parts,
+    // strings and function names stay, and a reference pushed off the sheet
+    // becomes #REF!.
+    Relocated(workbook, "=D2*E2", 1, 0, "=D3*E3")
+    Relocated(workbook, "=SUM(A1:B2)+$C$3+C$3+$C3", 2, 1, "=SUM(B3:C4)+$C$3+D$3+$C5")
+    Relocated(workbook, "=Other!A1+'Other'!B2+LOG10(A1)+\"A1\"", 1, 1, "=Other!B2+'Other'!C3+LOG10(B2)+\"A1\"")
+    Relocated(workbook, "=A1+B2", -1, 0, "=#REF!+B1")
+    Relocated(workbook, "plain A1", 3, 3, "plain A1")
+    Set(workbook, 0, 9, "=J2+$J$2")
+    Engine.WorkbookCopyCell(workbook, 0, 0, 9, 2, 10)
+    Expect(workbook, 2, 10, "=K4+$J$2")
+
+    // The editor outlines each reference: its span, sheet and corners.
+    refs: [1]Engine.FormulaRef
+    text: [128]u8
+    SetText(text[:], "=SUM(b2:A4)+Other!$C$3+\"D4\"+Missing!E5")
+    found: s32 = Engine.FormulaFindRef(workbook, cast(*s8)*text[0], 0, *refs[0])
+    Check(found == 1 && refs[0].start == 5 && refs[0].end == 10 && refs[0].sheet == -1 && refs[0].range == 1 &&
+        refs[0].row1 == 1 && refs[0].col1 == 1 && refs[0].row2 == 3 && refs[0].col2 == 0, "a range reference was not found")
+    found = Engine.FormulaFindRef(workbook, cast(*s8)*text[0], refs[0].end, *refs[0])
+    Check(found == 1 && refs[0].start == 12 && refs[0].corner_start == 18 && refs[0].sheet == 1 &&
+        refs[0].fixed_row1 == 1 && refs[0].fixed_col1 == 1 && refs[0].row1 == 2, "a sheet reference was not found")
+    found = Engine.FormulaFindRef(workbook, cast(*s8)*text[0], refs[0].end, *refs[0])
+    Check(found == 1 && refs[0].sheet == -2 && refs[0].row1 == 4 && refs[0].col1 == 4, "a reference inside a string was found, or an unknown sheet was not")
+    Check(Engine.FormulaFindRef(workbook, cast(*s8)*text[0], refs[0].end, *refs[0]) == 0, "a reference was found past the end")
 
     Engine.WorkbookFree(workbook)
     Say("{\"workbook_structure\":\"ok\"}")

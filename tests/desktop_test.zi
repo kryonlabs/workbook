@@ -664,6 +664,137 @@ DriveHeaders :: (directory: string) -> s32 {
     Say("headers: whole selections, offscreen cells, row insert above/below, formulas and neighboring data passed"); return 0
 }
 
+FormulaWorkbook :: #string END
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:SheetNameIndex><gnm:SheetName>Data</gnm:SheetName><gnm:SheetName>Rates</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets>
+    <gnm:Sheet><gnm:Name>Data</gnm:Name><gnm:MaxCol>1</gnm:MaxCol><gnm:MaxRow>2</gnm:MaxRow>
+      <gnm:Cells>
+        <gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell><gnm:Cell Row="0" Col="1" ValueType="40">10</gnm:Cell>
+        <gnm:Cell Row="1" Col="0" ValueType="40">2</gnm:Cell><gnm:Cell Row="1" Col="1" ValueType="40">20</gnm:Cell>
+        <gnm:Cell Row="2" Col="0" ValueType="40">3</gnm:Cell><gnm:Cell Row="2" Col="1" ValueType="40">30</gnm:Cell>
+      </gnm:Cells>
+    </gnm:Sheet>
+    <gnm:Sheet><gnm:Name>Rates</gnm:Name><gnm:MaxCol>0</gnm:MaxCol><gnm:MaxRow>0</gnm:MaxRow>
+      <gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">100</gnm:Cell></gnm:Cells>
+    </gnm:Sheet>
+  </gnm:Sheets>
+</gnm:Workbook>
+END;
+
+// Presses at one point and releases at another, moving through the cells
+// between as a hand does.
+Drag :: (from_x: s32, from_y: s32, to_x: s32, to_y: s32) {
+    MoveMouse(from_x, from_y)
+    Xdotool("mousedown", "1", "", "", "", "")
+    SleepMilliseconds(120)
+    step: s32 = 1
+    while step <= 4 {
+        MoveMouse(from_x + (to_x - from_x) * step / 4, from_y + (to_y - from_y) * step / 4)
+        step += 1
+    }
+    Xdotool("mouseup", "1", "", "", "", "")
+    SleepMilliseconds(300)
+}
+
+DragCells :: (from_row: s32, from_column: s32, to_row: s32, to_column: s32) {
+    Drag(CellCenterX(from_column), CellCenterY(from_row), CellCenterX(to_column), CellCenterY(to_row))
+}
+
+// Whether any pixel of the area is clearly blue (blue) or clearly red. The
+// outlines are anti-aliased, so their exact color rarely lands on a pixel.
+HasTint :: (left: s32, top: s32, width: s32, height: s32, blue: bool) -> bool {
+    for y: top..top + height - 1 {
+        for x: left..left + width - 1 {
+            pixel: u32 = PixelAt(x, y)
+            r: s32 = cast(s32)((pixel >> 16) & 255)
+            g: s32 = cast(s32)((pixel >> 8) & 255)
+            b: s32 = cast(s32)(pixel & 255)
+            if blue && b > r + 80 && b > g + 40 { return true }
+            if !blue && r > g + 80 && r > b + 60 { return true }
+        }
+    }
+    return false
+}
+
+// Writing a formula points it at cells with clicks and drags, on its own sheet
+// or another; the edited cell shows the formula with its references outlined;
+// the fill handle and copies move relative references.
+DriveFormulas :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1", "formula checks require the private display")
+    fixture: [4096]u8; SetText(fixture[:], directory); AppendText(fixture[:], "/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(fixture[:]), FormulaWorkbook), "cannot write the formula fixture")
+    StartApp(directory)
+    capture: [4096]u8; SetText(capture[:], directory); AppendText(capture[:], "/formula.png")
+
+    // A drag after "(" writes a range, a click after an operator a cell, and
+    // the next click replaces that cell.
+    ClickCell(4, 0)
+    TypeText("=SUM(")
+    DragCells(0, 0, 2, 0)
+    TypeText(")+")
+    ClickCell(0, 1)
+    ClickCell(1, 1)
+    ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
+    // The value would be "26"; the formula's text reaches across the cell.
+    Check(DarkPixels(GridLeft + 60, GridTop + 4 * RowHeight + 6, 45, 16) > 10,
+        "the edited cell does not show its formula")
+    Check(HasTint(GridLeft - 2, GridTop + 2, 6, 3 * RowHeight - 4, true),
+        "the formula's first range is not outlined in its color")
+    Check(HasTint(GridLeft + ColumnWidth - 2, GridTop + RowHeight + 2, 6, RowHeight - 4, false),
+        "the formula's second reference is not outlined in its color")
+    Key("Return")
+    ExpectSavedCell(4, 0, "=SUM(A1:A3)+B2")
+    Say("formulas: clicks and drags write references, and a new click replaces the last")
+
+    // Another sheet's cell gets that sheet's name; Enter returns to the edited sheet.
+    ClickCell(5, 0)
+    TypeText("=2*")
+    SheetTab(1)
+    ClickCell(0, 0)
+    Key("Return")
+    ExpectSavedCell(5, 0, "=2*Rates!A1")
+    TypeText("7")
+    Key("Return")
+    ExpectSavedCell(6, 0, "7")
+    Say("formulas: a reference picked on another sheet names it, and the edit stays on its sheet")
+
+    // Where no reference fits, a click finishes the formula and selects the cell.
+    ClickCell(7, 0)
+    TypeText("=A1")
+    ClickCell(7, 1)
+    TypeText("9")
+    Key("Return")
+    ExpectSavedCell(7, 0, "=A1")
+    ExpectSavedCell(7, 1, "9")
+
+    // The fill handle copies a formula down; Copy and Paste move it across.
+    ClickCell(0, 2)
+    TypeText("=A1*$B$1")
+    Key("Return")
+    ClickCell(0, 2)
+    Drag(GridLeft + 3 * ColumnWidth - 1, GridTop + RowHeight - 1, CellCenterX(2), CellCenterY(2))
+    ExpectSavedCell(1, 2, "=A2*$B$1")
+    ExpectSavedCell(2, 2, "=A3*$B$1")
+    ClickCell(1, 2)
+    Key("ctrl+c")
+    ClickCell(1, 3)
+    Key("ctrl+v")
+    ExpectSavedCell(1, 3, "=B2*$B$1")
+    Say("formulas: the fill handle and copies move relative references and keep fixed ones")
+
+    // A dragged range is cleared at once.
+    DragCells(0, 0, 1, 1)
+    Key("Delete")
+    ExpectSavedCell(0, 0, "")
+    ExpectSavedCell(1, 1, "")
+    ExpectSavedCell(2, 0, "3")
+    Check(StopApp() == 0, "the formula test app did not exit cleanly")
+    Say("formulas: picking, cross-sheet references, fill, copy and range selection passed")
+    return 0
+}
+
 DriveMenus :: (directory: string) -> s32 {
     Check(Environment(PrivateMarker) == "1",
         "the menu driver requires the desktop test's private display")
@@ -884,6 +1015,11 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
         AppendText(autosave[:], "/autosave")
         Check(MakeDirectory(TextUntilNul(autosave[:])), "cannot create the autosave directory")
         RunSession(self, "--drive-autosave", TextUntilNul(autosave[:]))
+        formulas: [4096]u8
+        SetText(formulas[:], work)
+        AppendText(formulas[:], "/formulas")
+        Check(MakeDirectory(TextUntilNul(formulas[:])), "cannot create the formulas directory")
+        RunSession(self, "--drive-formulas", TextUntilNul(formulas[:]))
     }
     headers: [4096]u8; SetText(headers[:],work); AppendText(headers[:],"/headers")
     Check(MakeDirectory(TextUntilNul(headers[:])),"cannot create header test directory")
@@ -912,6 +1048,9 @@ main :: (argc: s32, argv: **s8) -> s32 {
     }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-menus" {
         return DriveMenus(TextFromCString(cast(*u8)argv[2]))
+    }
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-formulas" {
+        return DriveFormulas(TextFromCString(cast(*u8)argv[2]))
     }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-autosave" {
         return DriveAutosave(TextFromCString(cast(*u8)argv[2]))
