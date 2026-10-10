@@ -242,7 +242,6 @@ LoadWorkbook :: () {
         AppendText(data_path[:], "/workbook.gnumeric")
     }
     path: string = TextUntilNul(data_path[:])
-    loaded: bool = false
     imported: bool = false
     legacy: [4096]u8
     if PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
@@ -252,30 +251,16 @@ LoadWorkbook :: () {
         AppendText(legacy[:], "json")
         if PathAccess(*legacy[0], 0) == 0 {
             Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
-            loaded = LoadLegacyJson(*legacy[0])
-            imported = loaded
+            imported = LoadLegacyJson(*legacy[0])
         }
     }
-    if imported {
-    } else if PathAccess(*data_path[0], 0) == 0 {
-        loaded = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) != 0
+    if !imported && PathAccess(*data_path[0], 0) == 0 {
+        unused Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0])
     }
     // A file supplies its own sheets; a new workbook starts with one.
     if Engine.WorkbookSheetCount(workbook) == 0 {
         Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
     }
-    if imported {
-        SetText(status[:], "Imported ")
-        AppendText(status[:], "workbook.json")
-        dirty = false
-        return
-    }
-    if loaded {
-        SetText(status[:], "Loaded ")
-    } else {
-        SetText(status[:], "New workbook ")
-    }
-    AppendText(status[:], FileName(path))
     dirty = false
 }
 
@@ -326,15 +311,15 @@ SaveWorkbook :: (finish_edit: bool) {
         }
     }
     if saved {
-        SetText(status[:], "Saved ")
+        status[0] = 0
         dirty = false
         save_retry_at = 0
     } else {
         SetText(status[:], "Could not save ")
+        AppendText(status[:], FileName(path))
         dirty = true
         save_retry_at = MonotonicMilliseconds() + 2000
     }
-    AppendText(status[:], FileName(path))
 }
 
 // The legacy JSON layout stores one object per row with eight named columns.
@@ -501,8 +486,6 @@ CommitCell :: () {
     Engine.WorkbookEvaluate(workbook)
     dirty = true
     save_retry_at = 0
-    SetText(status[:], "Edited ")
-    AppendCellName(status[:], selected_row, selected_column)
 }
 
 // Leaves the edit; a formula picked on another sheet returns to its own sheet.
@@ -600,7 +583,7 @@ PasteCells :: () {
         }
         at += 1
     }
-    Changed("Pasted")
+    Changed()
 }
 
 ClearCell :: () {
@@ -610,7 +593,7 @@ ClearCell :: () {
         first_column := SelectionFirstColumn()
         last_column := SelectionLastColumn()
         for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook, sheet_index, row, column, cast(*s8)Engine.CText("")) } }
-        Changed("Selection cleared"); return
+        Changed(); return
     }
     edit[0] = 0
     CommitCell()
@@ -724,28 +707,29 @@ DrawToolbar :: (session: Session, viewport: Rectangle) {
     if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook(true) }
     if ToolbarIcon(session, 1002, RowAddIcon.Shape, *x, false) {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
-        Changed("Row inserted")
+        Changed()
     }
     if ToolbarIcon(session, 1003, RowRemoveIcon.Shape, *x, false) {
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
-        Changed("Row deleted")
+        Changed()
     }
     if ToolbarIcon(session, 1004, ColumnAddIcon.Shape, *x, false) {
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
-        Changed("Column inserted")
+        Changed()
     }
     if ToolbarIcon(session, 1005, ColumnRemoveIcon.Shape, *x, false) {
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
-        Changed("Column deleted")
+        Changed()
     }
 }
 
+// Saving is automatic, so the window says nothing about it unless it fails.
 DrawStatus :: (session: Session, viewport: Rectangle) {
+    if status[0] == 0 { return }
     label: TextProps
     label.key = cast(u64)5
     label.text = TextUntilNul(status[:])
     label.font = Text14
-    label.disabled = !dirty
     label.bounds = Rectangle.{Margin, viewport.height - 36.0,
         viewport.width - Margin * 2.0, 20.0}
     Text(session, label)
@@ -768,11 +752,10 @@ ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
     return Button(session, button) != 0
 }
 
-Changed :: (message: string) {
+Changed :: () {
     Engine.WorkbookEvaluate(workbook)
     dirty = true
     save_retry_at = 0
-    SetText(status[:], message)
     // A changed range stays selected, as after a paste, fill or clear.
     keep_row: s32 = range_row
     keep_column: s32 = range_column
@@ -1261,7 +1244,7 @@ ApplyFill :: () {
     selected_column = left
     range_row = bottom
     range_column = right
-    Changed("Filled")
+    Changed()
 }
 
 // a modulo n, never negative.
@@ -1407,24 +1390,24 @@ DrawGridMenu :: (session: Session, escape: bool) {
     if result.activated_id == 4 { ClearCell() }
     if result.activated_id == 6 {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
-        Changed("Row inserted")
+        Changed()
     }
     if result.activated_id == 10 {
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row + 1)
         selected_row += 1
-        Changed("Row inserted")
+        Changed()
     }
     if result.activated_id == 7 {
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
-        Changed("Row deleted")
+        Changed()
     }
     if result.activated_id == 8 {
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
-        Changed("Column inserted")
+        Changed()
     }
     if result.activated_id == 9 {
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
-        Changed("Column deleted")
+        Changed()
     }
 }
 
