@@ -6,6 +6,7 @@ Json :: #import "json_scan";
 SystemStyle :: #import "kss/SystemStyle";
 SystemThemeLinux :: #import "SystemThemeLinux";
 #import "byte_text_linux"
+#import "font_metrics"
 #import "text_buffer"
 #import "std/vec"
 
@@ -35,6 +36,9 @@ SyncFile :: (descriptor: s32) -> s32 #foreign libc "fsync";
 RenameFile :: (source: *u8, destination: *u8) -> s32 #foreign libc "rename";
 RemoveFile :: (path: *u8) -> s32 #foreign libc "unlink";
 FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
+FreeBytes :: (block: *void) #foreign libc "free";
+TimeSpec :: struct { seconds: s64; nanoseconds: s64; }
+ClockTime :: (clock: s32, value: *TimeSpec) -> s32 #foreign libc "clock_gettime";
 
 MaxRows :: 200;
 MaxColumns :: 40;
@@ -67,12 +71,21 @@ workbook: *Engine.Workbook;
 sheet_index: s32 = 0;
 selected_row: s32 = 0;
 selected_column: s32 = 0;
+// The selection's other corner: dragging or shift-clicking spans a range from
+// the selected cell to it.
+range_row: s32 = 0;
+range_column: s32 = 0;
 // A header selection covers every cell along that axis, including offscreen cells.
 selection_axis: s32 = 0; // 0 cell, 1 row, 2 column
+// The edited cell's sheet. While a formula is written the tabs may show another
+// sheet to pick references from; the edit stays on this one.
+edit_sheet: s32 = 0;
 scroll_row: s32 = 0;
 scroll_column: s32 = 0;
 dirty: bool = false;
-save_retry_frames: s32 = 0;
+// A failed save is tried again at this monotonic time, in milliseconds. It is
+// a time, not a frame count: an idle window draws fewer frames.
+save_retry_at: s64 = 0;
 
 // The formula bar edits a NUL-terminated copy of the selected cell's source.
 edit: [256]u8;
@@ -83,6 +96,40 @@ edit_anchor: s32 = 0;
 edit_scroll: s32 = 0;
 edit_focused: bool = false;
 edit_composition: CompositionState;
+// A sheet tab pressed while a formula is written would take the field's focus;
+// the field takes it back so the formula can point at the other sheet.
+edit_refocus: bool = false;
+
+// What a held pointer does on the grid.
+DragNone :: 0;
+DragRange :: 1;  // selects a range of cells
+DragPick :: 2;   // points a formula reference at cells, as in Gnumeric
+DragFill :: 3;   // the fill handle copies the selection down or across
+drag_mode: s32 = DragNone;
+drag_frames: s32 = 0;
+shift_held: bool = false;
+// The reference the last pick wrote into the formula, as edit bytes
+// [pick_start, pick_end). Another pick replaces it while the cursor still
+// sits right after it; any other edit or cursor move ends that.
+pick_start: s32 = -1;
+pick_end: s32 = -1;
+pick_sheet: s32 = 0;
+pick_anchor_row: s32 = 0;
+pick_anchor_column: s32 = 0;
+pick_row: s32 = 0;
+pick_column: s32 = 0;
+// The fill handle's target while it is dragged: the selection grows along
+// one axis (1 rows, 2 columns) to fill_row or fill_column.
+fill_axis: s32 = 0;
+fill_row: s32 = 0;
+fill_column: s32 = 0;
+// The cells Copy put on the clipboard, so pasting them moves their formulas'
+// relative references as a spreadsheet does. Cut text pastes unchanged.
+copied_sheet: s32 = -1;
+copied_row: s32 = 0;
+copied_column: s32 = 0;
+copied_text: [8192]u8;
+copied_length: s32 = 0;
 
 // The desktop theme the style was last built from.
 theme_name: [128]u8;
@@ -104,12 +151,17 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     }
     key: s32 = KeyboardTake(session)
     control: bool = (KeyboardModifiers(session) & KeyModifierControl) != 0
+    shift_held = (KeyboardModifiers(session) & KeyModifierShift) != 0
     typed: [128]u8
     typed_length: s32 = TakeTypedText(session, typed[:])
     if control && key == KeyS {
         SaveWorkbook(true)
         key = 0
     }
+
+    pointer: PointerFrame = PointerSample(session)
+    if pointer.pressed && FormulaEditing() &&
+       PointInBounds(pointer.x, pointer.y, SheetTabsBounds(viewport)) { edit_refocus = true }
 
     DrawBackground(session, viewport)
     DrawToolbar(session, viewport)
@@ -123,14 +175,11 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     }
     DrawGrid(session, viewport)
     DrawGridMenu(session, key == KeyEscape)
-    if dirty {
-        if save_retry_frames > 0 {
-            save_retry_frames -= 1
-        } else {
-            SaveWorkbook(false)
-        }
+    if dirty && MonotonicMilliseconds() >= save_retry_at {
+        SaveWorkbook(false)
     }
     DrawStatus(session, viewport)
+    if edit_refocus && !pointer.down && !pointer.pressed { edit_refocus = false }
     return 0
 }
 
@@ -230,6 +279,12 @@ LoadWorkbook :: () {
     dirty = false
 }
 
+MonotonicMilliseconds :: () -> s64 {
+    now: TimeSpec
+    ClockTime(1, *now)
+    return now.seconds * 1000 + now.nanoseconds / 1000000
+}
+
 // Creates every missing parent, including a fresh XDG data directory.
 EnsureDataDirectory :: () -> bool {
     path: string = TextUntilNul(data_directory[:])
@@ -250,7 +305,7 @@ EnsureDataDirectory :: () -> bool {
 SaveWorkbook :: (finish_edit: bool) {
     if finish_edit && edit_focused {
         CommitCell()
-        edit_focused = false
+        EndEdit()
         SelectCell(selected_row, selected_column)
     }
     path: string = TextUntilNul(data_path[:])
@@ -273,11 +328,11 @@ SaveWorkbook :: (finish_edit: bool) {
     if saved {
         SetText(status[:], "Saved ")
         dirty = false
-        save_retry_frames = 0
+        save_retry_at = 0
     } else {
         SetText(status[:], "Could not save ")
         dirty = true
-        save_retry_frames = 120
+        save_retry_at = MonotonicMilliseconds() + 2000
     }
     AppendText(status[:], FileName(path))
 }
@@ -426,6 +481,10 @@ SelectCell :: (row: s32, column: s32) {
     if column >= MaxColumns { column = MaxColumns - 1 }
     selected_row = row
     selected_column = column
+    range_row = row
+    range_column = column
+    edit_sheet = sheet_index
+    pick_start = -1
     SetText(edit[:], CellSource(sheet_index, row, column))
     SetText(edit_original[:], TextUntilNul(edit[:]))
     edit_cursor = cast(s32)TextUntilNul(edit[:]).count
@@ -434,53 +493,80 @@ SelectCell :: (row: s32, column: s32) {
 }
 
 CommitCell :: () {
-    if CellSource(sheet_index, selected_row, selected_column) == TextUntilNul(edit[:]) {
+    if CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit[:]) {
         return
     }
-    Engine.WorkbookSetCell(workbook, sheet_index, selected_row,
+    Engine.WorkbookSetCell(workbook, edit_sheet, selected_row,
         selected_column, cast(*s8)*edit[0])
     Engine.WorkbookEvaluate(workbook)
     dirty = true
-    save_retry_frames = 0
+    save_retry_at = 0
     SetText(status[:], "Edited ")
     AppendCellName(status[:], selected_row, selected_column)
 }
 
-// Header commands cover the sheet's used extent, beyond the viewport limits.
-SelectionLastRow :: () -> s32 { return ifx selection_axis == 2 then Engine.WorkbookSheetRows(workbook, sheet_index) - 1 else selected_row }
-SelectionLastColumn :: () -> s32 { return ifx selection_axis == 1 then Engine.WorkbookSheetColumns(workbook, sheet_index) - 1 else selected_column }
+// Leaves the edit; a formula picked on another sheet returns to its own sheet.
+EndEdit :: () {
+    edit_focused = false
+    pick_start = -1
+    if sheet_index != edit_sheet {
+        sheet_index = edit_sheet
+        scroll_row = 0
+        scroll_column = 0
+    }
+}
+
+// The selection's bounds. Header commands cover the sheet's used extent,
+// beyond the viewport limits.
+SelectionFirstRow :: () -> s32 { return ifx selection_axis == 2 then 0 else Min(selected_row, range_row) }
+SelectionLastRow :: () -> s32 { return ifx selection_axis == 2 then Engine.WorkbookSheetRows(workbook, sheet_index) - 1 else Max(selected_row, range_row) }
+SelectionFirstColumn :: () -> s32 { return ifx selection_axis == 1 then 0 else Min(selected_column, range_column) }
+SelectionLastColumn :: () -> s32 { return ifx selection_axis == 1 then Engine.WorkbookSheetColumns(workbook, sheet_index) - 1 else Max(selected_column, range_column) }
+
+Min :: (a: s32, b: s32) -> s32 { return ifx a < b then a else b }
+Max :: (a: s32, b: s32) -> s32 { return ifx a > b then a else b }
 
 // The selection's source goes to the system clipboard as tab-separated cells.
 CopyCell :: () {
-    if selection_axis != 0 {
-        text: Vec(u8); defer { VecFree(text) }
-        first_row:=ifx selection_axis==2 then 0 else selected_row
-        last_row:=SelectionLastRow()
-        first_column:=ifx selection_axis==1 then 0 else selected_column
-        last_column:=SelectionLastColumn()
-        for row: first_row..last_row {
-            if row>first_row { unused VecPush(text, cast(u8)10) }
-            for column: first_column..last_column {
-                if column>first_column { unused VecPush(text, cast(u8)9) }
-                source:=CellSource(sheet_index,row,column)
-                for byte: source { unused VecPush(text, byte) }
-            }
+    text: Vec(u8); defer { VecFree(text) }
+    first_row := SelectionFirstRow()
+    last_row := SelectionLastRow()
+    first_column := SelectionFirstColumn()
+    last_column := SelectionLastColumn()
+    for row: first_row..last_row {
+        if row > first_row { unused VecPush(text, cast(u8)10) }
+        for column: first_column..last_column {
+            if column > first_column { unused VecPush(text, cast(u8)9) }
+            source := CellSource(sheet_index, row, column)
+            for byte: source { unused VecPush(text, byte) }
         }
-        SystemClipboardSet(TextFromBytes(VecSlice(text, 0, text.count))); return
     }
-    SystemClipboardSet(CellSource(sheet_index, selected_row, selected_column))
+    copied := TextFromBytes(VecSlice(text, 0, text.count))
+    SystemClipboardSet(copied)
+    copied_sheet = -1
+    if copied.count > copied_text.count { return }
+    for at: 0..cast(s32)copied.count - 1 { copied_text[at] = copied[at] }
+    copied_length = cast(s32)copied.count
+    copied_sheet = sheet_index
+    copied_row = first_row
+    copied_column = first_column
 }
 
 CutCell :: () {
     CopyCell()
+    copied_sheet = -1
     ClearCell()
 }
 
-// Pastes the clipboard's text from the selected cell: tabs separate columns and
-// lines separate rows, so cells copied from another spreadsheet keep their layout.
+// Pastes the clipboard's text from the selection's first cell: tabs separate
+// columns and lines separate rows, so cells copied from another spreadsheet
+// keep their layout. Formulas this app copied move with the paste.
 PasteCells :: () {
     text: string = SystemClipboardText(clipboard_text[:])
     if text.count == 0 { return }
+    target_row: s32 = SelectionFirstRow()
+    target_column: s32 = SelectionFirstColumn()
+    relocate: bool = copied_sheet >= 0 && text == TextView(copied_text[0:copied_length])
     row: s32 = 0
     column: s32 = 0
     cell: [256]u8
@@ -492,8 +578,16 @@ PasteCells :: () {
         if byte == 9 || byte == 10 {
             cell[length] = 0
             if !(byte == 10 && length == 0 && at == cast(s32)text.count) {
-                Engine.WorkbookSetCell(workbook, sheet_index, selected_row + row,
-                    selected_column + column, cast(*s8)*cell[0])
+                if relocate {
+                    moved: *s8 = Engine.FormulaRelocate(workbook, cast(*s8)*cell[0],
+                        target_row - copied_row, target_column - copied_column)
+                    Engine.WorkbookSetCell(workbook, sheet_index, target_row + row,
+                        target_column + column, moved)
+                    FreeBytes(cast(*void)moved)
+                } else {
+                    Engine.WorkbookSetCell(workbook, sheet_index, target_row + row,
+                        target_column + column, cast(*s8)*cell[0])
+                }
             }
             length = 0
             if byte == 9 { column += 1 } else {
@@ -510,12 +604,12 @@ PasteCells :: () {
 }
 
 ClearCell :: () {
-    if selection_axis != 0 {
-        first_row:=ifx selection_axis==2 then 0 else selected_row
-        last_row:=SelectionLastRow()
-        first_column:=ifx selection_axis==1 then 0 else selected_column
-        last_column:=SelectionLastColumn()
-        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook,sheet_index,row,column,cast(*s8)Engine.CText("")) } }
+    if selection_axis != 0 || range_row != selected_row || range_column != selected_column {
+        first_row := SelectionFirstRow()
+        last_row := SelectionLastRow()
+        first_column := SelectionFirstColumn()
+        last_column := SelectionLastColumn()
+        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook, sheet_index, row, column, cast(*s8)Engine.CText("")) } }
         Changed("Selection cleared"); return
     }
     edit[0] = 0
@@ -538,6 +632,8 @@ HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
     if typed_length > 0 {
         // Typing over a selected cell starts a new value, as in Gnumeric.
         selection_axis = 0
+        range_row = selected_row
+        range_column = selected_column
         edit[0] = 0
         edit_cursor = 0
         edit_anchor = 0
@@ -675,9 +771,19 @@ ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
 Changed :: (message: string) {
     Engine.WorkbookEvaluate(workbook)
     dirty = true
-    save_retry_frames = 0
+    save_retry_at = 0
     SetText(status[:], message)
+    // A changed range stays selected, as after a paste, fill or clear.
+    keep_row: s32 = range_row
+    keep_column: s32 = range_column
     SelectCell(selected_row, selected_column)
+    range_row = Min(keep_row, MaxRows - 1)
+    range_column = Min(keep_column, MaxColumns - 1)
+}
+
+SheetTabsBounds :: (viewport: Rectangle) -> Rectangle {
+    count: s32 = Min(Engine.WorkbookSheetCount(workbook), 16)
+    return Rectangle.{Margin, viewport.height - TabsBottom, 104.0 * cast(float32)count, 32.0}
 }
 
 DrawSheetTabs :: (session: Session, viewport: Rectangle) {
@@ -696,8 +802,7 @@ DrawSheetTabs :: (session: Session, viewport: Rectangle) {
     bar.key = cast(u64)1099
     bar.placement = cast(TabBarPlacement)TabBarTop
     bar.selected_index = sheet_index
-    bar.bounds = Rectangle.{Margin, viewport.height - TabsBottom,
-        104.0 * cast(float32)count, 32.0}
+    bar.bounds = SheetTabsBounds(viewport)
     bar.min_tab_width = 72
     bar.max_tab_width = 104
     result: TabBarResult = TabBar(session, bar, tabs[0:count])
@@ -705,7 +810,8 @@ DrawSheetTabs :: (session: Session, viewport: Rectangle) {
         sheet_index = result.selected_index
         scroll_row = 0
         scroll_column = 0
-        SelectCell(0, 0)
+        // A formula being written stays open, so it can point at this sheet.
+        if !FormulaEditing() && !edit_refocus { SelectCell(0, 0) }
     }
 }
 
@@ -720,6 +826,10 @@ DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
     Text(session, label)
     result: TextFieldResult = RunFormulaField(session, viewport, key, control,
         typed, typed_length)
+    // Typing or moving the cursor ends a pick: the next one inserts anew.
+    if result.edit.changed || result.cursor != edit_cursor || result.anchor != edit_anchor {
+        pick_start = -1
+    }
     edit_cursor = result.cursor
     edit_anchor = result.anchor
     edit_scroll = result.scroll_x
@@ -732,16 +842,95 @@ DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
     }
     if result.committed {
         CommitCell()
-        edit_focused = false
+        EndEdit()
         SelectCell(selected_row + 1, selected_column)
         EnsureVisible()
     }
     if result.escaped {
         SetText(edit[:], TextUntilNul(edit_original[:]))
         CommitCell()
-        edit_focused = false
+        EndEdit()
         SelectCell(selected_row, selected_column)
     }
+}
+
+// --------------------------------------------------------- formula picking
+
+FormulaEditing :: () -> bool { return edit_focused && edit[0] == #char "=" }
+
+// Whether a grid click now points the formula at cells: right after the last
+// pick, or where an operand belongs (after =, an operator, "(" or a separator),
+// outside a string, and not glued to a name.
+CanPick :: () -> bool {
+    if !FormulaEditing() { return false }
+    start: s32 = Min(edit_cursor, edit_anchor)
+    end: s32 = Max(edit_cursor, edit_anchor)
+    if pick_start >= 0 && start == pick_end && end == pick_end { return true }
+    text: string = TextUntilNul(edit[:])
+    if start < 1 || end > cast(s32)text.count { return false }
+    quotes: s32 = 0
+    for at: 0..start - 1 { if text[at] == #char "\"" { quotes += 1 } }
+    if quotes % 2 != 0 { return false }
+    before: s32 = start - 1
+    while before > 0 && text[before] == #char " " { before -= 1 }
+    operand: bool = false
+    for mark: "=(,;+-*/^&<>:" { if text[before] == mark { operand = true } }
+    if !operand { return false }
+    if end < cast(s32)text.count {
+        next: u8 = text[end]
+        if (next >= #char "A" && next <= #char "Z") || (next >= #char "a" && next <= #char "z") ||
+           (next >= #char "0" && next <= #char "9") || next == #char "$" || next == #char "_" ||
+           next == #char "." || next == #char "'" { return false }
+    }
+    return true
+}
+
+// Starts pointing the formula at a cell: it replaces the last pick, or inserts
+// at the cursor. Shift extends the last pick from its first cell instead.
+StartPick :: (row: s32, column: s32) {
+    replace: bool = pick_start >= 0 && edit_cursor == pick_end && edit_anchor == pick_end
+    start: s32 = Min(edit_cursor, edit_anchor)
+    end: s32 = Max(edit_cursor, edit_anchor)
+    if replace {
+        start = pick_start
+        end = pick_end
+    }
+    if !(replace && shift_held && pick_sheet == sheet_index) {
+        pick_anchor_row = row
+        pick_anchor_column = column
+    }
+    pick_sheet = sheet_index
+    pick_row = row
+    pick_column = column
+    WritePick(start, end)
+}
+
+// Writes the picked cell or range over edit bytes [start, end): "B3", or
+// "B3:C7" from its top-left to bottom-right, with its sheet when that differs
+// from the edited cell's.
+WritePick :: (start: s32, end: s32) {
+    reference: [320]u8
+    reference[0] = 0
+    if pick_sheet != edit_sheet {
+        prefix: [260]s8
+        Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(workbook, pick_sheet), *prefix[0])
+        AppendText(reference[:], TextFromCString(cast(*u8)*prefix[0]))
+    }
+    first_row: s32 = Min(pick_anchor_row, pick_row)
+    first_column: s32 = Min(pick_anchor_column, pick_column)
+    last_row: s32 = Max(pick_anchor_row, pick_row)
+    last_column: s32 = Max(pick_anchor_column, pick_column)
+    AppendCellName(reference[:], first_row, first_column)
+    if last_row != first_row || last_column != first_column {
+        AppendText(reference[:], ":")
+        AppendCellName(reference[:], last_row, last_column)
+    }
+    text: string = TextUntilNul(reference[:])
+    length: s32 = cast(s32)TextUntilNul(edit[:]).count
+    if length - (end - start) + cast(s32)text.count >= CellTextMax { return }
+    ApplyEdit(start, end, text)
+    pick_start = start
+    pick_end = start + cast(s32)text.count
 }
 
 // The field's props view the edit buffer and composition state, so they
@@ -760,6 +949,9 @@ RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
     field.focused = edit_focused
     field.composition = edit_composition
     field.max_bytes = CellTextMax - 1
+    // The app decides when the cell is being edited.
+    field.input.focus = edit_refocus
+    field.input.blur = !edit_focused && !edit_refocus
     if edit_focused {
         field.input.text = TextView(typed[0:typed_length])
         field.input.left = key == KeyLeft
@@ -782,6 +974,8 @@ GridRows :: () -> s32 {
     count: s32 = Engine.WorkbookSheetRows(workbook, sheet_index)
     if count < 8 { count = 8 }
     if count < selected_row + 1 { count = selected_row + 1 }
+    if count < range_row + 1 { count = range_row + 1 }
+    if drag_mode != DragNone && count < scroll_row + visible_rows { count = scroll_row + visible_rows }
     if count > MaxRows { count = MaxRows }
     return count
 }
@@ -790,6 +984,8 @@ GridColumns :: () -> s32 {
     count: s32 = Engine.WorkbookSheetColumns(workbook, sheet_index)
     if count < 8 { count = 8 }
     if count < selected_column + 1 { count = selected_column + 1 }
+    if count < range_column + 1 { count = range_column + 1 }
+    if drag_mode != DragNone && count < scroll_column + visible_columns { count = scroll_column + visible_columns }
     if count > MaxColumns { count = MaxColumns }
     return count
 }
@@ -829,6 +1025,15 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     if scroll_row > rows - visible_rows { scroll_row = rows - visible_rows }
     if scroll_row < 0 { scroll_row = 0 }
 
+    // The selection belongs to the edited cell's sheet; another sheet shown
+    // to pick references from has none.
+    here: bool = sheet_index == edit_sheet
+    first_row: s32 = SelectionFirstRow()
+    last_row: s32 = SelectionLastRow()
+    first_column: s32 = SelectionFirstColumn()
+    last_column: s32 = SelectionLastColumn()
+    spans: bool = selection_axis == 0 && (first_row != last_row || first_column != last_column)
+
     GridSquare(session, 10, Rectangle.{table.x, table.y, RowHeaderWidth, HeaderHeight},
         HeaderBackground(), "")
     column: s32 = scroll_column
@@ -836,7 +1041,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         name: [8]u8
         AppendCellColumn(name[:], column)
         GridSquare(session, 20 + column, Rectangle.{ColumnX(table, column), table.y,
-                ColumnWidth, HeaderHeight}, ifx selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
+                ColumnWidth, HeaderHeight}, ifx here && selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
         column += 1
     }
     shown: s32 = 0
@@ -846,7 +1051,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         number: [16]u8
         FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
         GridSquare(session, 100 + row, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
-            ifx selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
+            ifx here && selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
         column = scroll_column
         while column < scroll_column + visible_columns && column < columns {
             display: [256]u8
@@ -854,9 +1059,12 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
                 cast(*s8)*display[0], 256)
             Engine.RoundForDisplay(cast(*s8)*display[0], 256)
             fill: Color = CellBackground()
-            if (selection_axis == 1 && row == selected_row) ||
-               (selection_axis == 2 && column == selected_column) ||
-               (row == selected_row && column == selected_column) { fill = SelectedBackground() }
+            // A range is shaded around its active cell, as in Gnumeric.
+            active: bool = row == selected_row && column == selected_column
+            // A header selection shades its whole row or column on screen.
+            in_rows: bool = selection_axis == 2 || (row >= first_row && row <= last_row)
+            in_columns: bool = selection_axis == 1 || (column >= first_column && column <= last_column)
+            if here && in_rows && in_columns && !(spans && active) { fill = SelectedBackground() }
             GridSquare(session, 1000 + row * 64 + column,
                 Rectangle.{ColumnX(table, column), y, ColumnWidth, RowHeight},
                 fill, TextUntilNul(display[:]))
@@ -865,58 +1073,291 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         shown += 1
     }
 
+    if here && selection_axis == 0 && !edit_focused {
+        CellOutline(session, 400000, table, first_row, first_column, last_row, last_column, AccentColor(), 2)
+        handle: Rectangle = FillHandleBounds(table)
+        if handle.width > 0.0 {
+            mark: BoxProps
+            mark.key = cast(u64)400008
+            mark.bounds = Rectangle.{handle.x + 2.0, handle.y + 2.0, 7.0, 7.0}
+            mark.fill = AccentColor()
+            mark.border = CellBackground()
+            Box(session, mark)
+        }
+    }
+    if drag_mode == DragFill && fill_axis != 0 {
+        top: s32 = ifx fill_axis == 1 then Min(first_row, fill_row) else first_row
+        bottom: s32 = ifx fill_axis == 1 then Max(last_row, fill_row) else last_row
+        left: s32 = ifx fill_axis == 2 then Min(first_column, fill_column) else first_column
+        right: s32 = ifx fill_axis == 2 then Max(last_column, fill_column) else last_column
+        CellOutline(session, 400010, table, top, left, bottom, right, AccentColor(), 1)
+    }
+    DrawReferenceOutlines(session, table)
+    DrawCellEditor(session, table)
+
     pointer: PointerFrame = PointerSample(session)
     body: Rectangle = Rectangle.{table.x + RowHeaderWidth, table.y + HeaderHeight,
         table.width - RowHeaderWidth, table.height - HeaderHeight}
-    if pointer.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, table) {
-        if pointer.y < body.y && pointer.x >= body.x {
-            clicked := scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
-            if clicked < columns && clicked < scroll_column + visible_columns {
-                SelectCell(selected_row, clicked); selection_axis = 2; edit_focused = false; frames_since_click = 1000
+    hit_row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
+    hit_column: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
+    on_cell: bool = PointInBounds(pointer.x, pointer.y, body) && hit_row < rows &&
+        hit_row < scroll_row + visible_rows && hit_column < columns && hit_column < scroll_column + visible_columns
+    if pointer.pressed && !grid_menu_open {
+        handle: Rectangle = FillHandleBounds(table)
+        if handle.width > 0.0 && PointInBounds(pointer.x, pointer.y, handle) {
+            drag_mode = DragFill
+            fill_axis = 0
+        } else if on_cell && CanPick() {
+            // Writing a formula: the click points it at the cell, a drag at a range.
+            StartPick(hit_row, hit_column)
+            drag_mode = DragPick
+        } else if on_cell && shift_held && !edit_focused && here {
+            selection_axis = 0
+            range_row = hit_row
+            range_column = hit_column
+            drag_mode = DragRange
+        } else if on_cell {
+            second: bool = frames_since_click < DoubleClickFrames &&
+            hit_row == last_click_row && hit_column == last_click_column
+            edit_focused = false
+            SelectCell(hit_row, hit_column)
+            edit_focused = second
+            frames_since_click = 0
+            last_click_row = hit_row
+            last_click_column = hit_column
+            drag_mode = DragRange
+        } else if PointInBounds(pointer.x, pointer.y, table) && pointer.y < body.y && pointer.x >= body.x {
+            if hit_column < columns && hit_column < scroll_column + visible_columns {
+                edit_focused = false
+                SelectCell(selected_row, hit_column); selection_axis = 2; frames_since_click = 1000
             }
-        } else if pointer.x < body.x && pointer.y >= body.y {
-            row := scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
-            if row < rows && row < scroll_row + visible_rows {
-                SelectCell(row, selected_column); selection_axis = 1; edit_focused = false; frames_since_click = 1000
+        } else if PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
+            if hit_row < rows && hit_row < scroll_row + visible_rows {
+                edit_focused = false
+                SelectCell(hit_row, selected_column); selection_axis = 1; frames_since_click = 1000
             }
         }
+    }
+    if pointer.down && drag_mode != DragNone {
+        // Dragging past the grid's edge scrolls it, a step every few frames.
+        drag_frames += 1
+        if drag_frames % 4 == 0 {
+            if pointer.y >= body.y + body.height && scroll_row + visible_rows < MaxRows { scroll_row += 1 }
+            if pointer.y < body.y && scroll_row > 0 { scroll_row -= 1 }
+            if pointer.x >= body.x + body.width && scroll_column + visible_columns < MaxColumns { scroll_column += 1 }
+            if pointer.x < body.x && scroll_column > 0 { scroll_column -= 1 }
+        }
+        row: s32 = scroll_row
+        if pointer.y > body.y { row = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight) }
+        row = Min(row, Min(scroll_row + visible_rows - 1, MaxRows - 1))
+        column = scroll_column
+        if pointer.x > body.x { column = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth) }
+        column = Min(column, Min(scroll_column + visible_columns - 1, MaxColumns - 1))
+        if drag_mode == DragRange && !edit_focused && here {
+            selection_axis = 0
+            range_row = row
+            range_column = column
+        }
+        if drag_mode == DragPick && pick_start >= 0 && (row != pick_row || column != pick_column) {
+            pick_row = row
+            pick_column = column
+            WritePick(pick_start, pick_end)
+        }
+        if drag_mode == DragFill { AimFill(row, column) }
+    }
+    if pointer.released && drag_mode != DragNone {
+        if drag_mode == DragFill { ApplyFill() }
+        drag_mode = DragNone
+        drag_frames = 0
+    } else if !pointer.down {
+        drag_mode = DragNone
+        drag_frames = 0
     }
     secondary: SecondaryPointerFrame = SecondaryPointerSample(session)
     if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
         row := scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
         if row < rows && row < scroll_row + visible_rows {
-            SelectCell(row, selected_column); selection_axis = 1; edit_focused = false; frames_since_click = 1000
+            edit_focused = false
+            SelectCell(row, selected_column); selection_axis = 1; frames_since_click = 1000
             grid_menu_row = true; grid_menu_open = true; grid_menu_x = pointer.x; grid_menu_y = pointer.y
         }
     }
     if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
-        // The secondary button selects the cell under it and opens the menu.
+        // The secondary button opens the menu; outside the selection it first
+        // selects the cell under it.
         row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
         clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
         if row < rows && clicked < columns && clicked < scroll_column + visible_columns {
-            SelectCell(row, clicked)
+            inside: bool = here && selection_axis == 0 && row >= first_row && row <= last_row &&
+                clicked >= first_column && clicked <= last_column
             edit_focused = false
+            if !inside { SelectCell(row, clicked) }
             grid_menu_open = true
             grid_menu_row = false
             grid_menu_x = pointer.x
             grid_menu_y = pointer.y
         }
     }
-    if pointer.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
-        row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
-        clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
-        if row < rows && clicked < columns &&
-        clicked < scroll_column + visible_columns {
-            second: bool = frames_since_click < DoubleClickFrames &&
-            row == last_click_row && clicked == last_click_column
-            SelectCell(row, clicked)
-            edit_focused = second
-            frames_since_click = 0
-            last_click_row = row
-            last_click_column = clicked
+    if frames_since_click < 1000 { frames_since_click += 1 }
+}
+
+// The fill handle: the small square on the selection's bottom-right corner.
+FillHandleBounds :: (table: Rectangle) -> Rectangle {
+    none: Rectangle = Rectangle.{0.0, 0.0, 0.0, 0.0}
+    if selection_axis != 0 || edit_focused || sheet_index != edit_sheet { return none }
+    row: s32 = SelectionLastRow()
+    column: s32 = SelectionLastColumn()
+    if row < scroll_row || row >= scroll_row + visible_rows ||
+       column < scroll_column || column >= scroll_column + visible_columns { return none }
+    x: float32 = ColumnX(table, column) + ColumnWidth
+    y: float32 = RowY(table, row) + RowHeight
+    return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
+}
+
+// Dragging the fill handle grows the selection along the axis the pointer
+// moved furthest past it.
+AimFill :: (row: s32, column: s32) {
+    down: s32 = row - SelectionLastRow()
+    up: s32 = SelectionFirstRow() - row
+    right: s32 = column - SelectionLastColumn()
+    left: s32 = SelectionFirstColumn() - column
+    vertical: s32 = Max(down, up)
+    horizontal: s32 = Max(right, left)
+    fill_axis = 0
+    if vertical <= 0 && horizontal <= 0 { return }
+    if vertical >= horizontal {
+        fill_axis = 1
+        fill_row = row
+    } else {
+        fill_axis = 2
+        fill_column = column
+    }
+}
+
+// Fills the dragged-over cells with the selection repeated: each copy's
+// formulas move their relative references with it, as in Gnumeric.
+ApplyFill :: () {
+    if fill_axis == 0 { return }
+    first_row: s32 = SelectionFirstRow()
+    last_row: s32 = SelectionLastRow()
+    first_column: s32 = SelectionFirstColumn()
+    last_column: s32 = SelectionLastColumn()
+    top: s32 = ifx fill_axis == 1 then Min(first_row, fill_row) else first_row
+    bottom: s32 = ifx fill_axis == 1 then Max(last_row, fill_row) else last_row
+    left: s32 = ifx fill_axis == 2 then Min(first_column, fill_column) else first_column
+    right: s32 = ifx fill_axis == 2 then Max(last_column, fill_column) else last_column
+    height: s32 = last_row - first_row + 1
+    width: s32 = last_column - first_column + 1
+    for row: top..bottom {
+        for column: left..right {
+            if row >= first_row && row <= last_row && column >= first_column && column <= last_column { continue }
+            Engine.WorkbookCopyCell(workbook, sheet_index,
+                first_row + Wrap(row - first_row, height), first_column + Wrap(column - first_column, width), row, column)
         }
     }
-    if frames_since_click < 1000 { frames_since_click += 1 }
+    fill_axis = 0
+    selected_row = top
+    selected_column = left
+    range_row = bottom
+    range_column = right
+    Changed("Filled")
+}
+
+// a modulo n, never negative.
+Wrap :: (a: s32, n: s32) -> s32 {
+    r: s32 = a % n
+    return ifx r < 0 then r + n else r
+}
+
+// While a formula is written, each reference it names on the shown sheet is
+// outlined in its own color, as Gnumeric does.
+DrawReferenceOutlines :: (session: Session, table: Rectangle) {
+    if !FormulaEditing() { return }
+    ref: Engine.FormulaRef
+    at: s32 = 0
+    index: s32 = 0
+    while index < 32 && Engine.FormulaFindRef(workbook, cast(*s8)*edit[0], at, *ref) != 0 {
+        sheet: s32 = ifx ref.sheet == -1 then edit_sheet else ref.sheet
+        if sheet == sheet_index {
+            CellOutline(session, 400100 + index * 4, table, Min(ref.row1, ref.row2), Min(ref.col1, ref.col2),
+                Max(ref.row1, ref.row2), Max(ref.col1, ref.col2), ReferenceColor(index), 2)
+        }
+        at = ref.end
+        index += 1
+    }
+}
+
+// The edited cell shows the text being written, formula and all, over its
+// neighbors when it is wider than the cell, with the cursor in it.
+DrawCellEditor :: (session: Session, table: Rectangle) {
+    if !edit_focused || sheet_index != edit_sheet { return }
+    if selected_row < scroll_row || selected_row >= scroll_row + visible_rows ||
+       selected_column < scroll_column || selected_column >= scroll_column + visible_columns { return }
+    text: string = TextUntilNul(edit[:])
+    x: float32 = ColumnX(table, selected_column)
+    y: float32 = RowY(table, selected_row)
+    width: float32 = cast(float32)(GlyphWidth(text, Text14, "") + 16)
+    if width < ColumnWidth { width = ColumnWidth }
+    limit: float32 = ColumnX(table, scroll_column + visible_columns) - x
+    if width > limit { width = limit }
+    box: BoxProps
+    box.key = cast(u64)400500
+    box.bounds = Rectangle.{x, y, width, RowHeight}
+    box.fill = CellBackground()
+    box.border = AccentColor()
+    Box(session, box)
+    label: TextProps
+    label.key = cast(u64)400501
+    label.text = text
+    label.font = Text14
+    label.wrap = cast(TextWrap)TextWrapNone
+    label.bounds = Rectangle.{x + 6.0, y + 6.0, width - 12.0, RowHeight - 8.0}
+    Text(session, label)
+    cursor: s32 = Min(edit_cursor, cast(s32)text.count)
+    caret_x: float32 = x + 6.0 + cast(float32)GlyphWidth(text[0:cursor], Text14, "")
+    if caret_x < x + width - 2.0 {
+        caret: BoxProps
+        caret.key = cast(u64)400502
+        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, RowHeight - 10.0}
+        caret.fill = AccentColor()
+        caret.border = AccentColor()
+        Box(session, caret)
+    }
+}
+
+// An outline around cells [first_row..last_row] x [first_column..last_column],
+// clipped to the visible grid and `thickness` pixels wide.
+CellOutline :: (session: Session, key: s32, table: Rectangle, first_row: s32, first_column: s32,
+    last_row: s32, last_column: s32, color: Color, thickness: s32) {
+    top: s32 = Max(first_row, scroll_row)
+    bottom: s32 = Min(last_row, scroll_row + visible_rows - 1)
+    left: s32 = Max(first_column, scroll_column)
+    right: s32 = Min(last_column, scroll_column + visible_columns - 1)
+    if top > bottom || left > right { return }
+    x: float32 = ColumnX(table, left)
+    y: float32 = RowY(table, top)
+    width: float32 = cast(float32)(right - left + 1) * ColumnWidth
+    height: float32 = cast(float32)(bottom - top + 1) * RowHeight
+    for line: 0..thickness - 1 {
+        inset: float32 = cast(float32)line
+        outline: BoxProps
+        outline.key = cast(u64)(key + line)
+        outline.bounds = Rectangle.{x + inset, y + inset, width - inset * 2.0, height - inset * 2.0}
+        outline.fill = Color.{0, 0, 0, 0}
+        outline.border = color
+        Box(session, outline)
+    }
+}
+
+// Reference outlines take these colors in turn.
+ReferenceColor :: (index: s32) -> Color {
+    which: s32 = index % 6
+    if which == 0 { return Color.{47, 111, 224, 255} }
+    if which == 1 { return Color.{224, 60, 49, 255} }
+    if which == 2 { return Color.{46, 160, 79, 255} }
+    if which == 3 { return Color.{142, 68, 173, 255} }
+    if which == 4 { return Color.{230, 126, 34, 255} }
+    return Color.{22, 160, 133, 255}
 }
 
 // A row number has a short row menu; cells keep the existing editing commands.
@@ -990,6 +1431,7 @@ DrawGridMenu :: (session: Session, escape: bool) {
 HeaderBackground :: () -> Color { return StyleTokenColor("surface") }
 CellBackground :: () -> Color { return StyleTokenColor("card") }
 SelectedBackground :: () -> Color { return StyleTokenColor("accent-soft") }
+AccentColor :: () -> Color { return StyleTokenColor("accent") }
 GridLineColor :: () -> Color { return StyleTokenColor("border-soft") }
 
 ColumnX :: (table: Rectangle, column: s32) -> float32 {

@@ -1858,6 +1858,249 @@ WorkbookShiftRefs :: (wb: *Workbook, sheet_index: s32, by_row: s32, at: s32, ins
     }
 }
 
+// One cell or range reference in formula text, as the editor and fill see it.
+// start..end spans the whole reference with its sheet prefix; corner_start is
+// where the first corner begins after that prefix. sheet is -1 for a reference
+// without a prefix, -2 for a prefix naming no sheet of the workbook. A single
+// cell has row2 == row1 and col2 == col1; range is 1 for "A1:B2".
+FormulaRef :: struct {
+    start: s32
+    end: s32
+    corner_start: s32
+    sheet: s32
+    range: s32
+    row1: s32
+    col1: s32
+    row2: s32
+    col2: s32
+    fixed_row1: s32
+    fixed_col1: s32
+    fixed_row2: s32
+    fixed_col2: s32
+}
+
+// Parses one corner "$A$1" at pos: its column, row, and which parts are $-fixed.
+FormulaRefCorner :: (text: *s8, pos: *s32, col: *s32, row: *s32, fixed_col: *s32, fixed_row: *s32) -> s32 {
+    p: s32 = pos[0]
+    fixed_col[0] = 0
+    fixed_row[0] = 0
+    if text[p] == 36 {
+        fixed_col[0] = 1
+        p += 1
+    }
+    col[0] = ParseColLetters(text, *p)
+    if col[0] < 0 {
+        return 0
+    }
+    if text[p] == 36 {
+        fixed_row[0] = 1
+        p += 1
+    }
+    row[0] = ParseRowDigits(text, *p)
+    if row[0] < 0 {
+        return 0
+    }
+    pos[0] = p
+    return 1
+}
+
+// Finds the next reference at or after `from`, skipping string literals and
+// function names. Returns 1 and fills ref, or 0 when there is none.
+FormulaFindRef :: (wb: *Workbook, text: *s8, from: s32, ref: *FormulaRef) -> s32 {
+    i: s32 = from
+    while text[i] != 0 {
+        ch: s32 = text[i]
+        if ch == 34 {
+            i += 1
+            while text[i] != 0 {
+                if text[i] == 34 {
+                    if text[i + 1] != 34 {
+                        break
+                    }
+                    i += 1
+                }
+                i += 1
+            }
+            if text[i] != 0 {
+                i += 1
+            }
+            continue
+        }
+        if i > 0 && (IdentChar(text[i - 1]) != 0 || text[i - 1] == 36 || text[i - 1] == 33) {
+            i += 1
+            continue
+        }
+        p: s32 = i
+        name: [160]s8
+        nl: s32 = 0
+        ok: bool = true
+        prefix: bool = false
+        if ch == 39 {
+            q: s32 = p + 1
+            while text[q] != 0 {
+                if text[q] == 39 {
+                    if text[q + 1] == 39 {
+                        if nl < 159 {
+                            name[nl] = 39
+                            nl += 1
+                        }
+                        q += 2
+                        continue
+                    }
+                    break
+                }
+                if nl < 159 {
+                    name[nl] = text[q]
+                    nl += 1
+                }
+                q += 1
+            }
+            if text[q] == 39 && text[q + 1] == 33 {
+                p = q + 2
+                prefix = true
+            } else {
+                ok = false
+            }
+        } else {
+            q: s32 = p
+            while IdentChar(text[q]) != 0 {
+                q += 1
+            }
+            if q > p && text[q] == 33 && q - p < 160 {
+                MemoryCopy(cast(*void)(*name[0]), cast(*void)(*text[p]), cast(u64)(q - p))
+                nl = q - p
+                p = q + 1
+                prefix = true
+            }
+        }
+        name[nl] = 0
+        ref.corner_start = p
+        if ok {
+            ok = FormulaRefCorner(text, *p, *ref.col1, *ref.row1, *ref.fixed_col1, *ref.fixed_row1) != 0
+        }
+        ref.range = 0
+        ref.row2 = ref.row1
+        ref.col2 = ref.col1
+        ref.fixed_row2 = ref.fixed_row1
+        ref.fixed_col2 = ref.fixed_col1
+        if ok && text[p] == 58 {
+            look: s32 = p + 1
+            if FormulaRefCorner(text, *look, *ref.col2, *ref.row2, *ref.fixed_col2, *ref.fixed_row2) != 0 {
+                ref.range = 1
+                p = look
+            } else {
+                ref.row2 = ref.row1
+                ref.col2 = ref.col1
+                ref.fixed_row2 = ref.fixed_row1
+                ref.fixed_col2 = ref.fixed_col1
+            }
+        }
+        if ok && (IdentChar(text[p]) != 0 || text[p] == 40) {
+            ok = false
+        }
+        if !ok {
+            i += 1
+            continue
+        }
+        ref.start = i
+        ref.end = p
+        ref.sheet = -1
+        if prefix {
+            ref.sheet = -2
+            s: s32 = 0
+            while s < wb.sheet_count {
+                if TextCompare(*wb.sheets[s].name[0], *name[0]) == 0 {
+                    ref.sheet = s
+                    break
+                }
+                s += 1
+            }
+        }
+        return 1
+    }
+    return 0
+}
+
+// Emits one relocated corner: a $-fixed part stays, a relative part moves.
+// Returns 0 when the corner would leave the sheet.
+FormulaEmitMovedCorner :: (out: *s8, o: *s32, cap: s32, col: s32, row: s32, fixed_col: s32, fixed_row: s32, by_row: s32, by_col: s32) -> s32 {
+    letters: [8]s8
+    if fixed_col == 0 {
+        col += by_col
+    }
+    if fixed_row == 0 {
+        row += by_row
+    }
+    if col < 0 || col >= WB_MAX_COLS || row < 0 || row >= WB_MAX_ROWS {
+        return 0
+    }
+    if fixed_col != 0 {
+        ShiftEmitChar(out, o, cap, 36)
+    }
+    FormulaColName(col, *letters[0])
+    ShiftEmitSpan(out, o, cap, *letters[0], 0, cast(s32)TextLength(*letters[0]))
+    if fixed_row != 0 {
+        ShiftEmitChar(out, o, cap, 36)
+    }
+    ShiftEmitNumber(out, o, cap, row + 1)
+    return 1
+}
+
+// The formula as it reads after its cell moves by (by_row, by_col), the way a
+// copy or a fill writes it: relative parts of every reference follow the move,
+// $-fixed parts stay, and a reference pushed off the sheet becomes #REF!.
+// Text that is not a formula is copied unchanged. Returns a newly allocated
+// string.
+FormulaRelocate :: (wb: *Workbook, text: *s8, by_row: s32, by_col: s32) -> *s8 {
+    n: s32 = cast(s32)TextLength(text)
+    cap: s32 = n * 2 + 64
+    out: *s8 = null
+    o: s32 = 0
+    at: s32 = 0
+    ref: FormulaRef
+    if text[0] != 61 || (by_row == 0 && by_col == 0) {
+        return wb_strdup(text)
+    }
+    out = cast(*s8)MemoryAllocate(cast(u64)cap)
+    if out == null {
+        return wb_strdup(text)
+    }
+    while FormulaFindRef(wb, text, at, *ref) != 0 {
+        ShiftEmitSpan(out, *o, cap, text, at, ref.corner_start)
+        mark: s32 = o
+        moved: s32 = FormulaEmitMovedCorner(out, *o, cap, ref.col1, ref.row1, ref.fixed_col1, ref.fixed_row1, by_row, by_col)
+        if moved != 0 && ref.range != 0 {
+            ShiftEmitChar(out, *o, cap, 58)
+            moved = FormulaEmitMovedCorner(out, *o, cap, ref.col2, ref.row2, ref.fixed_col2, ref.fixed_row2, by_row, by_col)
+        }
+        if moved == 0 {
+            o = mark
+            ShiftEmitSpan(out, *o, cap, CText("#REF!"), 0, 5)
+        }
+        at = ref.end
+    }
+    ShiftEmitSpan(out, *o, cap, text, at, n)
+    out[o] = 0
+    return out
+}
+
+// Writes the source cell's text into the target cell, moving a formula's
+// relative references by the distance between the two cells.
+WorkbookCopyCell :: (wb: *Workbook, sheet_index: s32, from_row: s32, from_col: s32, row: s32, col: s32) -> s32 {
+    moved: *s8 = null
+    result: s32 = 0
+    if sheet_index < 0 || sheet_index >= wb.sheet_count {
+        return 0
+    }
+    moved = FormulaRelocate(wb, WorkbookCellText(wb, sheet_index, from_row, from_col), row - from_row, col - from_col)
+    if moved == null {
+        return 0
+    }
+    result = SetCellText(wb, sheet_index, row, col, moved)
+    MemoryFree(cast(*void)moved)
+    return result
+}
+
 // Grid numbers show two decimals; a value below 0.01 shows two significant
 // figures so it does not collapse to 0.00. Whole numbers and text are left as
 // they are, and the cell itself keeps its full value.
