@@ -954,12 +954,17 @@ RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
     return TextField(session, field)
 }
 
+// The grid shows the used cells and reaches the selection, a fill being
+// dragged, and the cells a formula being written points at. A held button
+// alone never changes it, or every click would draw the empty cells out to the
+// window's edge and take them away again on release.
 GridRows :: () -> s32 {
     count: s32 = Engine.WorkbookSheetRows(workbook, sheet_index)
     if count < 8 { count = 8 }
     if count < selected_row + 1 { count = selected_row + 1 }
     if count < range_row + 1 { count = range_row + 1 }
-    if drag_mode != DragNone && count < scroll_row + visible_rows { count = scroll_row + visible_rows }
+    if drag_mode == DragFill && fill_axis == 1 && count < fill_row + 1 { count = fill_row + 1 }
+    if PickShown() && count < Max(pick_anchor_row, pick_row) + 1 { count = Max(pick_anchor_row, pick_row) + 1 }
     if count > MaxRows { count = MaxRows }
     return count
 }
@@ -969,10 +974,14 @@ GridColumns :: () -> s32 {
     if count < 8 { count = 8 }
     if count < selected_column + 1 { count = selected_column + 1 }
     if count < range_column + 1 { count = range_column + 1 }
-    if drag_mode != DragNone && count < scroll_column + visible_columns { count = scroll_column + visible_columns }
+    if drag_mode == DragFill && fill_axis == 2 && count < fill_column + 1 { count = fill_column + 1 }
+    if PickShown() && count < Max(pick_anchor_column, pick_column) + 1 { count = Max(pick_anchor_column, pick_column) + 1 }
     if count > MaxColumns { count = MaxColumns }
     return count
 }
+
+// Whether the formula being written points at cells picked on the shown sheet.
+PickShown :: () -> bool { return FormulaEditing() && pick_start >= 0 && pick_sheet == sheet_index }
 
 visible_rows: s32 = 16;
 visible_columns: s32 = 8;
