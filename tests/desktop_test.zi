@@ -790,6 +790,26 @@ DriveFormulas :: (directory: string) -> s32 {
     ExpectSavedCell(0, 0, "")
     ExpectSavedCell(1, 1, "")
     ExpectSavedCell(2, 0, "3")
+
+    // In a window taller and wider than the sheet, holding a click leaves the
+    // grid as it is; a drag past the shown cells grows it as far as it goes.
+    Xdotool("windowsize", WindowId(), "1440", "900", "", "")
+    SleepMilliseconds(500)
+    MoveMouse(CellCenterX(2), CellCenterY(2))
+    Xdotool("mousedown", "1", "", "", "", "")
+    SleepMilliseconds(400)
+    ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
+    Xdotool("mouseup", "1", "", "", "", "")
+    SleepMilliseconds(300)
+    Check(PixelAt(CellCenterX(2), CellCenterY(10)) == Background,
+        "a held click draws empty rows down to the window's edge")
+    Check(PixelAt(CellCenterX(10), CellCenterY(2)) == Background,
+        "a held click draws empty columns across to the window's edge")
+    Drag(GridLeft + 3 * ColumnWidth - 1, GridTop + 3 * RowHeight - 1, CellCenterX(2), CellCenterY(9))
+    ExpectSavedCell(9, 2, "=A10*$B$1")
+    ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
+    Check(PixelAt(CellCenterX(2), CellCenterY(9)) == SelectedFill,
+        "a fill dragged past the shown rows does not show its cells")
     Check(StopApp() == 0, "the formula test app did not exit cleanly")
     Say("formulas: picking, cross-sheet references, fill, copy and range selection passed")
     return 0
