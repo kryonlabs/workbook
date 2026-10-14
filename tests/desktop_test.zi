@@ -580,6 +580,24 @@ DriveAutosave :: (directory: string) -> s32 {
     return 0
 }
 
+ExpectSavedSheetCell :: (sheet: s32, row: s32, column: s32, expected: string, message: string) {
+    saved: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(saved, cast(*s8)*saved_path[0]) != 0,
+        "cannot read the saved workbook")
+    source: *s8 = Engine.WorkbookCellText(saved, sheet, row, column)
+    actual: string = ""
+    if source != null { actual = TextFromCString(cast(*u8)source) }
+    if actual != expected {
+        WriteText(2, "expected \"")
+        WriteText(2, expected)
+        WriteText(2, "\", saved \"")
+        WriteText(2, actual)
+        WriteText(2, "\"\n")
+        Fail(message)
+    }
+    Engine.WorkbookFree(saved)
+}
+
 ExpectSavedCell :: (row: s32, column: s32, expected: string) {
     saved: *Engine.Workbook = Engine.WorkbookNew()
     Check(Engine.WorkbookLoadFile(saved, cast(*s8)*saved_path[0]) != 0,
@@ -815,6 +833,165 @@ DriveFormulas :: (directory: string) -> s32 {
     return 0
 }
 
+// Ctrl+Z undoes and Ctrl+Y or Ctrl+Shift+Z redoes every change: a finished
+// cell edit as one step, its text word by word while it is still edited, and
+// grid commands, rows and columns with the references they moved, on any sheet.
+DriveUndo :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1", "undo checks require the private display")
+    fixture: [4096]u8; SetText(fixture[:], directory); AppendText(fixture[:], "/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(fixture[:]), TwoSheets), "cannot write the undo fixture")
+    StartApp(directory)
+
+    // First!A1 holds 1. Each finished edit undoes and redoes on its own.
+    ClickCell(1, 0)
+    TypeText("5")
+    Key("Return")
+    TypeText("=A2*2")
+    Key("Return")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "typed cells are saved")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 2, 0, "", "Ctrl+Z undoes the last edit")
+    ExpectSavedSheetCell(0, 1, 0, "5", "Ctrl+Z undoes only the last edit")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 1, 0, "", "a second Ctrl+Z undoes the edit before")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 1, 0, "5", "Ctrl+Y redoes an edit")
+    Key("ctrl+shift+z")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "Ctrl+Shift+Z redoes an edit")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "redo with nothing left to redo changes nothing")
+    Say("undo: finished edits undo and redo one at a time")
+
+    // Rows and columns come back with the references that moved with them.
+    ClickCell(0, 0)
+    ToolbarButton("Insert row")
+    ExpectSavedSheetCell(0, 3, 0, "=A3*2", "inserting a row moves the formula")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 0, 0, "1", "undo removes the inserted row")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "undo moves the formula's reference back")
+    ClickCell(1, 0)
+    ToolbarButton("Delete row")
+    ExpectSavedSheetCell(0, 2, 0, "", "deleting a row moves the rows below up")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 1, 0, "5", "undo restores a deleted row")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "undo restores the reference into a deleted row")
+    ClickCell(0, 0)
+    ToolbarButton("Insert column")
+    ExpectSavedSheetCell(0, 0, 1, "1", "inserting a column moves the cells right")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 0, 0, "1", "undo removes the inserted column")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 0, 1, "1", "redo inserts the column again")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 0, 1, "", "undo removes the redone column")
+    Say("undo: row and column changes undo with their references")
+
+    // Clearing a range is one step, and undo selects the range again, so it
+    // can be copied straight away.
+    DragCells(0, 0, 2, 0)
+    Key("Delete")
+    ExpectSavedSheetCell(0, 2, 0, "", "Delete clears the range")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 0, 0, "1", "undo restores a cleared range")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "undo restores all of a cleared range")
+    Key("ctrl+c")
+    ClickCell(0, 2)
+    Key("ctrl+v")
+    ExpectSavedSheetCell(0, 2, 2, "=C2*2", "the range undo selected pastes")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 0, 2, "", "undo takes a paste back")
+    ExpectSavedSheetCell(0, 2, 2, "", "undo takes all of a paste back")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 2, 2, "=C2*2", "redo pastes again")
+    ClickCell(2, 2)
+    Drag(GridLeft + 3 * ColumnWidth - 1, GridTop + 3 * RowHeight - 1, CellCenterX(2), CellCenterY(4))
+    ExpectSavedSheetCell(0, 4, 2, "=C4*2", "the fill handle copies the formula down")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 3, 2, "", "undo takes a fill back")
+    ExpectSavedSheetCell(0, 2, 2, "=C2*2", "undo keeps the filled cell's source")
+    Say("undo: clear, paste and fill undo and redo")
+
+    // While a cell is edited, Ctrl+Z takes its typing back a word at a time
+    // and Ctrl+Y puts it back; once finished, the edit undoes as one step.
+    // The toolbar buttons pressed above hold the keyboard focus; the edit
+    // takes it, or each typed character would replace the one before.
+    DoubleClickCell(2, 0)
+    TypeText("+10")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2+10", "typing in a formula is saved")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2+", "Ctrl+Z in an edit takes back the last word")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "Ctrl+Z in an edit takes back the word before")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2+", "Ctrl+Y in an edit puts a word back")
+    TypeText("7")
+    Key("Return")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2+7", "the edit keeps typing after undo")
+    // Escape leaves nothing to undo: Ctrl+Z after it undoes the edit before.
+    ClickCell(3, 3)
+    TypeText("zzz")
+    Key("Escape")
+    ExpectSavedSheetCell(0, 3, 3, "", "Escape cancels the edit")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "a finished edit undoes as one step")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2+7", "a finished edit redoes as one step")
+    // Typed over, a cell first gets its value back; the next Ctrl+Z leaves
+    // the edit and undoes the change before it.
+    ClickCell(1, 0)
+    TypeText("99")
+    ExpectSavedSheetCell(0, 1, 0, "99", "typing over a cell is saved")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 1, 0, "5", "Ctrl+Z in a new value restores the old one")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2", "Ctrl+Z past an unchanged edit undoes the change before")
+    ExpectSavedSheetCell(0, 1, 0, "5", "the abandoned edit left its cell alone")
+    Key("ctrl+y")
+    ExpectSavedSheetCell(0, 2, 0, "=A2*2+7", "redo still follows")
+    // Undo puts the cursor back where the change was made.
+    DoubleClickCell(1, 0)
+    Key("Home")
+    TypeText("4")
+    ExpectSavedSheetCell(0, 1, 0, "45", "typing at the start of a cell")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 1, 0, "5", "Ctrl+Z takes back typing at the start of a cell")
+    TypeText("6")
+    ExpectSavedSheetCell(0, 1, 0, "65", "undo puts the cursor back where the change was made")
+    Key("Escape")
+    ExpectSavedSheetCell(0, 1, 0, "5", "Escape restores the cell after undo and typing")
+    Say("undo: an edit's typing undoes word by word, Escape adds no step")
+
+    // A reference picked with the mouse undoes to the one picked before.
+    ClickCell(5, 0)
+    TypeText("=")
+    ClickCell(0, 0)
+    ClickCell(1, 0)
+    ExpectSavedSheetCell(0, 5, 0, "=A2", "a second pick replaces the first")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 5, 0, "=A1", "Ctrl+Z in a formula brings back the reference picked before")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 5, 0, "=", "Ctrl+Z in a formula takes back the first pick")
+    Key("Escape")
+    ExpectSavedSheetCell(0, 5, 0, "", "Escape after undo leaves the cell as it was")
+
+    // An undone change on another sheet shows that sheet again.
+    SheetTab(1)
+    ClickCell(0, 0)
+    TypeText("8")
+    Key("Return")
+    ExpectSavedSheetCell(1, 0, 0, "8", "the second sheet takes an edit")
+    SheetTab(0)
+    Key("ctrl+z")
+    ExpectSavedSheetCell(1, 0, 0, "2", "undo reaches a change on another sheet")
+    TypeText("3")
+    Key("Return")
+    ExpectSavedSheetCell(1, 0, 0, "3", "undo shows the sheet and cell it changed")
+    ExpectSavedSheetCell(0, 0, 0, "1", "the first sheet keeps its cells")
+    Check(StopApp() == 0, "the undo test app did not exit cleanly")
+    Say("undo: picked references, other sheets, and every command undo and redo")
+    return 0
+}
+
 DriveMenus :: (directory: string) -> s32 {
     Check(Environment(PrivateMarker) == "1",
         "the menu driver requires the desktop test's private display")
@@ -1040,6 +1217,11 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
         AppendText(formulas[:], "/formulas")
         Check(MakeDirectory(TextUntilNul(formulas[:])), "cannot create the formulas directory")
         RunSession(self, "--drive-formulas", TextUntilNul(formulas[:]))
+        undo: [4096]u8
+        SetText(undo[:], work)
+        AppendText(undo[:], "/undo")
+        Check(MakeDirectory(TextUntilNul(undo[:])), "cannot create the undo directory")
+        RunSession(self, "--drive-undo", TextUntilNul(undo[:]))
     }
     headers: [4096]u8; SetText(headers[:],work); AppendText(headers[:],"/headers")
     Check(MakeDirectory(TextUntilNul(headers[:])),"cannot create header test directory")
@@ -1071,6 +1253,9 @@ main :: (argc: s32, argv: **s8) -> s32 {
     }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-formulas" {
         return DriveFormulas(TextFromCString(cast(*u8)argv[2]))
+    }
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-undo" {
+        return DriveUndo(TextFromCString(cast(*u8)argv[2]))
     }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-autosave" {
         return DriveAutosave(TextFromCString(cast(*u8)argv[2]))

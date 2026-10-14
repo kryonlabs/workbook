@@ -400,6 +400,63 @@ WorkbookFree :: (wb: *Workbook) {
     MemoryFree(cast(*void)wb)
 }
 
+// A copy of the workbook that shares nothing with it: every sheet and cell,
+// with its source, cached value and file value. The editor keeps such copies
+// as the states that undo and redo return to. Null when memory runs out.
+WorkbookClone :: (wb: *Workbook) -> *Workbook {
+    copy: *Workbook = cast(*Workbook)MemoryAllocateZeroed(1, cast(u64)size_of(Workbook))
+    if copy == null {
+        return null
+    }
+    copy.sheet_cap = wb.sheet_cap
+    copy.sheets = cast(*Sheet)MemoryAllocateZeroed(cast(u64)copy.sheet_cap, cast(u64)size_of(Sheet))
+    if copy.sheets == null {
+        MemoryFree(cast(*void)copy)
+        return null
+    }
+    i: s32 = 0
+    while i < wb.sheet_count {
+        from: *Sheet = *wb.sheets[i]
+        to: *Sheet = *copy.sheets[i]
+        to.* = from.*
+        to.cells = null
+        to.cell_count = 0
+        to.cell_cap = 0
+        copy.sheet_count = i + 1
+        if from.cell_count > 0 {
+            to.cells = cast(*Cell)MemoryAllocateZeroed(cast(u64)from.cell_count, cast(u64)size_of(Cell))
+            if to.cells == null {
+                WorkbookFree(copy)
+                return null
+            }
+            to.cell_cap = from.cell_count
+        }
+        j: s32 = 0
+        while j < from.cell_count {
+            cell: *Cell = *to.cells[j]
+            cell.* = from.cells[j]
+            cell.text = ifx cell.text != null then wb_strdup(cell.text) else null
+            cell.cached_text = ifx cell.cached_text != null then wb_strdup(cell.cached_text) else null
+            cell.serialized = ifx cell.serialized != null then wb_strdup(cell.serialized) else null
+            to.cell_count = j + 1
+            j += 1
+        }
+        i += 1
+    }
+    return copy
+}
+
+// How many cells the workbook holds, over all its sheets.
+WorkbookCellCount :: (wb: *Workbook) -> s32 {
+    count: s32 = 0
+    i: s32 = 0
+    while i < wb.sheet_count {
+        count += wb.sheets[i].cell_count
+        i += 1
+    }
+    return count
+}
+
 WorkbookAddSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
     if wb.sheet_count >= WB_MAX_SHEETS {
         return null

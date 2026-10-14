@@ -92,6 +92,8 @@ A run that hangs is killed after `FUZZ_TIMEOUT` seconds (20 by default).
     double click      edit the clicked cell in the formula bar
     right click       open the cell menu, including when activating the window
     Ctrl+C/X/V        copy, cut, or paste cells through the system clipboard
+    Ctrl+Z            undo; while a cell is edited, undo its typing word by word
+    Ctrl+Y            redo (also Ctrl+Shift+Z)
     wheel             scroll rows
     Ctrl+S            save
 
@@ -105,6 +107,11 @@ and inserted or deleted rows and columns. Clicking another cell or closing the
 app keeps the latest edit without requiring Enter or Ctrl+S. Escape restores
 the cell's value from before the edit. A failed save leaves the previous file
 intact, reports the failure in the status bar, and retries automatically.
+
+Undo and redo cover every change: a finished cell edit, paste, cut, clear,
+fill, and row or column insertion and deletion, each with the formula
+references it moved. Undoing a change selects the cells it touched again and
+shows their sheet. Up to the last 100 changes can be undone.
 
 ## profiles
 
