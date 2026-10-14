@@ -59,6 +59,8 @@ KeyC :: 67;
 KeyS :: 83;
 KeyV :: 86;
 KeyX :: 88;
+KeyY :: 89;
+KeyZ :: 90;
 
 // The cell menu: open, and where the secondary button was released.
 grid_menu_open: bool = false;
@@ -99,6 +101,9 @@ edit_composition: CompositionState;
 // A sheet tab pressed while a formula is written would take the field's focus;
 // the field takes it back so the formula can point at the other sheet.
 edit_refocus: bool = false;
+// The grid started an edit: the field takes the keyboard from a toolbar button
+// or sheet tab pressed before, or it would drop every key but the last.
+edit_claim: bool = false;
 
 // What a held pointer does on the grid.
 DragNone :: 0;
@@ -131,6 +136,49 @@ copied_column: s32 = 0;
 copied_text: [8192]u8;
 copied_length: s32 = 0;
 
+// Undo and redo return the workbook to earlier states. Each step keeps a whole
+// copy of the workbook, so a deleted row comes back with every reference that
+// moved, and the selection where the change was made.
+UndoState :: struct {
+    book: *Engine.Workbook
+    sheet: s32
+    row: s32
+    column: s32
+    range_row: s32
+    range_column: s32
+    axis: s32
+}
+UndoLimit :: 100;
+// The oldest steps go once the copies hold more cells than this.
+UndoCellBudget :: 2000000;
+undo_steps: [UndoLimit]UndoState;
+undo_count: s32 = 0;
+redo_steps: [UndoLimit]UndoState;
+redo_count: s32 = 0;
+// A cell edit is one step, opened by its first change.
+edit_recorded: bool = false;
+
+// While a cell is edited its text undoes in smaller steps: typing up to the
+// next word, a run of deletions, one picked reference however far it was
+// dragged, or any other single change.
+EditTextState :: struct {
+    text: [256]u8
+    cursor: s32
+    anchor: s32
+}
+EditUndoLimit :: 64;
+edit_undo: [EditUndoLimit]EditTextState;
+edit_undo_count: s32 = 0;
+edit_redo: [EditUndoLimit]EditTextState;
+edit_redo_count: s32 = 0;
+EditTyping :: 1;
+EditDeleting :: 2;
+EditOther :: 3;
+// The newest text step's kind, which the next change of that kind may extend,
+// and where that change left the cursor.
+edit_run: s32 = 0;
+edit_run_at: s32 = 0;
+
 // The desktop theme the style was last built from.
 theme_name: [128]u8;
 theme_frames: s32 = 0;
@@ -156,6 +204,16 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     typed_length: s32 = TakeTypedText(session, typed[:])
     if control && key == KeyS {
         SaveWorkbook(true)
+        key = 0
+    }
+    // Ctrl+Z undoes; Ctrl+Y and Ctrl+Shift+Z redo, in the cell being edited
+    // first and then in the workbook.
+    if control && key == KeyZ && !shift_held {
+        UndoCommand()
+        key = 0
+    }
+    if control && (key == KeyY || key == KeyZ) {
+        RedoCommand()
         key = 0
     }
 
@@ -459,6 +517,7 @@ CellSource :: (sheet: s32, row: s32, column: s32) -> string {
 }
 
 SelectCell :: (row: s32, column: s32) {
+    FinishEditStep()
     selection_axis = 0
     if row < 0 { row = 0 }
     if column < 0 { column = 0 }
@@ -480,6 +539,10 @@ SelectCell :: (row: s32, column: s32) {
 CommitCell :: () {
     if CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit[:]) {
         return
+    }
+    if !edit_recorded {
+        PushUndo()
+        edit_recorded = true
     }
     Engine.WorkbookSetCell(workbook, edit_sheet, selected_row,
         selected_column, cast(*s8)*edit[0])
@@ -547,6 +610,7 @@ CutCell :: () {
 PasteCells :: () {
     text: string = SystemClipboardText(clipboard_text[:])
     if text.count == 0 { return }
+    RecordChange()
     target_row: s32 = SelectionFirstRow()
     target_column: s32 = SelectionFirstColumn()
     relocate: bool = copied_sheet >= 0 && text == TextView(copied_text[0:copied_length])
@@ -588,6 +652,7 @@ PasteCells :: () {
 
 ClearCell :: () {
     if selection_axis != 0 || range_row != selected_row || range_column != selected_column {
+        RecordChange()
         first_row := SelectionFirstRow()
         last_row := SelectionLastRow()
         first_column := SelectionFirstColumn()
@@ -610,28 +675,44 @@ HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
     if key == KeyRight || key == KeyTab {
         SelectCell(selected_row, selected_column + 1)
     }
-    if key == KeyEnter { selection_axis = 0; edit_focused = true }
+    if key == KeyEnter { selection_axis = 0; StartEdit() }
     if key == KeyDelete || key == KeyBackspace { ClearCell() }
     if typed_length > 0 {
         // Typing over a selected cell starts a new value, as in Gnumeric.
         selection_axis = 0
         range_row = selected_row
         range_column = selected_column
-        edit[0] = 0
-        edit_cursor = 0
-        edit_anchor = 0
-        edit_focused = true
-        ApplyEdit(0, 0, TextView(typed[0:typed_length]))
+        StartEdit()
+        edit_run = 0
+        ChangeEdit(EditTyping, 0, cast(s32)TextUntilNul(edit[:]).count, TextView(typed[0:typed_length]))
     }
     EnsureVisible()
 }
 
+StartEdit :: () {
+    edit_focused = true
+    edit_claim = true
+}
+
+// Whether edit bytes [start, end) can be replaced with replacement.
+EditFits :: (start: s32, end: s32, replacement: string) -> bool {
+    length: s32 = cast(s32)TextUntilNul(edit[:]).count
+    if start < 0 || end < start || end > length { return false }
+    return length - (end - start) + cast(s32)replacement.count < CellTextMax
+}
+
+// Replaces edit bytes [start, end) as a text step of the given kind.
+ChangeEdit :: (kind: s32, start: s32, end: s32, replacement: string) {
+    if !EditFits(start, end, replacement) { return }
+    RememberEditText(kind, start, end, replacement)
+    ApplyEdit(start, end, replacement)
+}
+
 // Replaces edit bytes [start, end) with replacement, keeping the terminator.
 ApplyEdit :: (start: s32, end: s32, replacement: string) {
+    if !EditFits(start, end, replacement) { return }
     length: s32 = cast(s32)TextUntilNul(edit[:]).count
-    if start < 0 || end < start || end > length { return }
     inserted: s32 = cast(s32)replacement.count
-    if length - (end - start) + inserted >= CellTextMax { return }
     tail: [256]u8
     tail_length: s32 = length - end
     index: s32 = 0
@@ -691,6 +772,173 @@ AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
     return at + 4
 }
 
+// --------------------------------------------------------------------- undo
+
+UndoCommand :: () {
+    if edit_focused && UndoEditText() { return }
+    if undo_count == 0 { return }
+    if edit_focused { EndEdit() }
+    FinishEditStep()
+    if undo_count == 0 { return }
+    undo_count -= 1
+    redo_steps[redo_count] = PutState(undo_steps[undo_count])
+    redo_count += 1
+}
+
+RedoCommand :: () {
+    if edit_focused && RedoEditText() { return }
+    if redo_count == 0 { return }
+    if edit_focused { EndEdit() }
+    FinishEditStep()
+    redo_count -= 1
+    undo_steps[undo_count] = PutState(redo_steps[redo_count])
+    undo_count += 1
+}
+
+// A grid command is one step of its own, after any cell edit before it.
+RecordChange :: () {
+    FinishEditStep()
+    PushUndo()
+}
+
+// Keeps a copy of the workbook as it is now as the newest undo step. A new
+// change leaves nothing to redo.
+PushUndo :: () {
+    copy: *Engine.Workbook = Engine.WorkbookClone(workbook)
+    if copy == null { return }
+    while redo_count > 0 {
+        redo_count -= 1
+        Engine.WorkbookFree(redo_steps[redo_count].book)
+    }
+    if undo_count == UndoLimit { DropOldestUndo() }
+    undo_steps[undo_count] = StateOf(copy)
+    undo_count += 1
+    cells: s32 = 0
+    for at: 0..undo_count - 1 { cells += Engine.WorkbookCellCount(undo_steps[at].book) }
+    while undo_count > 1 && cells > UndoCellBudget {
+        cells -= Engine.WorkbookCellCount(undo_steps[0].book)
+        DropOldestUndo()
+    }
+}
+
+DropOldestUndo :: () {
+    Engine.WorkbookFree(undo_steps[0].book)
+    for at: 1..undo_count - 1 { undo_steps[at - 1] = undo_steps[at] }
+    undo_count -= 1
+}
+
+// The book with the selection as it is now.
+StateOf :: (book: *Engine.Workbook) -> UndoState {
+    state: UndoState
+    state.book = book
+    state.sheet = edit_sheet
+    state.row = selected_row
+    state.column = selected_column
+    state.range_row = range_row
+    state.range_column = range_column
+    state.axis = selection_axis
+    return state
+}
+
+// Makes a kept state the current workbook and selection, and returns the
+// state it replaces for the other stack.
+PutState :: (state: UndoState) -> UndoState {
+    previous: UndoState = StateOf(workbook)
+    workbook = state.book
+    sheet: s32 = Max(0, Min(state.sheet, Engine.WorkbookSheetCount(workbook) - 1))
+    if sheet != sheet_index {
+        sheet_index = sheet
+        scroll_row = 0
+        scroll_column = 0
+    }
+    Engine.WorkbookEvaluate(workbook)
+    SelectCell(state.row, state.column)
+    range_row = state.range_row
+    range_column = state.range_column
+    selection_axis = state.axis
+    dirty = true
+    save_retry_at = 0
+    EnsureVisible()
+    return previous
+}
+
+// Ends the cell edit's step. An edit that left the cell as it found it has
+// nothing to undo, so its step goes; its text steps end with it.
+FinishEditStep :: () {
+    edit_undo_count = 0
+    edit_redo_count = 0
+    edit_run = 0
+    if !edit_recorded { return }
+    edit_recorded = false
+    if undo_count > 0 &&
+       CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit_original[:]) {
+        undo_count -= 1
+        Engine.WorkbookFree(undo_steps[undo_count].book)
+    }
+}
+
+// Keeps the edit text as it is now as the newest text step, unless the change
+// about to replace bytes [start, end) continues the newest step's run.
+RememberEditText :: (kind: s32, start: s32, end: s32, replacement: string) {
+    extends: bool = false
+    if kind == EditTyping && edit_run == EditTyping && start == end && start == edit_run_at {
+        // Typing joins the run until a word starts after a space or a symbol.
+        extends = !(start > 0 && !WordByte(edit[start - 1]) && WordByte(replacement[0]))
+    }
+    if kind == EditDeleting && edit_run == EditDeleting &&
+       replacement.count == 0 && (end == edit_run_at || start == edit_run_at) { extends = true }
+    edit_run = kind
+    edit_run_at = start + cast(s32)replacement.count
+    if extends { return }
+    edit_redo_count = 0
+    if edit_undo_count == EditUndoLimit {
+        for at: 1..EditUndoLimit - 1 { edit_undo[at - 1] = edit_undo[at] }
+        edit_undo_count -= 1
+    }
+    KeepEditText(*edit_undo[edit_undo_count])
+    edit_undo_count += 1
+}
+
+WordByte :: (byte: u8) -> bool {
+    return (byte >= #char "A" && byte <= #char "Z") || (byte >= #char "a" && byte <= #char "z") ||
+        (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "." ||
+        byte == #char "$" || byte >= 128
+}
+
+UndoEditText :: () -> bool {
+    if edit_undo_count == 0 { return false }
+    KeepEditText(*edit_redo[edit_redo_count])
+    edit_redo_count += 1
+    edit_undo_count -= 1
+    PutEditText(*edit_undo[edit_undo_count])
+    return true
+}
+
+RedoEditText :: () -> bool {
+    if edit_redo_count == 0 { return false }
+    KeepEditText(*edit_undo[edit_undo_count])
+    edit_undo_count += 1
+    edit_redo_count -= 1
+    PutEditText(*edit_redo[edit_redo_count])
+    return true
+}
+
+KeepEditText :: (state: *EditTextState) {
+    SetText(state.text[:], TextUntilNul(edit[:]))
+    state.cursor = edit_cursor
+    state.anchor = edit_anchor
+}
+
+// Puts kept text back in the edited cell, which takes it at once.
+PutEditText :: (state: *EditTextState) {
+    SetText(edit[:], TextUntilNul(state.text[:]))
+    edit_cursor = state.cursor
+    edit_anchor = state.anchor
+    edit_run = 0
+    pick_start = -1
+    CommitCell()
+}
+
 // --------------------------------------------------------------------- view
 
 // The window's own color: the theme's canvas behind every widget.
@@ -706,18 +954,22 @@ DrawToolbar :: (session: Session, viewport: Rectangle) {
     x: float32 = Margin
     if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook(true) }
     if ToolbarIcon(session, 1002, RowAddIcon.Shape, *x, false) {
+        RecordChange()
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
         Changed()
     }
     if ToolbarIcon(session, 1003, RowRemoveIcon.Shape, *x, false) {
+        RecordChange()
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
         Changed()
     }
     if ToolbarIcon(session, 1004, ColumnAddIcon.Shape, *x, false) {
+        RecordChange()
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
         Changed()
     }
     if ToolbarIcon(session, 1005, ColumnRemoveIcon.Shape, *x, false) {
+        RecordChange()
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed()
     }
@@ -809,20 +1061,27 @@ DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
     Text(session, label)
     result: TextFieldResult = RunFormulaField(session, viewport, key, control,
         typed, typed_length)
+    edit_claim = false
     // Typing or moving the cursor ends a pick: the next one inserts anew.
     if result.edit.changed || result.cursor != edit_cursor || result.anchor != edit_anchor {
         pick_start = -1
     }
-    edit_cursor = result.cursor
-    edit_anchor = result.anchor
+    // Moving the cursor ends a run of typing or deleting, for undo.
+    if !result.edit.changed && (result.cursor != edit_cursor || result.anchor != edit_anchor) {
+        edit_run = 0
+    }
     edit_scroll = result.scroll_x
     edit_composition = result.composition
     edit_focused = result.focused
+    // The text step keeps the cursor from before the change, so undo puts it back.
     if result.edit.changed {
-        ApplyEdit(result.edit.start, result.edit.end, result.edit.replacement)
-        edit_cursor = result.cursor
-        edit_anchor = result.anchor
+        // Cut and paste are steps of their own; typing and deleting run on.
+        kind: s32 = EditOther
+        if !control { kind = ifx result.edit.replacement.count == 0 then EditDeleting else EditTyping }
+        ChangeEdit(kind, result.edit.start, result.edit.end, result.edit.replacement)
     }
+    edit_cursor = result.cursor
+    edit_anchor = result.anchor
     if result.committed {
         CommitCell()
         EndEdit()
@@ -886,13 +1145,13 @@ StartPick :: (row: s32, column: s32) {
     pick_sheet = sheet_index
     pick_row = row
     pick_column = column
-    WritePick(start, end)
+    WritePick(start, end, true)
 }
 
 // Writes the picked cell or range over edit bytes [start, end): "B3", or
 // "B3:C7" from its top-left to bottom-right, with its sheet when that differs
-// from the edited cell's.
-WritePick :: (start: s32, end: s32) {
+// from the edited cell's. A new pick is a text step; dragging it extends it.
+WritePick :: (start: s32, end: s32, new_step: bool) {
     reference: [320]u8
     reference[0] = 0
     if pick_sheet != edit_sheet {
@@ -910,8 +1169,8 @@ WritePick :: (start: s32, end: s32) {
         AppendCellName(reference[:], last_row, last_column)
     }
     text: string = TextUntilNul(reference[:])
-    length: s32 = cast(s32)TextUntilNul(edit[:]).count
-    if length - (end - start) + cast(s32)text.count >= CellTextMax { return }
+    if !EditFits(start, end, text) { return }
+    if new_step { RememberEditText(EditOther, start, end, text) }
     ApplyEdit(start, end, text)
     pick_start = start
     pick_end = start + cast(s32)text.count
@@ -934,7 +1193,7 @@ RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
     field.composition = edit_composition
     field.max_bytes = CellTextMax - 1
     // The app decides when the cell is being edited.
-    field.input.focus = edit_refocus
+    field.input.focus = edit_refocus || edit_claim
     field.input.blur = !edit_focused && !edit_refocus
     if edit_focused {
         field.input.text = TextView(typed[0:typed_length])
@@ -1114,7 +1373,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
             hit_row == last_click_row && hit_column == last_click_column
             edit_focused = false
             SelectCell(hit_row, hit_column)
-            edit_focused = second
+            if second { StartEdit() }
             frames_since_click = 0
             last_click_row = hit_row
             last_click_column = hit_column
@@ -1154,7 +1413,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         if drag_mode == DragPick && pick_start >= 0 && (row != pick_row || column != pick_column) {
             pick_row = row
             pick_column = column
-            WritePick(pick_start, pick_end)
+            WritePick(pick_start, pick_end, false)
         }
         if drag_mode == DragFill { AimFill(row, column) }
     }
@@ -1231,6 +1490,7 @@ AimFill :: (row: s32, column: s32) {
 // formulas move their relative references with it, as in Gnumeric.
 ApplyFill :: () {
     if fill_axis == 0 { return }
+    RecordChange()
     first_row: s32 = SelectionFirstRow()
     last_row: s32 = SelectionLastRow()
     first_column: s32 = SelectionFirstColumn()
@@ -1398,23 +1658,28 @@ DrawGridMenu :: (session: Session, escape: bool) {
     if result.activated_id == 3 { PasteCells() }
     if result.activated_id == 4 { ClearCell() }
     if result.activated_id == 6 {
+        RecordChange()
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
         Changed()
     }
     if result.activated_id == 10 {
+        RecordChange()
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row + 1)
         selected_row += 1
         Changed()
     }
     if result.activated_id == 7 {
+        RecordChange()
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
         Changed()
     }
     if result.activated_id == 8 {
+        RecordChange()
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
         Changed()
     }
     if result.activated_id == 9 {
+        RecordChange()
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed()
     }
