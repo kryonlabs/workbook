@@ -2,14 +2,6 @@
   "format": 1,
   "packages": [
     {
-      "commit": "933691600cf10e81b1f53d9919dbcb371c1968e1",
-      "dependencies": {},
-      "id": "p56788fa3dab3e73a",
-      "name": "mingcute",
-      "ref": "master",
-      "url": "https://github.com/kryonlabs/mingcute.git"
-    },
-    {
       "commit": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
       "dependencies": {},
       "id": "p5a77c9c35110e925",
@@ -19,28 +11,36 @@
       "url": "https://github.com/raysan5/raylib.git"
     },
     {
-      "commit": "92aafbc138b600b84cffac40bb24031ec0b39d4a",
-      "dependencies": {"kryon": "pe31700e9a6d75432"},
-      "id": "pc8db43b9ad293188",
+      "commit": "ac8c7e3cdfa89bc676d1aa60ced8b3f73b8ca8b7",
+      "dependencies": {"kryon": "pb0e7ce0a475fdcf9"},
+      "id": "p7faa8aa31304f089",
       "name": "Kss",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kss.git"
     },
     {
-      "commit": "f545d948870bb39ff1208c64d84edb7942c923f9",
+      "commit": "ce5738ff514aedeb92968496fb0d43daa97176b0",
       "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "pe31700e9a6d75432",
+      "id": "pb0e7ce0a475fdcf9",
       "name": "kryon",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kryon.git"
+    },
+    {
+      "commit": "9cc6872f75447c3a24c16764f9829d0f58751cb0",
+      "dependencies": {},
+      "id": "pe1027b9d16704793",
+      "name": "mingcute",
+      "ref": "master",
+      "url": "https://github.com/kryonlabs/mingcute.git"
     }
   ],
   "root": {
-    "dependencies": {"kryon": "pe31700e9a6d75432", "kss": "pc8db43b9ad293188", "mingcute": "p56788fa3dab3e73a"},
+    "dependencies": {"kryon": "pb0e7ce0a475fdcf9", "kss": "p7faa8aa31304f089", "mingcute": "pe1027b9d16704793"},
     "name": "workbook"
   },
   "toolchain": {
-    "commit": "c0e0e9847d9bf7c5e4368ec2745c3e7262323b50",
+    "commit": "d14f867ae994c8cd57bf6fa9f196b7b558863902",
     "ref": "master",
     "url": "https://github.com/ziranlang/ziran.git"
   }
