@@ -2284,6 +2284,16 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
 
 EditorColor :: (name: string) -> Color {
     #if #defined(KRYON_HOSTED_UI) {
+        accent := Theme.AppThemeColor("focus-ring", Color.{37, 99, 235, 255})
+        if name == "accent" { return accent }
+        if name == "border-soft" { return Theme.AppThemeColor("border", Color.{208, 216, 224, 255}) }
+        if name == "surface" { return Theme.AppThemeColor("button", Color.{236, 239, 243, 255}) }
+        if name == "accent-soft" {
+            base := Theme.AppThemeColor("card", Color.{255, 255, 255, 255})
+            return Color.{cast(u8)((cast(s32)base.r * 4 + cast(s32)accent.r) / 5),
+                cast(u8)((cast(s32)base.g * 4 + cast(s32)accent.g) / 5),
+                cast(u8)((cast(s32)base.b * 4 + cast(s32)accent.b) / 5), 255}
+        }
         return Theme.AppThemeColor(name, Color.{245, 245, 245, 255})
     } else {
         return StyleTokenColor(name)
