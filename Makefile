@@ -3,7 +3,7 @@
 # Workbook is a Ziran package. The Ziran toolchain and Kryon come from
 # ziran.lock; for local development an ignored ziran.local.toml can map them
 # to sibling checkouts.
-ZIRAN ?= ziran
+ZIRAN ?= $(if $(wildcard ziran.local.toml),$(shell ziran pkg path ziran)/build/bin/ziran,ziran)
 CC ?= cc
 PREFIX ?= $(HOME)/.local
 VERSION ?= 0.1.0
@@ -11,7 +11,7 @@ DIST_DIR ?= dist
 
 APP := build/workbook-desktop
 CELL := build/cell
-TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test
+TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test service_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
 SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 
@@ -63,7 +63,7 @@ audit: build/source_audit_test
 desktop-test: build build/desktop_test
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 GSETTINGS_BACKEND=memory build/desktop_test
 
-test-ci: build audit structure-test conversion-test gnumeric-test desktop-test
+test-ci: build service-test audit structure-test conversion-test gnumeric-test desktop-test
 
 test: test-ci parity
 
@@ -142,3 +142,13 @@ conversion-test: build/conversion_test
 
 gnumeric-test: build/gnumeric_test
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS GSETTINGS_BACKEND=memory build/gnumeric_test
+
+# The same editor, with input, files and calculation supplied by its host.
+.PHONY: bundle
+bundle: build/workbook.zib
+build/workbook.zib: $(SOURCES)
+	@$(ZIRAN) bundle --root . --module-path src --module-path $(shell $(ZIRAN) pkg path ziran)/std --module-path kryon=$(shell $(ZIRAN) pkg path kryon)/src/ui --module-path kryon=$(shell $(ZIRAN) pkg path kryon)/src/backend --module-path $(shell $(ZIRAN) pkg path kryon)/src/ui --module-path $(shell $(ZIRAN) pkg path kryon)/src/backend --module-path $(shell $(ZIRAN) pkg path mingcute)/src --define KRYON_HOSTED_UI --entry app:Main -o $@ src/app.zi
+
+.PHONY: service-test
+service-test: build/service_test
+	@build/service_test

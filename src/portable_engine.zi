@@ -1,0 +1,237 @@
+// The portable editor uses the same native engine through a granted service.
+// Only opaque workbook IDs and UTF-8 document data cross the app boundary.
+#import "kryon/app_context"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/vec"
+Json :: #import "std/json_scan";
+
+Workbook :: struct { id: s32; sheets: s32; cells: s32; }
+FormulaRef :: struct {
+    start: s32; end: s32; corner_start: s32; sheet: s32; range: s32
+    row1: s32; col1: s32; row2: s32; col2: s32
+    fixed_row1: s32; fixed_col1: s32; fixed_row2: s32; fixed_col2: s32
+}
+books: [128]Workbook;
+DocumentStatus: s32;
+meta_id: s32;
+meta_sheet: s32;
+meta_rows: s32;
+meta_cols: s32;
+meta_name: [128]u8;
+cache_id: s32;
+cache_sheet: s32;
+cache_row: s32;
+cache_col: s32;
+CachedCell :: struct { source: [512]u8; display: [512]u8; }
+cache: [512]CachedCell;
+relocated_text: [8192]u8;
+
+CText :: (value: string) -> string { return value }
+Copy :: (out: []u8, text: string, cap: s32) {
+    n := text.count
+    if n >= cap { n = cap - 1 }
+    for index: 0..n - 1 { out[index] = text[index] }
+    if cap > 0 { out[n] = 0 }
+}
+
+TextCompareFoldLiteral :: (text: string, literal: string) -> s32 {
+    for index: 0..literal.count - 1 {
+        a := cast(s32)text[index]
+        b := cast(s32)literal[index]
+        if a >= 65 && a <= 90 { a += 32 }
+        if b >= 65 && b <= 90 { b += 32 }
+        if a != b { return a - b }
+    }
+    return ifx text.count == literal.count then 0 else 1
+}
+
+Number :: (text: string, name: string) -> s32 {
+    at := Json.FieldAt(text, 0, name)
+    if at < 0 { return 0 }
+    n := Json.ReadNumber(text, at)
+    return ifx n.valid then cast(s32)n.value else 0
+}
+
+ReadText :: (text: string, name: string, out: []u8) -> string {
+    n := Json.ReadStringText(text, Json.FieldAt(text, 0, name), out)
+    return ifx n >= 0 && n < out.count then TextView(out[:n]) else ""
+}
+
+Quoted :: (bytes: *Vec(u8), text: string) {
+    BuilderPrint(bytes, "\"")
+    hex := "0123456789abcdef"
+    for byte: text {
+        if byte == 34 || byte == 92 { BuilderPrint(bytes, "\\") }
+        if byte < 32 {
+            BuilderPrint(bytes, "\\u00")
+            unused VecPush(bytes.*, hex[cast(s32)byte / 16])
+            unused VecPush(bytes.*, hex[cast(s32)byte % 16])
+        } else { unused VecPush(bytes.*, byte) }
+    }
+    BuilderPrint(bytes, "\"")
+}
+
+OK :: (text: string) -> bool {
+    at := Json.FieldAt(text, 0, "ok")
+    return at >= 0 && at + 4 <= text.count && text[at:at + 4] == "true"
+}
+
+Update :: (book: *Workbook, reply: string, sheet: s32) {
+    if book == null { return }
+    book.sheets = Number(reply, "sheets")
+    book.cells = Number(reply, "cells")
+    meta_id = book.id
+    meta_sheet = sheet
+    meta_rows = Number(reply, "rows")
+    meta_cols = Number(reply, "cols")
+    name: [128]u8
+    Copy(meta_name[:], ReadText(reply, "name", name[:]), 128)
+}
+
+Request :: (op: string, book: *Workbook, sheet: s32 = 0, row: s32 = 0,
+    col: s32 = 0, text: string = "", extra: string = "") -> string {
+    id := ifx book != null then book.id else 0
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "{\"op\":")
+    Quoted(*bytes, op)
+    BuilderPrint(*bytes, ",\"id\":%,\"sheet\":%,\"row\":%,\"col\":%,\"text\":", id, sheet, row, col)
+    Quoted(*bytes, text)
+    BuilderPrint(*bytes, "%}", extra)
+    reply := AppService("spreadsheet.v1", BuilderFinish(bytes))
+    if op != "info" && op != "view" && op != "find-ref" && op != "prefix" && op != "relocate" {
+        cache_id = 0
+    }
+    if op != "view" && op != "free" && op != "find-ref" && op != "prefix" && op != "relocate" {
+        Update(book, reply, sheet)
+    }
+    return reply
+}
+
+FromReply :: (reply: string) -> *Workbook {
+    id := Number(reply, "id")
+    if !OK(reply) || id < 1 || id > 128 { return null }
+    book := *books[id - 1]
+    book.* = Workbook.{.id = id}
+    Update(book, reply, 0)
+    return book
+}
+
+WorkbookNew :: () -> *Workbook { return FromReply(Request("new", null)) }
+WorkbookClone :: (book: *Workbook) -> *Workbook { return FromReply(Request("clone", book)) }
+WorkbookFree :: (book: *Workbook) {
+    if book == null { return }
+    unused Request("free", book)
+    book.id = 0
+}
+WorkbookAddSheet :: (book: *Workbook, name: string) -> s32 {
+    return ifx OK(Request("add-sheet", book, 0, 0, 0, name)) then 1 else 0
+}
+WorkbookSheetCount :: (book: *Workbook) -> s32 { return book.sheets }
+WorkbookCellCount :: (book: *Workbook) -> s32 { return book.cells }
+Meta :: (book: *Workbook, sheet: s32) {
+    if meta_id != book.id || meta_sheet != sheet { unused Request("info", book, sheet) }
+}
+WorkbookSheetRows :: (book: *Workbook, sheet: s32) -> s32 { Meta(book, sheet); return meta_rows }
+WorkbookSheetColumns :: (book: *Workbook, sheet: s32) -> s32 { Meta(book, sheet); return meta_cols }
+WorkbookSheetName :: (book: *Workbook, sheet: s32) -> string { Meta(book, sheet); return TextUntilNul(meta_name[:]) }
+WorkbookEvaluate :: (book: *Workbook) { unused Request("evaluate", book) }
+WorkbookSetCell :: (book: *Workbook, sheet: s32, row: s32, col: s32, value: string) -> s32 {
+    return ifx OK(Request("set", book, sheet, row, col, value)) then 1 else 0
+}
+WorkbookInsertRow :: (book: *Workbook, sheet: s32, row: s32) { unused Request("insert-row", book, sheet, row) }
+WorkbookDeleteRow :: (book: *Workbook, sheet: s32, row: s32) { unused Request("delete-row", book, sheet, row) }
+WorkbookInsertColumn :: (book: *Workbook, sheet: s32, col: s32) { unused Request("insert-column", book, sheet, 0, col) }
+WorkbookDeleteColumn :: (book: *Workbook, sheet: s32, col: s32) { unused Request("delete-column", book, sheet, 0, col) }
+WorkbookCopyCell :: (book: *Workbook, sheet: s32, from_row: s32, from_col: s32, row: s32, col: s32) -> s32 {
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, ",\"from_row\":%,\"from_col\":%", from_row, from_col)
+    return ifx OK(Request("copy", book, sheet, row, col, "", BuilderFinish(bytes))) then 1 else 0
+}
+FileRequest :: (book: *Workbook, op: string, path: string) -> s32 {
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, ",\"name\":")
+    Quoted(*bytes, path)
+    reply := Request(op, book, 0, 0, 0, "", BuilderFinish(bytes))
+    DocumentStatus = Number(reply, "document_status")
+    return ifx OK(reply) then 1 else 0
+}
+WorkbookLoadFile :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "load", path) }
+WorkbookWriteGnumeric :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "save", path) }
+
+PacketNumber :: (text: string, at: *s64) -> s32 {
+    n: s32
+    while at.* < text.count && text[at.*] >= 48 && text[at.*] <= 57 {
+        if n > 16777216 { return -1 }
+        n = n * 10 + cast(s32)text[at.*] - 48
+        at.* += 1
+    }
+    if at.* >= text.count || text[at.*] != 58 { return -1 }
+    at.* += 1
+    return n
+}
+Page :: (book: *Workbook, sheet: s32, row: s32, col: s32) {
+    first_row := row / 32 * 32
+    first_col := col / 16 * 16
+    if cache_id == book.id && cache_sheet == sheet && cache_row == first_row && cache_col == first_col { return }
+    for index: 0..511 { cache[index].source[0] = 0; cache[index].display[0] = 0 }
+    cache_id = 0; cache_row = first_row; cache_col = first_col
+    reply := Request("view", book, sheet, first_row, first_col)
+    if reply.count < 5 || reply[:5] != "view\n" { return }
+    at: s64 = 5
+    while at < reply.count {
+        r := PacketNumber(reply, *at); c := PacketNumber(reply, *at)
+        source := PacketNumber(reply, *at); display := PacketNumber(reply, *at)
+        if r < first_row || r >= first_row + 32 || c < first_col || c >= first_col + 16 ||
+        source < 0 || display < 0 || at + source + display > reply.count { return }
+        cell := (r - first_row) * 16 + c - first_col
+        Copy(cache[cell].source[:], reply[at:at + source], 512)
+        at += source
+        Copy(cache[cell].display[:], reply[at:at + display], 512)
+        at += display
+    }
+    cache_id = book.id; cache_sheet = sheet; cache_row = first_row; cache_col = first_col
+}
+WorkbookCellText :: (book: *Workbook, sheet: s32, row: s32, col: s32) -> string {
+    if row < 0 || col < 0 { return CText("") }
+    Page(book, sheet, row, col)
+    if cache_id != book.id { return CText("") }
+    return TextUntilNul(cache[(row - cache_row) * 16 + col - cache_col].source[:])
+}
+WorkbookCellDisplay :: (book: *Workbook, sheet: s32, row: s32, col: s32, out: []u8, cap: s32) {
+    Page(book, sheet, row, col)
+    if cache_id != book.id { Copy(out, "", cap); return }
+    Copy(out, TextUntilNul(cache[(row - cache_row) * 16 + col - cache_col].display[:]), cap)
+}
+FormulaRelocate :: (book: *Workbook, text: string, row: s32, col: s32) -> string {
+    reply := Request("relocate", book, 0, row, col, text)
+    unused ReadText(reply, "text", relocated_text[:])
+    return TextUntilNul(relocated_text[:])
+}
+FormulaSheetPrefix :: (name: string, out: []u8) -> s32 {
+    for index: 0..127 {
+        if books[index].id > 0 {
+            reply := Request("prefix", *books[index], 0, 0, 0, name)
+            bytes: [512]u8
+            value := ReadText(reply, "text", bytes[:])
+            Copy(out, value, 512)
+            return cast(s32)value.count
+        }
+    }
+    out[0] = 0
+    return 0
+}
+FormulaFindRef :: (book: *Workbook, text: string, from: s32, ref: *FormulaRef) -> s32 {
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, ",\"from\":%", from)
+    reply := Request("find-ref", book, 0, 0, 0, text, BuilderFinish(bytes))
+    array := Json.FieldAt(reply, 0, "ref")
+    values: [13]s32
+    for index: 0..12 {
+        n := Json.ReadNumber(reply, Json.ElementAt(reply, array, cast(s32)index))
+        if n.valid { values[index] = cast(s32)n.value }
+    }
+    ref.* = FormulaRef.{values[0], values[1], values[2], values[3], values[4], values[5],
+        values[6], values[7], values[8], values[9], values[10], values[11], values[12]}
+    return Number(reply, "result")
+}

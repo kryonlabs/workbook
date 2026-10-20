@@ -35,3 +35,6 @@ profile = "desktop"
 name = "Workbook"
 comment = "Spreadsheet editor"
 categories = "Office;Spreadsheet;"
+
+[exports]
+service = "src/service.zi"

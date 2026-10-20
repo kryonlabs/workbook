@@ -19,15 +19,15 @@ FixturePath :: "tests/fixtures/operators.gnumeric";
 PrivateMarker :: "WORKBOOK_TEST_PRIVATE_DISPLAY";
 
 // Grid geometry from src/app.zi, in window pixels.
-GridLeft :: 76;
-GridTop :: 128;
-ColumnWidth :: 110;
-RowHeight :: 28;
+GridLeft :: 40;
+GridTop :: 110;
+ColumnWidth :: 96;
+RowHeight :: 22;
 
 // The toolbar buttons all share one row; the sheet tabs sit under the grid.
-ToolbarY :: 30;
-TabY :: 538;
-TabLeft :: 24;
+ToolbarY :: 42;
+TabY :: 586;
+TabLeft :: 0;
 TabWidth :: 104;
 
 Background :: 0xF8FAFC;
@@ -236,11 +236,11 @@ DoubleClickCell :: (row: s32, column: s32) {
 }
 
 ToolbarX :: (name: string) -> s32 {
-    if name == "Save" { return 42 }
-    if name == "Insert row" { return 86 }
-    if name == "Delete row" { return 130 }
-    if name == "Insert column" { return 174 }
-    if name == "Delete column" { return 218 }
+    if name == "Save" { return 18 }
+    if name == "Insert row" { return 48 }
+    if name == "Delete row" { return 78 }
+    if name == "Insert column" { return 108 }
+    if name == "Delete column" { return 138 }
     Fail("unknown toolbar button")
     return 0
 }
@@ -700,23 +700,23 @@ DriveHeaders :: (directory: string) -> s32 {
     Press(GridLeft+ColumnWidth+55,GridTop-15)
     capture: [4096]u8; SetText(capture[:],directory); AppendText(capture[:],"/headers.png")
     ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
-    Check(PixelAt(GridLeft+ColumnWidth+90,GridTop+7*RowHeight+20)==SelectedFill,"column selection includes every visible row")
-    Check(PixelAt(GridLeft+90,GridTop+7*RowHeight+20)==White,"adjacent column stays unselected")
+    Check(PixelAt(GridLeft+ColumnWidth+90,GridTop+7*RowHeight+19)==SelectedFill,"column selection includes every visible row")
+    Check(PixelAt(GridLeft+90,GridTop+7*RowHeight+19)==White,"adjacent column stays unselected")
     Key("ctrl+c"); ClickCell(0,2); Key("ctrl+v"); Save()
     {
-    bytes: [65536]u8; evaluate: [3]string=.{HeadlessCellPath(),"eval",TextUntilNul(saved_path[:])}
-    result:=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read copied column")
-    Check(CsvCellText(0,0,2)=="12" && CsvCellText(0,1,2)=="22" && CsvCellText(0,20,2)=="212","copy includes offscreen column cells")
-    Press(GridLeft+ColumnWidth+55,GridTop-15); Key("Delete"); Save()
-    result=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read cleared column")
-    Check(CsvCellText(0,0,1)=="" && CsvCellText(0,1,1)=="" && CsvCellText(0,20,1)=="","delete clears the entire column")
-    Check(CsvCellText(0,0,0)=="11" && CsvCellText(0,20,2)=="212","column delete preserves neighboring columns")
-    Press(GridLeft-30,GridTop+14); Key("Delete"); Save()
-    // Native CSV trims leading empty rows and columns. Check the saved
-    // coordinates directly so export bounds do not change this selection test.
-    ExpectSavedCell(0,0,""); ExpectSavedCell(0,2,"")
-    ExpectSavedCell(1,2,"22"); ExpectSavedCell(20,2,"212")
-    Check(StopApp()==0,"header test app exits cleanly")
+        bytes: [65536]u8; evaluate: [3]string = .{HeadlessCellPath(),"eval",TextUntilNul(saved_path[:])}
+        result:=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read copied column")
+        Check(CsvCellText(0,0,2)=="12" && CsvCellText(0,1,2)=="22" && CsvCellText(0,20,2)=="212","copy includes offscreen column cells")
+        Press(GridLeft+ColumnWidth+55,GridTop-15); Key("Delete"); Save()
+        result = Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read cleared column")
+        Check(CsvCellText(0,0,1)=="" && CsvCellText(0,1,1)=="" && CsvCellText(0,20,1)=="","delete clears the entire column")
+        Check(CsvCellText(0,0,0)=="11" && CsvCellText(0,20,2)=="212","column delete preserves neighboring columns")
+        Press(GridLeft-30,GridTop+14); Key("Delete"); Save()
+        // Native CSV trims leading empty rows and columns. Check the saved
+        // coordinates directly so export bounds do not change this selection test.
+        ExpectSavedCell(0,0,""); ExpectSavedCell(0,2,"")
+        ExpectSavedCell(1,2,"22"); ExpectSavedCell(20,2,"212")
+        Check(StopApp()==0,"header test app exits cleanly")
     }
 
     // Right-clicking a row number targets that row, regardless of the active cell.
@@ -726,12 +726,12 @@ DriveHeaders :: (directory: string) -> s32 {
     ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
     Check(DarkPixels(x+12,y+4,110,26)>10 && DarkPixels(x+12,y+30,110,26)>10,"both insertion options are visible")
     Check(PixelAt(GridLeft+3*ColumnWidth+90,CellCenterY(1))==SelectedFill,"right-click selects the complete row")
-    copied: [3]string=.{"cp",TextUntilNul(capture[:]),"build/row-menu.png"}; Check(RunQuiet(copied[:])==0,"cannot keep private row menu preview")
+    copied: [3]string = .{"cp",TextUntilNul(capture[:]),"build/row-menu.png"}; Check(RunQuiet(copied[:])==0,"cannot keep private row menu preview")
     MenuCommand(x,y,0); Save()
     ExpectSavedCell(0,1,"12"); ExpectSavedCell(1,1,""); ExpectSavedCell(2,1,"22"); ExpectSavedCell(2,2,"=B3*2"); ExpectSavedCell(21,1,"212")
-    y=CellCenterY(2); RightClick(x,y); MenuCommand(x,y,1); Save()
+    y = CellCenterY(2); RightClick(x,y); MenuCommand(x,y,1); Save()
     ExpectSavedCell(2,1,"22"); ExpectSavedCell(3,1,""); ExpectSavedCell(2,2,"=B3*2"); ExpectSavedCell(22,1,"212")
-    y=CellCenterY(3); QuickRightClick(x,y); MenuCommand(x,y,2); Save()
+    y = CellCenterY(3); QuickRightClick(x,y); MenuCommand(x,y,2); Save()
     ExpectSavedCell(2,1,"22"); ExpectSavedCell(21,1,"212")
     Check(StopApp()==0,"row menu test app exits cleanly")
 
@@ -883,10 +883,10 @@ DriveFormulas :: (directory: string) -> s32 {
     ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
     Xdotool("mouseup", "1", "", "", "", "")
     SleepMilliseconds(300)
-    Check(PixelAt(CellCenterX(2), CellCenterY(10)) == Background,
-        "a held click draws empty rows down to the window's edge")
-    Check(PixelAt(CellCenterX(10), CellCenterY(2)) == Background,
-        "a held click draws empty columns across to the window's edge")
+    Check(PixelAt(CellCenterX(2), CellCenterY(10)) == White,
+        "the full-height grid keeps empty rows visible")
+    Check(PixelAt(CellCenterX(10), CellCenterY(2)) == White,
+        "the full-width grid keeps empty columns visible")
     Drag(GridLeft + 3 * ColumnWidth - 1, GridTop + 3 * RowHeight - 1, CellCenterX(2), CellCenterY(9))
     ExpectSavedCell(9, 2, "=A10*$B$1")
     ReadOwnedWindowScreenshot(TextUntilNul(capture[:]))
@@ -1130,6 +1130,25 @@ DriveMenus :: (directory: string) -> s32 {
     Save()
     ExpectSavedCell(7, 10, "")
     ExpectSavedCell(0, 0, "7")
+    // Top menus keep keyboard navigation away from the cell grid.
+    ClickCell(0, 0)
+    TypeText("77")
+    Key("Return")
+    Save()
+    ExpectSavedCell(0, 0, "77")
+    Press(85, 12)
+    ReadOwnedWindowScreenshot("build/native-menu.png")
+    Key("Return")
+    Save()
+    ExpectSavedCell(0, 0, "7")
+    Press(85, 12)
+    Key("Down")
+    Key("Return")
+    Save()
+    ExpectSavedCell(0, 0, "77")
+    Press(24, 12)
+    Key("Escape")
+    ExpectSavedCell(0, 0, "77")
     Check(StopApp() == 0, "the menu test app did not exit cleanly")
     Terminate(helper_pid)
     Terminate(manager_pid)
@@ -1167,12 +1186,12 @@ CheckFrame :: (work: string) {
     failure: [256]u8
     Check(ReadScreenshot(TextUntilNul(capture[:]), failure[:]), TextUntilNul(failure[:]))
     Check(screenshot_width == 960 && screenshot_height == 600, "the frame is not 960 by 600")
-    Check(PixelAt(10, 10) == Background, "the window background")
-    Check(PixelAt(GridLeft + 90, GridTop - 24) == HeaderFill, "the column header")
+    Check(PixelAt(900, 45) == Background, "the window background")
+    Check(PixelAt(GridLeft + 90, GridTop - 12) == HeaderFill, "the column header")
     // A1 is selected, B1 is not; the fixture fills A1 ("10") and B1
     // ("alpha") and leaves column F empty.
-    Check(PixelAt(GridLeft + 90, GridTop + 20) == SelectedFill, "the selected cell A1")
-    Check(PixelAt(GridLeft + ColumnWidth + 90, GridTop + 20) == White, "the unselected cell B1")
+    Check(PixelAt(GridLeft + 90, GridTop + 19) == SelectedFill, "the selected cell A1")
+    Check(PixelAt(GridLeft + ColumnWidth + 90, GridTop + 19) == White, "the unselected cell B1")
     Check(DarkPixels(GridLeft + 2, GridTop + 2, ColumnWidth - 4, RowHeight - 4) > 10,
         "the text of A1")
     Check(DarkPixels(GridLeft + 5 * ColumnWidth + 2, GridTop + 2, ColumnWidth - 4,
@@ -1394,7 +1413,7 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
     headers: [4096]u8; SetText(headers[:],work); AppendText(headers[:],"/headers")
     Check(MakeDirectory(TextUntilNul(headers[:])),"cannot create header test directory")
     RunSession(self,"--drive-headers",TextUntilNul(headers[:]))
-    if headers_only { RemoveTree(work); cleanup_directory[0]=0; return 0 }
+    if headers_only { RemoveTree(work); cleanup_directory[0] = 0; return 0 }
     menus: [4096]u8
     SetText(menus[:], work)
     AppendText(menus[:], "/menus")

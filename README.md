@@ -149,3 +149,18 @@ finance JSON untouched and start with an empty sheet when no saved document exis
 
 `workbook.json` holds private workbook data and is intentionally ignored by
 git. `workbook.example.json` is safe sample data for demos.
+
+
+## Werkzeug app bundle
+
+`make bundle` builds `build/workbook.zib`, the spreadsheet editor for a host
+with the `spreadsheet.v1` capability. Werkzeug on Linux includes the native
+calculation service and keeps Workbook documents in its own private folder.
+The bundle has the same compact grid, bottom sheet tabs and editing commands
+as the desktop editor. Its File menu imports and exports documents with the
+system chooser; imported source files stay unchanged. File → Download
+Workbook.zib saves the actual app bundle. Open that file with Werkzeug, or
+run `werk --bundle /path/to/workbook.zib`.
+
+The native menu bar contains File, Edit, View, Insert and Sheet. Ctrl+O opens
+a document, Ctrl+Shift+S saves a copy, and F10 or Alt+F focuses the menus.

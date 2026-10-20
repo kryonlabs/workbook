@@ -1,15 +1,47 @@
 // Workbook desktop editor: a toolbar, sheet tabs, a formula bar, and the
 // cell grid of the spreadsheet engine.
-using UI :: #import "Widgets";
-Engine :: #import "engine";
-Desktop :: #import "kryon/Desktop";
+#if #defined(KRYON_HOSTED_UI) {
+    #import "geometry"
+    #import "session"
+    #import "drawing_props"
+    #import "box_props"
+    #import "box_widget"
+    #import "button_props"
+    #import "button_widget"
+    #import "control_props"
+    #import "text_props"
+    #import "text_widget"
+    #import "text_input"
+    #import "text_input_props"
+    #import "text_field_widget"
+    #import "tab_bar_props"
+    #import "tab_bar_widget"
+    #import "context_menu_widget"
+    #import "menu_props"
+    #import "kryon/input_protocol"
+    #import "kryon/app_protocol"
+} else {
+    using UI :: #import "Widgets";
+}
+#if #defined(KRYON_HOSTED_UI) {
+    Engine :: #import "portable_engine";
+    #import "kryon/app_context"
+    Theme :: #import "kryon/app_theme";
+} else {
+    Engine :: #import "engine";
+    Desktop :: #import "kryon/Desktop";
+    Picker :: #import "kryon/file_picker";
+}
 Json :: #import "json_scan";
-SystemStyle :: #import "kss/SystemStyle";
-SystemThemeLinux :: #import "SystemThemeLinux";
+#if !#defined(KRYON_HOSTED_UI) {
+    SystemStyle :: #import "kss/SystemStyle";
+    SystemThemeLinux :: #import "SystemThemeLinux";
+}
 #import "byte_text_linux"
 #import "font_metrics"
 #import "text_buffer"
 #import "std/vec"
+#import "std/number_text"
 
 SaveIcon :: #import "mingcute_regular_save_2";
 RowAddIcon :: #import "mingcute_extra_table_row_add";
@@ -25,34 +57,37 @@ using TextWrap;
 
 #scope_file
 
-libc :: #system_library "libc";
-EnvironmentValue :: (name: *u8) -> *u8 #foreign libc "getenv";
-PathAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
-MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
-OpenFile :: (path: *u8, flags: s32, mode: ..any) -> s32 #foreign libc "open";
-ReadFileBytes :: (descriptor: s32, output: *u8, count: u64) -> s64 #foreign libc "read";
-CloseFile :: (descriptor: s32) -> s32 #foreign libc "close";
-MakeTemporaryFile :: (path: *u8) -> s32 #foreign libc "mkstemp";
-SyncFile :: (descriptor: s32) -> s32 #foreign libc "fsync";
-RenameFile :: (source: *u8, destination: *u8) -> s32 #foreign libc "rename";
-RemoveFile :: (path: *u8) -> s32 #foreign libc "unlink";
-FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
-FreeBytes :: (block: *void) #foreign libc "free";
-TimeSpec :: struct { seconds: s64; nanoseconds: s64; }
-ClockTime :: (clock: s32, value: *TimeSpec) -> s32 #foreign libc "clock_gettime";
+#if !#defined(KRYON_HOSTED_UI) {
+    libc :: #system_library "libc";
+    EnvironmentValue :: (name: *u8) -> *u8 #foreign libc "getenv";
+    PathAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
+    MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
+    OpenFile :: (path: *u8, flags: s32, mode: ..any) -> s32 #foreign libc "open";
+    ReadFileBytes :: (descriptor: s32, output: *u8, count: u64) -> s64 #foreign libc "read";
+    CloseFile :: (descriptor: s32) -> s32 #foreign libc "close";
+    MakeTemporaryFile :: (path: *u8) -> s32 #foreign libc "mkstemp";
+    SyncFile :: (descriptor: s32) -> s32 #foreign libc "fsync";
+    RenameFile :: (source: *u8, destination: *u8) -> s32 #foreign libc "rename";
+    RemoveFile :: (path: *u8) -> s32 #foreign libc "unlink";
+    FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
+    FreeBytes :: (block: *void) #foreign libc "free";
+    TimeSpec :: struct { seconds: s64; nanoseconds: s64; }
+    ClockTime :: (clock: s32, value: *TimeSpec) -> s32 #foreign libc "clock_gettime";
+
+}
 
 MaxRows :: 16777216; // GNM_MAX_ROWS
 MaxColumns :: 16384; // GNM_MAX_COLS
 CellTextMax :: 256;
-ColumnWidth :: 110.0;
-RowHeight :: 28.0;
-HeaderHeight :: 30.0;
-RowHeaderWidth :: 52.0;
-TableTop :: 98.0;
-Margin :: 24.0;
+ColumnWidth :: 96.0;
+RowHeight :: 22.0;
+HeaderHeight :: 24.0;
+RowHeaderWidth :: 40.0;
+TableTop :: 86.0;
+Margin :: 0.0;
 // Distances from the window's bottom edge to the sheet tabs and the grid.
-TabsBottom :: 78.0;
-GridBottom :: 88.0;
+TabsBottom :: 28.0;
+GridBottom :: 28.0;
 
 // Kryon names the other keys; letters are their uppercase ASCII codes.
 KeyA :: 65;
@@ -69,6 +104,14 @@ grid_menu_x: float32 = 0.0;
 grid_menu_y: float32 = 0.0;
 grid_menu_row: bool = false;
 clipboard_text: [8192]u8;
+menu_state: MenuState;
+menus_block_input: bool;
+menu_key: s32;
+menu_modifiers: s32;
+layout_origin: Vector2;
+grid_right: float32;
+grid_bottom: float32;
+
 
 workbook: *Engine.Workbook;
 sheet_index: s32 = 0;
@@ -194,23 +237,26 @@ status: [256]u8;
 
 #program_export
 Frame :: (session: Session, viewport: Rectangle) -> s32 {
+    layout_origin = Vector2.{viewport.x, viewport.y}
     FollowSystemTheme()
     if workbook == null {
         LoadWorkbook()
         SelectCell(0, 0)
         UpdateDocumentTitle()
     }
-    dropped: [4096]u8
-    while Desktop.DesktopTakeDroppedFile(dropped[:]) {
-        OpenDocument(TextUntilNul(dropped[:]))
+    #if !#defined(KRYON_HOSTED_UI) {
+        dropped: [4096]u8
+        while Desktop.DesktopTakeDroppedFile(dropped[:]) { OpenDocument(TextUntilNul(dropped[:])) }
     }
-    key: s32 = KeyboardTake(session)
-    control: bool = (KeyboardModifiers(session) & KeyModifierControl) != 0
-    shift_held = (KeyboardModifiers(session) & KeyModifierShift) != 0
+    key: s32 = EditorKey(session)
+    control: bool = (EditorModifiers(session) & KeyModifierControl) != 0
+    shift_held = (EditorModifiers(session) & KeyModifierShift) != 0
     typed: [128]u8
-    typed_length: s32 = TakeTypedText(session, typed[:])
+    typed_length: s32 = EditorTypedText(session, typed[:])
+    if control && key == KeyHome { GoToFirstCell(); key = 0 }
+    if control && key == 79 { PickDocument(false); key = 0 }
     if control && key == KeyS {
-        SaveWorkbook(true)
+        if shift_held { PickDocument(true) } else { SaveWorkbook(true) }
         key = 0
     }
     // Ctrl+Z undoes; Ctrl+Y and Ctrl+Shift+Z redo, in the cell being edited
@@ -224,13 +270,17 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
         key = 0
     }
 
-    pointer: PointerFrame = PointerSample(session)
+    pointer: PointerFrame = EditorPointer(session)
     if pointer.pressed && FormulaEditing() &&
-       PointInBounds(pointer.x, pointer.y, SheetTabsBounds(viewport)) { edit_refocus = true }
+    PointInBounds(pointer.x, pointer.y, SheetTabsBounds(viewport)) { edit_refocus = true }
 
+    menu_key = key
+    menu_modifiers = EditorModifiers(session)
+    menus_block_input = menu_state.initialized && (menu_state.open_index >= 0 || menu_state.focused)
+    if key == 299 || ((menu_modifiers & KeyModifierAlt) != 0 && key == 70) { menus_block_input = true }
+    if menus_block_input { key = 0; typed_length = 0 }
     DrawBackground(session, viewport)
     DrawToolbar(session, viewport)
-    DrawSheetTabs(session, viewport)
     // The field consumes this frame's keys while it is being edited; the
     // grid takes them otherwise, never both.
     was_editing: bool = edit_focused
@@ -239,7 +289,9 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
         HandleGridKeys(key, control, typed[:], typed_length)
     }
     DrawGrid(session, viewport)
+    DrawSheetTabs(session, viewport)
     DrawGridMenu(session, key == KeyEscape)
+    DrawMenus(session, viewport)
     if dirty && MonotonicMilliseconds() >= save_retry_at {
         SaveWorkbook(false)
     }
@@ -252,98 +304,103 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
 
 // Styles the app in the desktop's GTK theme and follows it when it changes:
 // the configured theme is looked at again every couple of seconds.
-FollowSystemTheme :: () {
-    if theme_installed {
-        theme_frames += 1
-        if theme_frames < 120 { return }
-        theme_frames = 0
+#if !#defined(KRYON_HOSTED_UI) {
+    FollowSystemTheme :: () {
+        if theme_installed {
+            theme_frames += 1
+            if theme_frames < 120 { return }
+            theme_frames = 0
+        }
+        name: string = SystemThemeLinux.SystemThemeName()
+        if theme_installed && name == TextUntilNul(theme_name[:]) { return }
+        SystemStyle.StyleInstallSystem(SystemThemeLinux.SystemPaletteRead())
+        SetText(theme_name[:], name)
+        theme_installed = true
     }
-    name: string = SystemThemeLinux.SystemThemeName()
-    if theme_installed && name == TextUntilNul(theme_name[:]) { return }
-    SystemStyle.StyleInstallSystem(SystemThemeLinux.SystemPaletteRead())
-    SetText(theme_name[:], name)
-    theme_installed = true
-}
 
-// -------------------------------------------------------------------- data
+    // -------------------------------------------------------------------- data
 
-LoadWorkbook :: () {
-    workbook = Engine.WorkbookNew()
-    application: string = "workbook"
-    override: *u8 = EnvironmentValue(CPath("WORKBOOK_DIR"))
-    profile: *u8 = EnvironmentValue(CPath("WORKBOOK_PROFILE"))
-    profile_name: string = ""
-    if profile != null { profile_name = TextFromCString(profile) }
-    if StartedAs("geld") { profile_name = "geld" }
-    // Any named profile keeps its own data directory, the way geld does.
-    if profile_name != "workbook" && ProfileName(profile_name) {
-        application = profile_name
-        override = null
-        if profile_name == "geld" { override = EnvironmentValue(CPath("GELD_DIR")) }
-    }
-    legacy_profile: bool = application != "workbook"
-    explicit: [4096]u8
-    if OpenFileArgument(explicit[:]) {
-        SetText(data_path[:], TextUntilNul(explicit[:]))
-        name: string = TextUntilNul(explicit[:])
-        base: s32 = cast(s32)name.count - cast(s32)FileName(name).count
-        if base > 0 { SetText(data_directory[:], name[0:base]) }
-    } else if override != null && override[0] != 0 {
-        legacy_profile = true
-        SetText(data_directory[:], TextFromCString(override))
-        SetText(data_path[:], TextFromCString(override))
-        AppendText(data_path[:], "/workbook.gnumeric")
-    } else if application == "workbook" &&
+    LoadWorkbook :: () {
+        workbook = Engine.WorkbookNew()
+        application: string = "workbook"
+        override: *u8 = EnvironmentValue(CPath("WORKBOOK_DIR"))
+        profile: *u8 = EnvironmentValue(CPath("WORKBOOK_PROFILE"))
+        profile_name: string = ""
+        if profile != null { profile_name = TextFromCString(profile) }
+        if StartedAs("geld") { profile_name = "geld" }
+        // Any named profile keeps its own data directory, the way geld does.
+        if profile_name != "workbook" && ProfileName(profile_name) {
+            application = profile_name
+            override = null
+            if profile_name == "geld" { override = EnvironmentValue(CPath("GELD_DIR")) }
+        }
+        legacy_profile: bool = application != "workbook"
+        explicit: [4096]u8
+        if OpenFileArgument(explicit[:]) {
+            SetText(data_path[:], TextUntilNul(explicit[:]))
+            name: string = TextUntilNul(explicit[:])
+            base: s32 = cast(s32)name.count - cast(s32)FileName(name).count
+            if base > 0 { SetText(data_directory[:], name[0:base]) }
+        } else if override != null && override[0] != 0 {
+            legacy_profile = true
+            SetText(data_directory[:], TextFromCString(override))
+            SetText(data_path[:], TextFromCString(override))
+            AppendText(data_path[:], "/workbook.gnumeric")
+        } else if application == "workbook" &&
         FileExists("workbook.gnumeric") {
-        SetText(data_path[:], "workbook.gnumeric")
-    } else {
-        base: *u8 = EnvironmentValue(CPath("XDG_DATA_HOME"))
-        if base != null && base[0] != 0 {
-            SetText(data_directory[:], TextFromCString(base))
+            SetText(data_path[:], "workbook.gnumeric")
         } else {
-            home: *u8 = EnvironmentValue(CPath("HOME"))
-            if home != null && home[0] != 0 {
-                SetText(data_directory[:], TextFromCString(home))
+            base: *u8 = EnvironmentValue(CPath("XDG_DATA_HOME"))
+            if base != null && base[0] != 0 {
+                SetText(data_directory[:], TextFromCString(base))
             } else {
-                SetText(data_directory[:], ".")
+                home: *u8 = EnvironmentValue(CPath("HOME"))
+                if home != null && home[0] != 0 {
+                    SetText(data_directory[:], TextFromCString(home))
+                } else {
+                    SetText(data_directory[:], ".")
+                }
+                AppendText(data_directory[:], "/.local/share")
             }
-            AppendText(data_directory[:], "/.local/share")
+            AppendText(data_directory[:], "/")
+            AppendText(data_directory[:], application)
+            SetText(data_path[:], TextUntilNul(data_directory[:]))
+            AppendText(data_path[:], "/workbook.gnumeric")
         }
-        AppendText(data_directory[:], "/")
-        AppendText(data_directory[:], application)
-        SetText(data_path[:], TextUntilNul(data_directory[:]))
-        AppendText(data_path[:], "/workbook.gnumeric")
-    }
-    path: string = TextUntilNul(data_path[:])
-    imported: bool = false
-    legacy: [4096]u8
-    if legacy_profile && PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
-        // Named or explicitly selected profiles may import their old JSON.
-        // Ordinary Workbook launches must not load the former finance seed.
-        // The original JSON is only read and remains available.
-        SetText(legacy[:], path[0:cast(s32)path.count - 8])
-        AppendText(legacy[:], "json")
-        if PathAccess(*legacy[0], 0) == 0 {
+        path: string = TextUntilNul(data_path[:])
+        imported: bool = false
+        legacy: [4096]u8
+        if legacy_profile && PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
+            // Named or explicitly selected profiles may import their old JSON.
+            // Ordinary Workbook launches must not load the former finance seed.
+            // The original JSON is only read and remains available.
+            SetText(legacy[:], path[0:cast(s32)path.count - 8])
+            AppendText(legacy[:], "json")
+            if PathAccess(*legacy[0], 0) == 0 {
+                Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+                imported = LoadLegacyJson(*legacy[0])
+            }
+        }
+        if !imported && PathAccess(*data_path[0], 0) == 0 {
+            load_failed = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) == 0
+            if load_failed {
+                SetText(status[:], "Could not open ")
+                AppendText(status[:], FileName(path))
+            }
+        }
+        // A file supplies its own sheets; a new workbook starts with one.
+        if Engine.WorkbookSheetCount(workbook) == 0 {
             Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
-            imported = LoadLegacyJson(*legacy[0])
         }
+        dirty = false
     }
-    if !imported && PathAccess(*data_path[0], 0) == 0 {
-        load_failed = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) == 0
-        if load_failed {
-            SetText(status[:], "Could not open ")
-            AppendText(status[:], FileName(path))
-        }
-    }
-    // A file supplies its own sheets; a new workbook starts with one.
-    if Engine.WorkbookSheetCount(workbook) == 0 {
-        Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
-    }
-    dirty = false
+
 }
 
 UpdateDocumentTitle :: () {
-    unused Desktop.DesktopSetTitle(FileName(TextUntilNul(data_path[:])))
+    #if !#defined(KRYON_HOSTED_UI) {
+        unused Desktop.DesktopSetTitle(FileName(TextUntilNul(data_path[:])))
+    }
 }
 
 // Finish and save the current document before replacing it. A failed import
@@ -356,7 +413,7 @@ OpenDocument :: (path: string) {
         if dirty { return }
     }
     next: *Engine.Workbook = Engine.WorkbookNew()
-    if Engine.WorkbookLoadFile(next, cast(*s8)CPath(path)) == 0 {
+    if Engine.WorkbookLoadFile(next, Engine.CText(path)) == 0 {
         Engine.WorkbookFree(next)
         SetText(status[:], "Could not open ")
         AppendText(status[:], FileName(path))
@@ -396,200 +453,204 @@ OpenDocument :: (path: string) {
     UpdateDocumentTitle()
 }
 
-MonotonicMilliseconds :: () -> s64 {
-    now: TimeSpec
-    ClockTime(1, *now)
-    return now.seconds * 1000 + now.nanoseconds / 1000000
-}
+#if !#defined(KRYON_HOSTED_UI) {
+    MonotonicMilliseconds :: () -> s64 {
+        now: TimeSpec
+        ClockTime(1, *now)
+        return now.seconds * 1000 + now.nanoseconds / 1000000
+    }
 
-// Creates every missing parent, including a fresh XDG data directory.
-EnsureDataDirectory :: () -> bool {
-    path: string = TextUntilNul(data_directory[:])
-    prefix: [4096]u8
-    at: s32 = 1
-    while at <= cast(s32)path.count {
-        if at == cast(s32)path.count || path[at] == #char "/" {
-            SetText(prefix[:], path[0:at])
-            if MakeDirectory(*prefix[0], 448) != 0 && PathAccess(*prefix[0], 0) != 0 {
-                return false
+    // Creates every missing parent, including a fresh XDG data directory.
+    EnsureDataDirectory :: () -> bool {
+        path: string = TextUntilNul(data_directory[:])
+        prefix: [4096]u8
+        at: s32 = 1
+        while at <= cast(s32)path.count {
+            if at == cast(s32)path.count || path[at] == #char "/" {
+                SetText(prefix[:], path[0:at])
+                if MakeDirectory(*prefix[0], 448) != 0 && PathAccess(*prefix[0], 0) != 0 {
+                    return false
+                }
+            }
+            at += 1
+        }
+        return true
+    }
+
+    SaveWorkbook :: (finish_edit: bool) {
+        // A failed import must never autosave an empty grid over its source.
+        if load_failed { return }
+        if finish_edit && edit_focused {
+            CommitCell()
+            EndEdit()
+            SelectCell(selected_row, selected_column)
+        }
+        path: string = TextUntilNul(data_path[:])
+        saved: bool = false
+        // Replace the previous file only after its replacement has been written
+        // and synced. A failed write leaves the last saved workbook intact.
+        temporary: [4160]u8
+        SetText(temporary[:], path)
+        AppendText(temporary[:], ".tmp-XXXXXX")
+        if EnsureDataDirectory() {
+            descriptor: s32 = MakeTemporaryFile(*temporary[0])
+            if descriptor >= 0 {
+                saved = Engine.WorkbookWriteGnumeric(workbook, cast(*s8)*temporary[0]) != 0
+                if saved { saved = SyncFile(descriptor) == 0 }
+                if CloseFile(descriptor) != 0 { saved = false }
+                if saved { saved = RenameFile(*temporary[0], *data_path[0]) == 0 }
+                if !saved { RemoveFile(*temporary[0]) }
             }
         }
-        at += 1
-    }
-    return true
-}
-
-SaveWorkbook :: (finish_edit: bool) {
-    // A failed import must never autosave an empty grid over its source.
-    if load_failed { return }
-    if finish_edit && edit_focused {
-        CommitCell()
-        EndEdit()
-        SelectCell(selected_row, selected_column)
-    }
-    path: string = TextUntilNul(data_path[:])
-    saved: bool = false
-    // Replace the previous file only after its replacement has been written
-    // and synced. A failed write leaves the last saved workbook intact.
-    temporary: [4160]u8
-    SetText(temporary[:], path)
-    AppendText(temporary[:], ".tmp-XXXXXX")
-    if EnsureDataDirectory() {
-        descriptor: s32 = MakeTemporaryFile(*temporary[0])
-        if descriptor >= 0 {
-            saved = Engine.WorkbookWriteGnumeric(workbook, cast(*s8)*temporary[0]) != 0
-            if saved { saved = SyncFile(descriptor) == 0 }
-            if CloseFile(descriptor) != 0 { saved = false }
-            if saved { saved = RenameFile(*temporary[0], *data_path[0]) == 0 }
-            if !saved { RemoveFile(*temporary[0]) }
+        if saved {
+            status[0] = 0
+            dirty = false
+            save_retry_at = 0
+        } else {
+            SetText(status[:], "Could not save ")
+            AppendText(status[:], FileName(path))
+            dirty = true
+            save_retry_at = MonotonicMilliseconds() + 2000
         }
     }
-    if saved {
-        status[0] = 0
-        dirty = false
-        save_retry_at = 0
-    } else {
-        SetText(status[:], "Could not save ")
-        AppendText(status[:], FileName(path))
-        dirty = true
-        save_retry_at = MonotonicMilliseconds() + 2000
+
+}
+
+#if !#defined(KRYON_HOSTED_UI) {
+    // The legacy JSON layout stores one object per row with eight named columns.
+    LegacyColumn :: (column: s32) -> string {
+        if column == 0 { return "section" }
+        if column == 1 { return "label" }
+        if column == 2 { return "id" }
+        if column == 3 { return "units" }
+        if column == 4 { return "rate" }
+        if column == 5 { return "pct" }
+        if column == 6 { return "usd" }
+        return "dusd"
     }
-}
 
-// The legacy JSON layout stores one object per row with eight named columns.
-LegacyColumn :: (column: s32) -> string {
-    if column == 0 { return "section" }
-    if column == 1 { return "label" }
-    if column == 2 { return "id" }
-    if column == 3 { return "units" }
-    if column == 4 { return "rate" }
-    if column == 5 { return "pct" }
-    if column == 6 { return "usd" }
-    return "dusd"
-}
-
-// The expression field that carries a column's formula, when it has one. The
-// text has no leading "=".
-LegacyExpression :: (column: s32) -> string {
-    if column == 3 { return "units_expr" }
-    if column == 6 { return "usd_expr" }
-    if column == 7 { return "dusd_expr" }
-    return ""
-}
-
-// Reads one legacy value into cell text: a string, a number, or a formula
-// (an expression field, or an object with an "expr" field).
-LegacyCell :: (text: string, value: s32, is_expression: bool, cell: []u8) {
-    scratch: [256]u8
-    at: s32 = value
-    formula: bool = is_expression
-    scratch[0] = 0
-    cell[0] = 0
-    if at >= 0 && text[at] == #char "{" {
-        at = Json.FieldAt(text, at, "expr")
-        formula = true
+    // The expression field that carries a column's formula, when it has one. The
+    // text has no leading "=".
+    LegacyExpression :: (column: s32) -> string {
+        if column == 3 { return "units_expr" }
+        if column == 6 { return "usd_expr" }
+        if column == 7 { return "dusd_expr" }
+        return ""
     }
-    if at < 0 { return }
-    if text[at] == #char "\"" {
-        span: Json.JsonSpan = Json.ReadString(text, at)
-        if span.valid { DecodeJsonString(text, span, scratch[:]) }
-    } else {
-        number: Json.JsonNumber = Json.ReadNumber(text, at)
-        if number.valid {
-            FormatBytes(*scratch[0], 256, cast(*u8)Engine.CText("%.15g"), number.value)
+
+    // Reads one legacy value into cell text: a string, a number, or a formula
+    // (an expression field, or an object with an "expr" field).
+    LegacyCell :: (text: string, value: s32, is_expression: bool, cell: []u8) {
+        scratch: [256]u8
+        at: s32 = value
+        formula: bool = is_expression
+        scratch[0] = 0
+        cell[0] = 0
+        if at >= 0 && text[at] == #char "{" {
+            at = Json.FieldAt(text, at, "expr")
+            formula = true
         }
-    }
-    if scratch[0] == 0 { return }
-    if formula && scratch[0] != #char "=" {
-        SetText(cell, "=")
-        AppendText(cell, TextUntilNul(scratch[:]))
-    } else {
-        SetText(cell, TextUntilNul(scratch[:]))
-    }
-}
-
-// The id column holds a ticker: the file names a coin by its market id, so
-// that becomes the coin's ticker, as EUR and PYG already are.
-LegacyTicker :: (cell: []u8) {
-    ticker: string = ""
-    {
-        id: string = TextUntilNul(cell)
-        if id == "monero" {
-            ticker = "XMR"
-        } else if id == "bitcoin" {
-            ticker = "BTC"
-        } else if id == "ethereum" {
-            ticker = "ETH"
-        } else if id == "litecoin" {
-            ticker = "LTC"
-        }
-    }
-    if ticker != "" {
-        SetText(cell, ticker)
-    }
-}
-
-// Imports a legacy workbook.json: the rows, then the pending and final total
-// rows. The file is only read.
-LoadLegacyJson :: (path: *u8) -> bool {
-    size: s32 = 0
-    bytes: *u8 = Engine.ReadFileBytes(cast(*s8)path, *size)
-    if bytes == null { return false }
-    text: string = TextFromBytes(BytesFromPointer(bytes, cast(u64)size))
-    top: s32 = Json.Space(text, 0)
-    rows: s32 = Json.FieldAt(text, top, "rows")
-    count: s32 = 0
-    if rows >= 0 { count = Json.ArrayCount(text, rows) }
-    row: s32 = 0
-    while row < count {
-        item: s32 = Json.ElementAt(text, rows, row)
-        column: s32 = 0
-        while item >= 0 && column < 8 {
-            cell: [256]u8
-            expression: string = LegacyExpression(column)
-            found: s32 = -1
-            if expression.count > 0 { found = Json.FieldAt(text, item, expression) }
-            if found >= 0 {
-                LegacyCell(text, found, true, cell[:])
-            } else {
-                LegacyCell(text, Json.FieldAt(text, item, LegacyColumn(column)), false, cell[:])
+        if at < 0 { return }
+        if text[at] == #char "\"" {
+            span: Json.JsonSpan = Json.ReadString(text, at)
+            if span.valid { DecodeJsonString(text, span, scratch[:]) }
+        } else {
+            number: Json.JsonNumber = Json.ReadNumber(text, at)
+            if number.valid {
+                FormatBytes(*scratch[0], 256, cast(*u8)Engine.CText("%.15g"), number.value)
             }
-            if column == 2 { LegacyTicker(cell[:]) }
-            if cell[0] != 0 {
-                Engine.WorkbookSetCell(workbook, 0, row, column, cast(*s8)*cell[0])
-            }
-            column += 1
         }
-        row += 1
+        if scratch[0] == 0 { return }
+        if formula && scratch[0] != #char "=" {
+            SetText(cell, "=")
+            AppendText(cell, TextUntilNul(scratch[:]))
+        } else {
+            SetText(cell, TextUntilNul(scratch[:]))
+        }
     }
-    pass: s32 = 0
-    while pass < 2 {
-        totals: s32 = Json.FieldAt(text, top, ifx pass == 0 then "total_pending_cells" else "total_cells")
-        if totals >= 0 {
+
+    // The id column holds a ticker: the file names a coin by its market id, so
+    // that becomes the coin's ticker, as EUR and PYG already are.
+    LegacyTicker :: (cell: []u8) {
+        ticker: string = ""
+        {
+            id: string = TextUntilNul(cell)
+            if id == "monero" {
+                ticker = "XMR"
+            } else if id == "bitcoin" {
+                ticker = "BTC"
+            } else if id == "ethereum" {
+                ticker = "ETH"
+            } else if id == "litecoin" {
+                ticker = "LTC"
+            }
+        }
+        if ticker != "" {
+            SetText(cell, ticker)
+        }
+    }
+
+    // Imports a legacy workbook.json: the rows, then the pending and final total
+    // rows. The file is only read.
+    LoadLegacyJson :: (path: *u8) -> bool {
+        size: s32 = 0
+        bytes: *u8 = Engine.ReadFileBytes(cast(*s8)path, *size)
+        if bytes == null { return false }
+        text: string = TextFromBytes(BytesFromPointer(bytes, cast(u64)size))
+        top: s32 = Json.Space(text, 0)
+        rows: s32 = Json.FieldAt(text, top, "rows")
+        count: s32 = 0
+        if rows >= 0 { count = Json.ArrayCount(text, rows) }
+        row: s32 = 0
+        while row < count {
+            item: s32 = Json.ElementAt(text, rows, row)
             column: s32 = 0
-            while column < 8 {
+            while item >= 0 && column < 8 {
                 cell: [256]u8
-                LegacyCell(text, Json.ElementAt(text, totals, column), false, cell[:])
+                expression: string = LegacyExpression(column)
+                found: s32 = -1
+                if expression.count > 0 { found = Json.FieldAt(text, item, expression) }
+                if found >= 0 {
+                    LegacyCell(text, found, true, cell[:])
+                } else {
+                    LegacyCell(text, Json.FieldAt(text, item, LegacyColumn(column)), false, cell[:])
+                }
+                if column == 2 { LegacyTicker(cell[:]) }
                 if cell[0] != 0 {
-                    Engine.WorkbookSetCell(workbook, 0, row, column, cast(*s8)*cell[0])
+                    Engine.WorkbookSetCell(workbook, 0, row, column, Engine.CText(TextUntilNul(cell[:])))
                 }
                 column += 1
             }
             row += 1
         }
-        pass += 1
+        pass: s32 = 0
+        while pass < 2 {
+            totals: s32 = Json.FieldAt(text, top, ifx pass == 0 then "total_pending_cells" else "total_cells")
+            if totals >= 0 {
+                column: s32 = 0
+                while column < 8 {
+                    cell: [256]u8
+                    LegacyCell(text, Json.ElementAt(text, totals, column), false, cell[:])
+                    if cell[0] != 0 {
+                        Engine.WorkbookSetCell(workbook, 0, row, column, Engine.CText(TextUntilNul(cell[:])))
+                    }
+                    column += 1
+                }
+                row += 1
+            }
+            pass += 1
+        }
+        Engine.FreeFileBytes(bytes)
+        Engine.WorkbookEvaluate(workbook)
+        return true
     }
-    Engine.FreeFileBytes(bytes)
-    Engine.WorkbookEvaluate(workbook)
-    return true
+
 }
 
 // ------------------------------------------------------------------ editing
 
 CellSource :: (sheet: s32, row: s32, column: s32) -> string {
-    text: *s8 = Engine.WorkbookCellText(workbook, sheet, row, column)
-    if text == null { return "" }
-    return TextFromCString(cast(*u8)text)
+    return EditorString(Engine.WorkbookCellText(workbook, sheet, row, column))
 }
 
 SelectCell :: (row: s32, column: s32) {
@@ -621,7 +682,7 @@ CommitCell :: () {
         edit_recorded = true
     }
     Engine.WorkbookSetCell(workbook, edit_sheet, selected_row,
-        selected_column, cast(*s8)*edit[0])
+        selected_column, Engine.CText(TextUntilNul(edit[:])))
     Engine.WorkbookEvaluate(workbook)
     dirty = true
     save_retry_at = 0
@@ -664,7 +725,7 @@ CopyCell :: () {
         }
     }
     copied := TextFromBytes(VecSlice(text, 0, text.count))
-    SystemClipboardSet(copied)
+    EditorClipboardSet(copied)
     copied_sheet = -1
     if copied.count > copied_text.count { return }
     for at: 0..cast(s32)copied.count - 1 { copied_text[at] = copied[at] }
@@ -684,7 +745,7 @@ CutCell :: () {
 // columns and lines separate rows, so cells copied from another spreadsheet
 // keep their layout. Formulas this app copied move with the paste.
 PasteCells :: () {
-    text: string = SystemClipboardText(clipboard_text[:])
+    text: string = EditorClipboardText(clipboard_text[:])
     if text.count == 0 { return }
     RecordChange()
     target_row: s32 = SelectionFirstRow()
@@ -702,14 +763,16 @@ PasteCells :: () {
             cell[length] = 0
             if !(byte == 10 && length == 0 && at == cast(s32)text.count) {
                 if relocate {
-                    moved: *s8 = Engine.FormulaRelocate(workbook, cast(*s8)*cell[0],
+                    moved := Engine.FormulaRelocate(workbook, Engine.CText(TextUntilNul(cell[:])),
                         target_row - copied_row, target_column - copied_column)
                     Engine.WorkbookSetCell(workbook, sheet_index, target_row + row,
                         target_column + column, moved)
-                    FreeBytes(cast(*void)moved)
+                    #if !#defined(KRYON_HOSTED_UI) {
+                        FreeBytes(cast(*void)moved)
+                    }
                 } else {
                     Engine.WorkbookSetCell(workbook, sheet_index, target_row + row,
-                        target_column + column, cast(*s8)*cell[0])
+                        target_column + column, Engine.CText(TextUntilNul(cell[:])))
                 }
             }
             length = 0
@@ -733,7 +796,7 @@ ClearCell :: () {
         last_row := SelectionLastRow()
         first_column := SelectionFirstColumn()
         last_column := SelectionLastColumn()
-        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook, sheet_index, row, column, cast(*s8)Engine.CText("")) } }
+        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook, sheet_index, row, column, Engine.CText("")) } }
         Changed(); return
     }
     edit[0] = 0
@@ -742,6 +805,7 @@ ClearCell :: () {
 }
 
 HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
+    if control && key == KeyA { SelectAllCells() }
     if control && key == KeyC { CopyCell() }
     if control && key == KeyX { CutCell() }
     if control && key == KeyV { PasteCells() }
@@ -813,16 +877,19 @@ ApplyEdit :: (start: s32, end: s32, replacement: string) {
 }
 
 // Collects this frame's typed codepoints as UTF-8.
-TakeTypedText :: (session: Session, output: []u8) -> s32 {
-    length: s32 = 0
-    codepoint: s32 = TypedCodepointTake(session)
-    while codepoint != 0 {
-        if length + 4 < cast(s32)output.count {
-            length = AppendUtf8(output, length, codepoint)
+#if !#defined(KRYON_HOSTED_UI) {
+    TakeTypedText :: (session: Session, output: []u8) -> s32 {
+        length: s32 = 0
+        codepoint: s32 = TypedCodepointTake(session)
+        while codepoint != 0 {
+            if length + 4 < cast(s32)output.count {
+                length = AppendUtf8(output, length, codepoint)
+            }
+            codepoint = TypedCodepointTake(session)
         }
-        codepoint = TypedCodepointTake(session)
+        return length
     }
-    return length
+
 }
 
 AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
@@ -947,7 +1014,7 @@ FinishEditStep :: () {
     if !edit_recorded { return }
     edit_recorded = false
     if undo_count > 0 &&
-       CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit_original[:]) {
+    CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit_original[:]) {
         undo_count -= 1
         Engine.WorkbookFree(undo_steps[undo_count].book)
     }
@@ -962,7 +1029,7 @@ RememberEditText :: (kind: s32, start: s32, end: s32, replacement: string) {
         extends = !(start > 0 && !WordByte(edit[start - 1]) && WordByte(replacement[0]))
     }
     if kind == EditDeleting && edit_run == EditDeleting &&
-       replacement.count == 0 && (end == edit_run_at || start == edit_run_at) { extends = true }
+    replacement.count == 0 && (end == edit_run_at || start == edit_run_at) { extends = true }
     edit_run = kind
     edit_run_at = start + cast(s32)replacement.count
     if extends { return }
@@ -977,8 +1044,8 @@ RememberEditText :: (kind: s32, start: s32, end: s32, replacement: string) {
 
 WordByte :: (byte: u8) -> bool {
     return (byte >= #char "A" && byte <= #char "Z") || (byte >= #char "a" && byte <= #char "z") ||
-        (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "." ||
-        byte == #char "$" || byte >= 128
+    (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "." ||
+    byte == #char "$" || byte >= 128
 }
 
 UndoEditText :: () -> bool {
@@ -1022,12 +1089,12 @@ DrawBackground :: (session: Session, viewport: Rectangle) {
     background: BoxProps
     background.key = cast(u64)7
     background.bounds = viewport
-    background.fill = StyleTokenColor("canvas")
+    background.fill = EditorColor("canvas")
     Box(session, background)
 }
 
 DrawToolbar :: (session: Session, viewport: Rectangle) {
-    x: float32 = Margin
+    x: float32 = viewport.x + 4.0
     if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook(true) }
     if ToolbarIcon(session, 1002, RowAddIcon.Shape, *x, false) {
         RecordChange()
@@ -1058,8 +1125,8 @@ DrawStatus :: (session: Session, viewport: Rectangle) {
     label.key = cast(u64)5
     label.text = TextUntilNul(status[:])
     label.font = Text14
-    label.bounds = Rectangle.{Margin, viewport.height - 36.0,
-        viewport.width - Margin * 2.0, 20.0}
+    label.bounds = Rectangle.{viewport.x + 180.0, viewport.y + viewport.height - 24.0,
+        viewport.width - 184.0, 20.0}
     Text(session, label)
 }
 
@@ -1075,8 +1142,8 @@ ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
     if primary {
         button.tone = cast(ButtonTone)ButtonToneAccent
     }
-    button.bounds = Rectangle.{x.*, 14.0, 36.0, 32.0}
-    x.* = x.* + 36.0 + 8.0
+    button.bounds = Rectangle.{x.*, layout_origin.y + 28.0, 28.0, 28.0}
+    x.* = x.* + 30.0
     return Button(session, button) != 0
 }
 
@@ -1094,7 +1161,7 @@ Changed :: () {
 
 SheetTabsBounds :: (viewport: Rectangle) -> Rectangle {
     count: s32 = Min(Engine.WorkbookSheetCount(workbook), 16)
-    return Rectangle.{Margin, viewport.height - TabsBottom, 104.0 * cast(float32)count, 32.0}
+    return Rectangle.{viewport.x, viewport.y + viewport.height - TabsBottom, MinFloat(viewport.width, 104.0 * cast(float32)count), 28.0}
 }
 
 DrawSheetTabs :: (session: Session, viewport: Rectangle) {
@@ -1106,12 +1173,18 @@ DrawSheetTabs :: (session: Session, viewport: Rectangle) {
     index: s32 = 0
     while index < count {
         tabs[index].key = cast(u64)(1100 + index)
-        tabs[index].label = TextFromCString(cast(*u8)Engine.WorkbookSheetName(workbook, index))
+        tabs[index].label = EditorString(Engine.WorkbookSheetName(workbook, index))
         index += 1
     }
+    strip: BoxProps
+    strip.key = cast(u64)1098
+    strip.bounds = Rectangle.{viewport.x, viewport.y + viewport.height - TabsBottom, viewport.width, TabsBottom}
+    strip.fill = HeaderBackground()
+    strip.border = GridLineColor()
+    Box(session, strip)
     bar: TabBarProps
     bar.key = cast(u64)1099
-    bar.placement = cast(TabBarPlacement)TabBarTop
+    bar.placement = cast(TabBarPlacement)TabBarBottom
     bar.selected_index = sheet_index
     bar.bounds = SheetTabsBounds(viewport)
     bar.min_tab_width = 72
@@ -1133,7 +1206,7 @@ DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
     label.text = "fx"
     label.font = Text16
     label.disabled = true
-    label.bounds = Rectangle.{Margin, 60.0, 24.0, 20.0}
+    label.bounds = Rectangle.{viewport.x + 8.0, viewport.y + 61.0, 24.0, 20.0}
     Text(session, label)
     result: TextFieldResult = RunFormulaField(session, viewport, key, control,
         typed, typed_length)
@@ -1198,8 +1271,8 @@ CanPick :: () -> bool {
     if end < cast(s32)text.count {
         next: u8 = text[end]
         if (next >= #char "A" && next <= #char "Z") || (next >= #char "a" && next <= #char "z") ||
-           (next >= #char "0" && next <= #char "9") || next == #char "$" || next == #char "_" ||
-           next == #char "." || next == #char "'" { return false }
+        (next >= #char "0" && next <= #char "9") || next == #char "$" || next == #char "_" ||
+        next == #char "." || next == #char "'" { return false }
     }
     return true
 }
@@ -1231,9 +1304,9 @@ WritePick :: (start: s32, end: s32, new_step: bool) {
     reference: [320]u8
     reference[0] = 0
     if pick_sheet != edit_sheet {
-        prefix: [260]s8
-        Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(workbook, pick_sheet), *prefix[0])
-        AppendText(reference[:], TextFromCString(cast(*u8)*prefix[0]))
+        prefix: [512]u8
+        EditorSheetPrefix(pick_sheet, prefix[:])
+        AppendText(reference[:], TextUntilNul(prefix[:]))
     }
     first_row: s32 = Min(pick_anchor_row, pick_row)
     first_column: s32 = Min(pick_anchor_column, pick_column)
@@ -1258,7 +1331,7 @@ RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
     control: bool, typed: []u8, typed_length: s32) -> TextFieldResult {
     field: TextFieldProps
     field.key = cast(u64)4
-    field.bounds = Rectangle.{52.0, 52.0, viewport.width - 52.0 - Margin, 34.0}
+    field.bounds = Rectangle.{viewport.x + 40.0, viewport.y + 58.0, viewport.width - 42.0, 26.0}
     field.value = TextUntilNul(edit[:])
     field.label = "Cell value"
     field.placeholder = "Value or =formula"
@@ -1340,18 +1413,23 @@ EnsureVisible :: () {
 }
 
 DrawGrid :: (session: Session, viewport: Rectangle) {
-    table: Rectangle = Rectangle.{Margin, TableTop,
+    table: Rectangle = Rectangle.{viewport.x + Margin, viewport.y + TableTop,
         viewport.width - Margin * 2.0, viewport.height - TableTop - GridBottom}
-    visible_rows = cast(s32)((table.height - HeaderHeight) / RowHeight)
-    visible_columns = cast(s32)((table.width - RowHeaderWidth) / ColumnWidth)
+    grid_right = table.x + table.width
+    grid_bottom = table.y + table.height
+    visible_rows = cast(s32)((table.height - HeaderHeight + RowHeight - 1.0) / RowHeight)
+    visible_columns = cast(s32)((table.width - RowHeaderWidth + ColumnWidth - 1.0) / ColumnWidth)
     rows: s32 = GridRows()
     columns: s32 = GridColumns()
 
-    wheel: float32 = PointerWheelTake(session, table)
+    wheel: float32 = EditorWheel(session, table)
     if wheel > 0.0 { scroll_row -= 1 }
     if wheel < 0.0 { scroll_row += 1 }
     if scroll_row > rows - visible_rows { scroll_row = rows - visible_rows }
     if scroll_row < 0 { scroll_row = 0 }
+
+    if rows < scroll_row + visible_rows { rows = scroll_row + visible_rows }
+    if columns < scroll_column + visible_columns { columns = scroll_column + visible_columns }
 
     // The selection belongs to the edited cell's sheet; another sheet shown
     // to pick references from has none.
@@ -1377,16 +1455,18 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         row: s32 = scroll_row + shown
         y: float32 = RowY(table, row)
         number: [16]u8
-        FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
+        row_digits: [16]u8
+        SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
         GridSquare(session, 1000 + shown, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
             ifx here && selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
         column = scroll_column
         while column < scroll_column + visible_columns && column < columns {
             display: [256]u8
-            Engine.WorkbookCellDisplay(workbook, sheet_index, row, column,
-                cast(*s8)*display[0], 256)
+            EditorCellDisplay(row, column, display[:])
             // Imported cells already use Gnumeric's exact number format.
-            if workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
+            #if !#defined(KRYON_HOSTED_UI) {
+                if workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
+            }
             fill: Color = CellBackground()
             // A range is shaded around its active cell, as in Gnumeric.
             active: bool = row == selected_row && column == selected_column
@@ -1424,13 +1504,14 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     DrawReferenceOutlines(session, table)
     DrawCellEditor(session, table)
 
-    pointer: PointerFrame = PointerSample(session)
+    if menus_block_input { return }
+    pointer: PointerFrame = EditorPointer(session)
     body: Rectangle = Rectangle.{table.x + RowHeaderWidth, table.y + HeaderHeight,
         table.width - RowHeaderWidth, table.height - HeaderHeight}
     hit_row: s32 = scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
     hit_column: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
     on_cell: bool = PointInBounds(pointer.x, pointer.y, body) && hit_row < rows &&
-        hit_row < scroll_row + visible_rows && hit_column < columns && hit_column < scroll_column + visible_columns
+    hit_row < scroll_row + visible_rows && hit_column < columns && hit_column < scroll_column + visible_columns
     if pointer.pressed && !grid_menu_open {
         handle: Rectangle = FillHandleBounds(table)
         if handle.width > 0.0 && PointInBounds(pointer.x, pointer.y, handle) {
@@ -1502,7 +1583,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         drag_mode = DragNone
         drag_frames = 0
     }
-    secondary: SecondaryPointerFrame = SecondaryPointerSample(session)
+    secondary: SecondaryPointerFrame = EditorSecondaryPointer(session)
     if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
         row := scroll_row + cast(s32)((pointer.y - body.y) / RowHeight)
         if row < rows && row < scroll_row + visible_rows {
@@ -1518,7 +1599,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
         if row < rows && clicked < columns && clicked < scroll_column + visible_columns {
             inside: bool = here && selection_axis == 0 && row >= first_row && row <= last_row &&
-                clicked >= first_column && clicked <= last_column
+            clicked >= first_column && clicked <= last_column
             edit_focused = false
             if !inside { SelectCell(row, clicked) }
             grid_menu_open = true
@@ -1537,7 +1618,7 @@ FillHandleBounds :: (table: Rectangle) -> Rectangle {
     row: s32 = SelectionLastRow()
     column: s32 = SelectionLastColumn()
     if row < scroll_row || row >= scroll_row + visible_rows ||
-       column < scroll_column || column >= scroll_column + visible_columns { return none }
+    column < scroll_column || column >= scroll_column + visible_columns { return none }
     x: float32 = ColumnX(table, column) + ColumnWidth
     y: float32 = RowY(table, row) + RowHeight
     return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
@@ -1606,7 +1687,7 @@ DrawReferenceOutlines :: (session: Session, table: Rectangle) {
     ref: Engine.FormulaRef
     at: s32 = 0
     index: s32 = 0
-    while index < 32 && Engine.FormulaFindRef(workbook, cast(*s8)*edit[0], at, *ref) != 0 {
+    while index < 32 && Engine.FormulaFindRef(workbook, Engine.CText(TextUntilNul(edit[:])), at, *ref) != 0 {
         sheet: s32 = ifx ref.sheet == -1 then edit_sheet else ref.sheet
         if sheet == sheet_index {
             CellOutline(session, 400100 + index * 4, table, Min(ref.row1, ref.row2), Min(ref.col1, ref.col2),
@@ -1622,11 +1703,11 @@ DrawReferenceOutlines :: (session: Session, table: Rectangle) {
 DrawCellEditor :: (session: Session, table: Rectangle) {
     if !edit_focused || sheet_index != edit_sheet { return }
     if selected_row < scroll_row || selected_row >= scroll_row + visible_rows ||
-       selected_column < scroll_column || selected_column >= scroll_column + visible_columns { return }
+    selected_column < scroll_column || selected_column >= scroll_column + visible_columns { return }
     text: string = TextUntilNul(edit[:])
     x: float32 = ColumnX(table, selected_column)
     y: float32 = RowY(table, selected_row)
-    width: float32 = cast(float32)(GlyphWidth(text, Text14, "") + 16)
+    width: float32 = cast(float32)(EditorGlyphWidth(text) + 16)
     if width < ColumnWidth { width = ColumnWidth }
     limit: float32 = ColumnX(table, scroll_column + visible_columns) - x
     if width > limit { width = limit }
@@ -1641,10 +1722,10 @@ DrawCellEditor :: (session: Session, table: Rectangle) {
     label.text = text
     label.font = Text14
     label.wrap = cast(TextWrap)TextWrapNone
-    label.bounds = Rectangle.{x + 6.0, y + 6.0, width - 12.0, RowHeight - 8.0}
+    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, RowHeight - 4.0}
     Text(session, label)
     cursor: s32 = Min(edit_cursor, cast(s32)text.count)
-    caret_x: float32 = x + 6.0 + cast(float32)GlyphWidth(text[0:cursor], Text14, "")
+    caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
     if caret_x < x + width - 2.0 {
         caret: BoxProps
         caret.key = cast(u64)400502
@@ -1668,6 +1749,8 @@ CellOutline :: (session: Session, key: s32, table: Rectangle, first_row: s32, fi
     y: float32 = RowY(table, top)
     width: float32 = cast(float32)(right - left + 1) * ColumnWidth
     height: float32 = cast(float32)(bottom - top + 1) * RowHeight
+    width = MinFloat(width, grid_right - x)
+    height = MinFloat(height, grid_bottom - y)
     for line: 0..thickness - 1 {
         inset: float32 = cast(float32)line
         outline: BoxProps
@@ -1701,7 +1784,7 @@ DrawGridMenu :: (session: Session, escape: bool) {
     items[1].label = "Copy"
     items[2].id = 3
     items[2].label = "Paste"
-    items[2].disabled = !SystemClipboardHasText()
+    items[2].disabled = !EditorClipboardHasText()
     items[3].id = 4
     items[3].label = "Clear"
     items[4].separator = true
@@ -1730,32 +1813,36 @@ DrawGridMenu :: (session: Session, escape: bool) {
     props.escape = escape
     result: ContextMenuResult = ContextMenu(session, props, items[0:count])
     if !result.open { grid_menu_open = false }
-    if result.activated_id == 1 { CutCell() }
-    if result.activated_id == 2 { CopyCell() }
-    if result.activated_id == 3 { PasteCells() }
-    if result.activated_id == 4 { ClearCell() }
-    if result.activated_id == 6 {
+    GridCommand(result.activated_id)
+}
+
+GridCommand :: (id: s32) {
+    if id == 1 { CutCell() }
+    if id == 2 { CopyCell() }
+    if id == 3 { PasteCells() }
+    if id == 4 { ClearCell() }
+    if id == 6 {
         RecordChange()
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
         Changed()
     }
-    if result.activated_id == 10 {
+    if id == 10 {
         RecordChange()
         Engine.WorkbookInsertRow(workbook, sheet_index, selected_row + 1)
         selected_row += 1
         Changed()
     }
-    if result.activated_id == 7 {
+    if id == 7 {
         RecordChange()
         Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
         Changed()
     }
-    if result.activated_id == 8 {
+    if id == 8 {
         RecordChange()
         Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
         Changed()
     }
-    if result.activated_id == 9 {
+    if id == 9 {
         RecordChange()
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed()
@@ -1763,11 +1850,11 @@ DrawGridMenu :: (session: Session, escape: bool) {
 }
 
 // The grid takes its colors from the installed style, so it follows the theme.
-HeaderBackground :: () -> Color { return StyleTokenColor("surface") }
-CellBackground :: () -> Color { return StyleTokenColor("card") }
-SelectedBackground :: () -> Color { return StyleTokenColor("accent-soft") }
-AccentColor :: () -> Color { return StyleTokenColor("accent") }
-GridLineColor :: () -> Color { return StyleTokenColor("border-soft") }
+HeaderBackground :: () -> Color { return EditorColor("surface") }
+CellBackground :: () -> Color { return EditorColor("card") }
+SelectedBackground :: () -> Color { return EditorColor("accent-soft") }
+AccentColor :: () -> Color { return EditorColor("accent") }
+GridLineColor :: () -> Color { return EditorColor("border-soft") }
 
 ColumnX :: (table: Rectangle, column: s32) -> float32 {
     return table.x + RowHeaderWidth + cast(float32)(column - scroll_column) * ColumnWidth
@@ -1779,6 +1866,9 @@ RowY :: (table: Rectangle, row: s32) -> float32 {
 
 // One grid square: a bordered box and its clipped text.
 GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: Color, text: string) {
+    if bounds.x + bounds.width > grid_right { bounds.width = grid_right - bounds.x }
+    if bounds.y + bounds.height > grid_bottom { bounds.height = grid_bottom - bounds.y }
+    if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
     box: BoxProps
     box.key = 1000000 + cast(u64)key * 2
     box.bounds = bounds
@@ -1791,8 +1881,8 @@ GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: Color, text:
     label.text = text
     label.font = Text14
     label.wrap = cast(TextWrap)TextWrapNone
-    label.bounds = Rectangle.{bounds.x + 6.0, bounds.y + 6.0,
-        bounds.width - 12.0, bounds.height - 8.0}
+    label.bounds = Rectangle.{bounds.x + 4.0, bounds.y + 3.0,
+        bounds.width - 8.0, bounds.height - 4.0}
     Text(session, label)
 }
 
@@ -1830,7 +1920,8 @@ AppendCellColumn :: (output: []u8, column: s32) {
 AppendCellName :: (output: []u8, row: s32, column: s32) {
     AppendCellColumn(output, column)
     number: [16]u8
-    FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
+    row_digits: [16]u8
+    SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
     AppendText(output, TextUntilNul(number[:]))
 }
 
@@ -1901,49 +1992,55 @@ ProfileName :: (name: string) -> bool {
 
 // Linux's native host owns main; read its file argument without changing
 // the profile selection for launches that supplied no document.
-OpenFileArgument :: (out: []u8) -> bool {
-    command: [8192]u8
-    descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
-    if descriptor < 0 { return false }
-    length: s64 = ReadFileBytes(descriptor, *command[0], 8191)
-    CloseFile(descriptor)
-    if length <= 0 { return false }
-    at: s32 = 0
-    while at < cast(s32)length && command[at] != 0 { at += 1 }
-    at += 1
-    if at >= cast(s32)length { return false }
-    end: s32 = at
-    while end < cast(s32)length && command[end] != 0 { end += 1 }
-    name: string = TextView(command[at:end])
-    if !DocumentPath(name) { return false }
-    if name.count >= out.count { return false }
-    SetText(out, name)
-    return true
+#if !#defined(KRYON_HOSTED_UI) {
+    OpenFileArgument :: (out: []u8) -> bool {
+        command: [8192]u8
+        descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
+        if descriptor < 0 { return false }
+        length: s64 = ReadFileBytes(descriptor, *command[0], 8191)
+        CloseFile(descriptor)
+        if length <= 0 { return false }
+        at: s32 = 0
+        while at < cast(s32)length && command[at] != 0 { at += 1 }
+        at += 1
+        if at >= cast(s32)length { return false }
+        end: s32 = at
+        while end < cast(s32)length && command[end] != 0 { end += 1 }
+        name: string = TextView(command[at:end])
+        if !DocumentPath(name) { return false }
+        if name.count >= out.count { return false }
+        SetText(out, name)
+        return true
+    }
+
 }
 
 DocumentPath :: (name: string) -> bool {
     if name.count < 9 || name.count >= 4096 { return false }
     suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
-    return Engine.TextCompareFoldLiteral(cast(*s8)CPath(suffix), ".gnumeric") == 0
+    return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0 || EndsWith(name, ".csv")
 }
 
 // Whether the program was started under the given name. `geld` is a link to
 // workbook, and it opens the geld profile because of the name it was run as.
-StartedAs :: (name: string) -> bool {
-    command: [4096]u8
-    descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
-    if descriptor < 0 { return false }
-    length: s64 = ReadFileBytes(descriptor, *command[0], 4095)
-    CloseFile(descriptor)
-    if length <= 0 { return false }
-    // The command line is NUL-separated words; the first one is how the
-    // program was started.
-    end: s32 = 0
-    while end < cast(s32)length && command[end] != 0 { end += 1 }
-    return FileName(TextView(command[0:end])) == name
+#if !#defined(KRYON_HOSTED_UI) {
+    StartedAs :: (name: string) -> bool {
+        command: [4096]u8
+        descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
+        if descriptor < 0 { return false }
+        length: s64 = ReadFileBytes(descriptor, *command[0], 4095)
+        CloseFile(descriptor)
+        if length <= 0 { return false }
+        // The command line is NUL-separated words; the first one is how the
+        // program was started.
+        end: s32 = 0
+        while end < cast(s32)length && command[end] != 0 { end += 1 }
+        return FileName(TextView(command[0:end])) == name
+    }
+
+    // The part of a path after its last slash.
 }
 
-// The part of a path after its last slash.
 FileName :: (path: string) -> string {
     at: s32 = cast(s32)path.count
     while at > 0 && path[at - 1] != #char "/" {
@@ -1958,11 +2055,309 @@ EndsWith :: (text: string, suffix: string) -> bool {
     return text[start:cast(s32)text.count] == suffix
 }
 
-FileExists :: (path: string) -> bool {
-    return PathAccess(CPath(path), 0) == 0
+#if !#defined(KRYON_HOSTED_UI) {
+    FileExists :: (path: string) -> bool {
+        return PathAccess(CPath(path), 0) == 0
+    }
+
 }
 
 // A NUL-terminated copy of a path or name for libc.
-CPath :: (text: string) -> *u8 {
-    return cast(*u8)Engine.CText(text)
+#if !#defined(KRYON_HOSTED_UI) {
+    CPath :: (text: string) -> *u8 {
+        return cast(*u8)Engine.CText(text)
+    }
+
+}
+
+MinFloat :: (a: float32, b: float32) -> float32 { return ifx a < b then a else b }
+
+// Menus use the same commands as the keyboard and grid's context menu.
+DrawMenus :: (session: Session, viewport: Rectangle) {
+    file: [4]MenuItem
+    file_count: s32 = 3
+    file[0] = MenuItem.{.id = 101, .label = "Open…", .accelerator = "Ctrl+O"}
+    file[1] = MenuItem.{.id = 102, .label = "Save", .accelerator = "Ctrl+S"}
+    file[2] = MenuItem.{.id = 103, .label = "Save As…", .accelerator = "Ctrl+Shift+S"}
+    #if #defined(KRYON_HOSTED_UI) {
+        file_count = 4
+        file[3] = MenuItem.{.id = 104, .label = "Download Workbook.zib…"}
+    }
+    edit_items: [9]MenuItem
+    edit_items[0] = MenuItem.{.id = 201, .label = "Undo", .accelerator = "Ctrl+Z", .disabled = undo_count == 0 && edit_undo_count == 0}
+    edit_items[1] = MenuItem.{.id = 202, .label = "Redo", .accelerator = "Ctrl+Y", .disabled = redo_count == 0 && edit_redo_count == 0}
+    edit_items[2].kind = MenuItemKind.MenuSeparator
+    edit_items[3] = MenuItem.{.id = 1, .label = "Cut", .accelerator = "Ctrl+X"}
+    edit_items[4] = MenuItem.{.id = 2, .label = "Copy", .accelerator = "Ctrl+C"}
+    edit_items[5] = MenuItem.{.id = 3, .label = "Paste", .accelerator = "Ctrl+V", .disabled = !EditorClipboardHasText()}
+    edit_items[6] = MenuItem.{.id = 4, .label = "Clear contents", .accelerator = "Delete"}
+    edit_items[7].kind = MenuItemKind.MenuSeparator
+    edit_items[8] = MenuItem.{.id = 203, .label = "Select all", .accelerator = "Ctrl+A"}
+    view: [1]MenuItem
+    view[0] = MenuItem.{.id = 301, .label = "Go to first cell", .accelerator = "Ctrl+Home"}
+    insert: [3]MenuItem
+    insert[0] = MenuItem.{.id = 6, .label = "Row above"}
+    insert[1] = MenuItem.{.id = 10, .label = "Row below"}
+    insert[2] = MenuItem.{.id = 8, .label = "Column before"}
+    sheet: [4]MenuItem
+    sheet[0] = MenuItem.{.id = 401, .label = "Add sheet"}
+    sheet[1] = MenuItem.{.id = 402, .label = "Previous sheet", .disabled = sheet_index == 0}
+    sheet[2] = MenuItem.{.id = 403, .label = "Next sheet", .disabled = sheet_index + 1 >= Engine.WorkbookSheetCount(workbook)}
+    sheet[3] = MenuItem.{.id = 404, .label = "Recalculate"}
+    groups: [5]MenuGroup
+    groups[0] = MenuGroup.{"File", file[:file_count]}
+    groups[1] = MenuGroup.{"Edit", edit_items[:]}
+    groups[2] = MenuGroup.{"View", view[:]}
+    groups[3] = MenuGroup.{"Insert", insert[:]}
+    groups[4] = MenuGroup.{"Sheet", sheet[:]}
+    props: MenuProps
+    props.key = cast(u64)1300
+    props.bounds = Rectangle.{viewport.x, viewport.y, viewport.width, 26.0}
+    key := menu_key
+    props.focus_requested = key == 299 || ((menu_modifiers & KeyModifierAlt) != 0 && key == 70)
+    props.input.up = key == KeyUp
+    props.input.down = key == KeyDown
+    props.input.left = key == KeyLeft
+    props.input.right = key == KeyRight
+    props.input.enter = key == KeyEnter
+    props.input.escape = key == KeyEscape
+    result := EditorMenu(session, props, groups[:], *menu_state)
+    id := result.activated_id
+    if id == 101 { PickDocument(false) }
+    if id == 102 { SaveWorkbook(true) }
+    if id == 103 { PickDocument(true) }
+    #if #defined(KRYON_HOSTED_UI) {
+        if id == 104 { unused AppService("app.bundle.export.v1", "") }
+    }
+    if id == 201 { UndoCommand() }
+    if id == 202 { RedoCommand() }
+    if id == 203 { SelectAllCells() }
+    if id == 301 { GoToFirstCell() }
+    if id == 401 {
+        RecordChange()
+        name: [64]u8
+        SetText(name[:], "Sheet")
+        digits: [16]u8
+        AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(workbook) + 1, digits[:]))
+        unused Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:])))
+        sheet_index = Engine.WorkbookSheetCount(workbook) - 1
+        scroll_row = 0; scroll_column = 0
+        Changed()
+    }
+    if id == 402 || id == 403 {
+        if edit_focused { CommitCell(); EndEdit() }
+        sheet_index += ifx id == 402 then -1 else 1
+        scroll_row = 0; scroll_column = 0
+        SelectCell(0, 0)
+    }
+    if id == 404 { Changed() }
+    if id > 0 && id < 11 { GridCommand(id) }
+}
+
+#if !#defined(KRYON_HOSTED_UI) {
+    PickDocument :: (save: bool) {
+        path: [4096]u8
+        props: Picker.FilePickerProps
+        props.title = ifx save then "Save Workbook As" else "Open Workbook"
+        props.filter = ifx save then "Spreadsheet | *.gnumeric" else "Spreadsheets | *.gnumeric *.csv"
+        props.save = save
+        suggestion: [4096]u8
+        SetText(suggestion[:], FileName(TextUntilNul(data_path[:])))
+        props.suggested_name = TextUntilNul(suggestion[:])
+        result := Picker.PickFile(props, path[:])
+        if result < 0 { SetText(status[:], "Could not open the file chooser") }
+        if result != 1 { return }
+        if !save { OpenDocument(TextUntilNul(path[:])); return }
+        if !EndsWith(TextUntilNul(path[:]), ".gnumeric") { AppendText(path[:], ".gnumeric") }
+        old_path: [4096]u8
+        old_directory: [4096]u8
+        SetText(old_path[:], TextUntilNul(data_path[:]))
+        SetText(old_directory[:], TextUntilNul(data_directory[:]))
+        SetText(data_path[:], TextUntilNul(path[:]))
+        data_directory[0] = 0
+        dirty = true
+        SaveWorkbook(true)
+        if dirty {
+            SetText(data_path[:], TextUntilNul(old_path[:]))
+            SetText(data_directory[:], TextUntilNul(old_directory[:]))
+        } else { UpdateDocumentTitle() }
+    }
+
+}
+
+#if #defined(KRYON_HOSTED_UI) {
+    input_pointer: PointerFrame;
+    input_secondary: SecondaryPointerFrame;
+    input_wheel: float32;
+    FollowSystemTheme :: () {}
+    MonotonicMilliseconds :: () -> s64 { return cast(s64)(AppNow() * 1000.0) }
+    LoadWorkbook :: () {
+        workbook = Engine.WorkbookNew()
+        SetText(data_path[:], "workbook.gnumeric")
+        loaded := Engine.WorkbookLoadFile(workbook, Engine.CText("workbook.gnumeric")) != 0
+        load_failed = !loaded && Engine.DocumentStatus != DOCUMENT_MISSING
+        if Engine.WorkbookSheetCount(workbook) == 0 { unused Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1")) }
+        if load_failed { SetText(status[:], "Could not open workbook.gnumeric") }
+    }
+    SaveWorkbook :: (finish_edit: bool) {
+        if load_failed { return }
+        if finish_edit && edit_focused { CommitCell(); EndEdit(); SelectCell(selected_row, selected_column) }
+        if Engine.WorkbookWriteGnumeric(workbook, Engine.CText(TextUntilNul(data_path[:]))) != 0 {
+            dirty = false; save_retry_at = 0; status[0] = 0
+        } else { dirty = true; save_retry_at = MonotonicMilliseconds() + 2000; SetText(status[:], "Could not save workbook") }
+    }
+    PickDocument :: (save: bool) {
+        if save { SaveWorkbook(true); if dirty { return } }
+        response := AppService("document.pick.v1", ifx save then "{\"op\":\"export\",\"name\":\"workbook.gnumeric\",\"filter\":\"Spreadsheet | *.gnumeric\",\"suggested_name\":\"workbook.gnumeric\"}" else "{\"op\":\"import\",\"name\":\"incoming.gnumeric\",\"filter\":\"Spreadsheet | *.gnumeric\"}")
+        if response == "ready" && !save {
+            OpenDocument("incoming.gnumeric")
+            if TextUntilNul(data_path[:]) == "incoming.gnumeric" {
+                SetText(data_path[:], "workbook.gnumeric")
+                dirty = true
+            }
+        }
+        if response == "error" { SetText(status[:], "Could not transfer the document") }
+    }
+    EditorKey :: (session: Session) -> s32 { unused session; return AppKey() }
+    EditorModifiers :: (session: Session) -> s32 { unused session; return AppModifiers() }
+    EditorTypedText :: (session: Session, out: []u8) -> s32 {
+        unused session
+        value := AppFieldInput().text
+        SetText(out, value)
+        return cast(s32)TextUntilNul(out).count
+    }
+    EditorPointer :: (session: Session) -> PointerFrame { unused session; return input_pointer }
+    EditorSecondaryPointer :: (session: Session) -> SecondaryPointerFrame { unused session; return input_secondary }
+    EditorWheel :: (session: Session, bounds: Rectangle) -> float32 {
+        unused session
+        wheel := input_wheel; input_wheel = 0.0
+        return ifx PointInBounds(input_pointer.x, input_pointer.y, bounds) then wheel else 0.0
+    }
+    EditorClipboardSet :: (value: string) { unused ClipboardCopy(value, 0) }
+    EditorClipboardText :: (out: []u8) -> string {
+        value := AppService("input.v1", "clipboard")
+        SetText(out, value)
+        return TextUntilNul(out)
+    }
+    EditorClipboardHasText :: () -> bool { return AppService("input.v1", "clipboard-has-text") == "true" }
+    ReadInput :: () {
+        value := AppService("input.v1", "frame")
+        input_pointer.x = cast(float32)Engine.Number(value, "x")
+        input_pointer.y = cast(float32)Engine.Number(value, "y")
+        input_pointer.down = Engine.Number(value, "down") != 0
+        input_pointer.pressed = Engine.Number(value, "pressed") != 0
+        input_pointer.released = Engine.Number(value, "released") != 0
+        input_secondary.down = Engine.Number(value, "secondary_down") != 0
+        input_secondary.pressed = Engine.Number(value, "secondary_pressed") != 0
+        input_secondary.released = Engine.Number(value, "secondary_released") != 0
+        input_wheel = cast(float32)Engine.Number(value, "wheel")
+    }
+    #scope_export
+    #program_export
+    Main :: () -> s32 {
+        mode := AppMode()
+        if mode == APP_IDENTIFY { AppIdentity("workbook", 1); AppDescribe("Workbook", RowAddIcon.Shape); return APP_PROTOCOL }
+        if mode == APP_FRAME {
+            if !AppSupports("spreadsheet.v1") {
+                Text(AppSession(), TextProps.{.bounds = AppBounds(), .text = "Update Werkzeug to open Workbook.", .font = Text16})
+                return APP_PROTOCOL
+            }
+            ReadInput()
+            unused Frame(AppSession(), AppBounds())
+            AppKeyboard(edit_focused)
+        }
+        if mode == APP_SAVE && workbook != null { SaveWorkbook(true) }
+        return 0
+    }
+    #scope_file
+} else {
+    EditorKey :: (session: Session) -> s32 { return KeyboardTake(session) }
+    EditorModifiers :: (session: Session) -> s32 { return KeyboardModifiers(session) }
+    EditorTypedText :: (session: Session, out: []u8) -> s32 { return TakeTypedText(session, out) }
+    EditorPointer :: (session: Session) -> PointerFrame { return PointerSample(session) }
+    EditorSecondaryPointer :: (session: Session) -> SecondaryPointerFrame { return SecondaryPointerSample(session) }
+    EditorWheel :: (session: Session, bounds: Rectangle) -> float32 { return PointerWheelTake(session, bounds) }
+    EditorClipboardSet :: (value: string) { SystemClipboardSet(value) }
+    EditorClipboardText :: (out: []u8) -> string { return SystemClipboardText(out) }
+    EditorClipboardHasText :: () -> bool { return SystemClipboardHasText() }
+}
+
+EditorColor :: (name: string) -> Color {
+    #if #defined(KRYON_HOSTED_UI) {
+        return Theme.AppThemeColor(name, Color.{245, 245, 245, 255})
+    } else {
+        return StyleTokenColor(name)
+    }
+}
+
+EditorMenu :: (session: Session, props: MenuProps, groups: []MenuGroup, state: *MenuState) -> MenuResult {
+    #if #defined(KRYON_HOSTED_UI) {
+        if !state.initialized { MenuStateInit(state) }
+        result: MenuResult
+        x := props.bounds.x + 2.0
+        for index: 0..groups.count - 1 {
+            button: ButtonProps
+            button.key = cast(u64)(1310 + index)
+            button.label = groups[index].label
+            button.bounds = Rectangle.{x, props.bounds.y, 58.0, 26.0}
+            button.size = ControlSize.ControlSizeSmall
+            if Button(session, button) != 0 { state.open_index = ifx state.open_index == index then -1 else cast(s32)index }
+            if state.open_index == index { grid_menu_x = x }
+            x += 58.0
+        }
+        if state.open_index >= 0 && state.open_index < groups.count {
+            items: [16]ContextMenuItem
+            commands := groups[state.open_index].items
+            for index: 0..commands.count - 1 {
+                items[index].id = commands[index].id
+                items[index].label = commands[index].label
+                items[index].disabled = commands[index].disabled
+                items[index].separator = commands[index].kind == MenuItemKind.MenuSeparator
+            }
+            menu: ContextMenuProps
+            menu.key = cast(u64)(1350 + state.open_index)
+            menu.open = true; menu.x = grid_menu_x; menu.y = props.bounds.y + 26.0
+            menu.escape = props.input.escape
+            drawn := ContextMenu(session, menu, items[:commands.count])
+            if !drawn.open { state.open_index = -1 }
+            result.activated_id = drawn.activated_id
+        }
+        result.open_index = state.open_index
+        return result
+    } else {
+        return Menu(session, props, groups, state)
+    }
+}
+
+#if #defined(KRYON_HOSTED_UI) {
+    EditorString :: (value: string) -> string { return value }
+    EditorSheetPrefix :: (sheet: s32, out: []u8) { unused Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(workbook, sheet), out) }
+    EditorCellDisplay :: (row: s32, col: s32, out: []u8) { Engine.WorkbookCellDisplay(workbook, sheet_index, row, col, out, cast(s32)out.count) }
+} else {
+    EditorString :: (value: *s8) -> string { return TextFromCString(cast(*u8)value) }
+    EditorSheetPrefix :: (sheet: s32, out: []u8) { unused Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(workbook, sheet), cast(*s8)*out[0]) }
+    EditorCellDisplay :: (row: s32, col: s32, out: []u8) { Engine.WorkbookCellDisplay(workbook, sheet_index, row, col, cast(*s8)*out[0], cast(s32)out.count) }
+}
+
+EditorGlyphWidth :: (text: string) -> s32 {
+    #if #defined(KRYON_HOSTED_UI) {
+        bytes: Vec(u8)
+        BuilderPrint(*bytes, "{\"op\":\"measure\",\"text\":")
+        Engine.Quoted(*bytes, text)
+        BuilderPrint(*bytes, "}")
+        return Engine.Number(AppService("input.v1", BuilderFinish(bytes)), "width")
+    } else {
+        return GlyphWidth(text, Text14, "")
+    }
+}
+
+GoToFirstCell :: () {
+    if edit_focused { CommitCell(); EndEdit() }
+    SelectCell(0, 0); scroll_row = 0; scroll_column = 0
+}
+SelectAllCells :: () {
+    if edit_focused { CommitCell(); EndEdit() }
+    SelectCell(0, 0)
+    range_row = Max(0, Engine.WorkbookSheetRows(workbook, sheet_index) - 1)
+    range_column = Max(0, Engine.WorkbookSheetColumns(workbook, sheet_index) - 1)
 }

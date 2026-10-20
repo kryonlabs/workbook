@@ -1,0 +1,56 @@
+// The native spreadsheet capability uses opaque IDs and private app files.
+#load "test_support.zi";
+Service :: #import "service";
+Json :: #import "std/json_scan";
+Files :: #import "kryon/app_files";
+
+context: Service.Context;
+other: Service.Context;
+files: Files.AppFiles;
+other_files: Files.AppFiles;
+
+Contains :: (text: string, part: string) -> bool {
+    if part.count > text.count { return false }
+    for index: 0..text.count - part.count {
+        if text[index:index + part.count] == part { return true }
+    }
+    return false
+}
+
+Good :: (request: string) -> string {
+    reply := Service.Call(*context, *files, request)
+    Check(Contains(reply, "\"ok\":true"), request)
+    return reply
+}
+
+#program_export
+main :: () -> s32 {
+    template: [256]u8
+    SetText(template[:], "/tmp/workbook-service-XXXXXX")
+    root := MakeTemporaryDirectory(template[:])
+    Check(root != "", "private service directory")
+    defer { RemoveTree(root) }
+    Check(Files.AppFilesOpen(*files, root), "open app files")
+    defer { Files.AppFilesClose(*files); Service.CloseContext(*context) }
+    unused Good("{\"op\":\"new\"}")
+    unused Good("{\"op\":\"add-sheet\",\"id\":1,\"text\":\"Sheet1\"}")
+    unused Good("{\"op\":\"set\",\"id\":1,\"text\":\"12\"}")
+    unused Good("{\"op\":\"set\",\"id\":1,\"col\":1,\"text\":\"=A1*2\"}")
+    unused Good("{\"op\":\"evaluate\",\"id\":1}")
+    reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
+    Check(Contains(reply, "=A1*224"), "formula and its result cross the service boundary")
+    unused Good("{\"op\":\"clone\",\"id\":1}")
+    unused Good("{\"op\":\"set\",\"id\":2,\"text\":\"99\"}")
+    unused Good("{\"op\":\"save\",\"id\":1,\"name\":\"test.gnumeric\"}")
+    Check(Contains(Service.Call(*context, *files, "{\"op\":\"save\",\"id\":1,\"name\":\"../escape.gnumeric\"}"), "\"ok\":false"), "reject a parent path")
+    unused Good("{\"op\":\"new\"}")
+    unused Good("{\"op\":\"load\",\"id\":3,\"name\":\"test.gnumeric\"}")
+    loaded := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
+    Check(Contains(loaded, "=A1*224"), "native document save and reload")
+    Check(!Contains(loaded, "99"), "cloned edits do not change the original")
+    Check(Contains(Service.Call(*other, *other_files, "{\"op\":\"info\",\"id\":1}"), "\"ok\":false"), "IDs are local to their app")
+    unused Service.Call(*context, *files, "{\"op\":\"load\",\"id\":3,\"name\":\"missing.gnumeric\"}")
+    Check(files.status == 0, "missing document status is distinct")
+    Say("spreadsheet service: formulas, clone, native save/reload and private paths passed")
+    return 0
+}

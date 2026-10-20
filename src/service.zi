@@ -1,0 +1,227 @@
+// Native calculation for portable spreadsheet frontends. A harness owns each
+// Context and grants access only to that app's private document directory.
+Engine :: #import "engine";
+Json :: #import "std/json_scan";
+#import "std/vec"
+#import "std/text_buffer"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "kryon/app_files"
+
+Context :: struct {
+    books: [128]*Engine.Workbook
+    reply: [1048576]u8
+}
+
+libc :: #system_library "libc";
+Release :: (block: *void) #foreign libc "free";
+Temporary :: (path: *u8) -> s32 #foreign libc "mkstemp";
+Sync :: (fd: s32) -> s32 #foreign libc "fsync";
+Close :: (fd: s32) -> s32 #foreign libc "close";
+Rename :: (from: *u8, to: *u8) -> s32 #foreign libc "rename";
+Remove :: (path: *u8) -> s32 #foreign libc "unlink";
+
+Number :: (request: string, name: string) -> s32 {
+    at := Json.FieldAt(request, 0, name)
+    if at < 0 { return 0 }
+    value := Json.ReadNumber(request, at)
+    if !value.valid || value.value < -16777216.0 || value.value > 16777216.0 { return 0 }
+    return cast(s32)value.value
+}
+
+Text :: (request: string, name: string, out: []u8) -> string {
+    count := Json.ReadStringText(request, Json.FieldAt(request, 0, name), out)
+    return ifx count >= 0 && count < out.count then TextView(out[:count]) else ""
+}
+
+Quoted :: (bytes: *Vec(u8), text: string) {
+    BuilderPrint(bytes, "\"")
+    hex := "0123456789abcdef"
+    for byte: text {
+        if byte == 34 || byte == 92 { BuilderPrint(bytes, "\\") }
+        if byte < 32 {
+            BuilderPrint(bytes, "\\u00")
+            unused VecPush(bytes.*, hex[cast(s32)byte / 16])
+            unused VecPush(bytes.*, hex[cast(s32)byte % 16])
+        } else { unused VecPush(bytes.*, byte) }
+    }
+    BuilderPrint(bytes, "\"")
+}
+
+Keep :: (context: *Context, book: *Engine.Workbook) -> s32 {
+    if book == null { return 0 }
+    for index: 0..127 {
+        if context.books[index] == null {
+            context.books[index] = book
+            return cast(s32)index + 1
+        }
+    }
+    Engine.WorkbookFree(book)
+    return 0
+}
+
+CloseContext :: (context: *Context) {
+    for index: 0..127 {
+        if context.books[index] != null { Engine.WorkbookFree(context.books[index]) }
+        context.books[index] = null
+    }
+    context.reply[0] = 0
+}
+
+Save :: (book: *Engine.Workbook, files: *AppFiles, name: string) -> bool {
+    if !AppFileNameValid(name) { return false }
+    path := AppFilePath(files, name, true)
+    defer { AppFileFree(path) }
+    if path == "" { return false }
+    target: [4096]u8
+    temporary: [4160]u8
+    if !CopyCString(path, target[:]) { return false }
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "%.tmp-XXXXXX", path)
+    suffix := BuilderFinish(bytes)
+    defer { AppFileFree(suffix) }
+    if !CopyCString(suffix, temporary[:]) { return false }
+    fd := Temporary(*temporary[0])
+    if fd < 0 { return false }
+    ok := Engine.WorkbookWriteGnumeric(book, cast(*s8)*temporary[0]) != 0
+    if ok { ok = Sync(fd) == 0 }
+    if Close(fd) != 0 { ok = false }
+    if ok { ok = Rename(*temporary[0], *target[0]) == 0 }
+    if !ok { Remove(*temporary[0]) }
+    return ok
+}
+
+Info :: (bytes: *Vec(u8), book: *Engine.Workbook, sheet: s32) {
+    BuilderPrint(bytes, ",\"sheets\":%,\"cells\":%,\"rows\":%,\"cols\":%,\"name\":",
+        Engine.WorkbookSheetCount(book), Engine.WorkbookCellCount(book),
+        Engine.WorkbookSheetRows(book, sheet), Engine.WorkbookSheetColumns(book, sheet))
+    Quoted(bytes, TextFromCString(cast(*u8)Engine.WorkbookSheetName(book, sheet)))
+}
+
+// The page packet has length-delimited UTF-8 values. Parsing a full JSON
+// array per visible cell would spend the portable frame budget on decoding.
+View :: (bytes: *Vec(u8), book: *Engine.Workbook, sheet: s32, row: s32, col: s32) {
+    BuilderPrint(bytes, "view\n")
+    if row < 0 || col < 0 || row > 16777184 || col > 16368 { return }
+    for r: row..row + 31 {
+        for c: col..col + 15 {
+            source := TextFromCString(cast(*u8)Engine.WorkbookCellText(book, sheet, r, c))
+            displayed: [512]s8
+            Engine.WorkbookCellDisplay(book, sheet, r, c, *displayed[0], 512)
+            if book.native == null { Engine.RoundForDisplay(*displayed[0], 512) }
+            display := TextFromCString(cast(*u8)*displayed[0])
+            if source != "" || display != "" {
+                if source.count > 511 { source = source[:511] }
+                if display.count > 511 { display = display[:511] }
+                BuilderPrint(bytes, "%:%:%:%:", r, c, source.count, display.count)
+                BuilderPrint(bytes, "%", source)
+                BuilderPrint(bytes, "%", display)
+            }
+        }
+    }
+}
+
+Finish :: (context: *Context, bytes: *Vec(u8)) -> string {
+    value := BuilderFinish(bytes.*)
+    if !CopyCString(value, context.reply[:]) {
+        unused CopyCString("{\"ok\":false}", context.reply[:])
+    }
+    AppFileFree(value)
+    return TextFromCString(*context.reply[0])
+}
+
+Call :: (context: *Context, files: *AppFiles, request: string) -> string {
+    context.reply[0] = 0
+    if request.count > 65536 { return "{\"ok\":false}" }
+    operation: [64]u8
+    op := Text(request, "op", operation[:])
+    id := Number(request, "id")
+    sheet := Number(request, "sheet")
+    row := Number(request, "row")
+    col := Number(request, "col")
+    book: *Engine.Workbook
+    if id >= 1 && id <= 128 { book = context.books[id - 1] }
+    if op == "new" {
+        id = Keep(context, Engine.WorkbookNew())
+        if id > 0 { book = context.books[id - 1] }
+    }
+    if book == null { return "{\"ok\":false}" }
+    bytes: Vec(u8)
+    ok := true
+    result: s32 = 1
+    text: [8192]u8
+    value := Text(request, "text", text[:])
+    if op == "free" {
+        Engine.WorkbookFree(book)
+        context.books[id - 1] = null
+        return "{\"ok\":true}"
+    }
+    if op == "clone" {
+        id = Keep(context, Engine.WorkbookClone(book))
+        ok = id > 0
+        if ok { book = context.books[id - 1] }
+    } else if op == "load" {
+        name: [4096]u8
+        key := Text(request, "name", name[:])
+        data := AppFileRead(files, key)
+        defer { AppFileFree(data) }
+        ok = files.status == 1
+        if ok {
+            path := AppFilePath(files, key, false)
+            defer { AppFileFree(path) }
+            descriptor := cast(*TextDescriptor)(*data)
+            view := Engine.NativeReadDocument(descriptor.data, data.count, Engine.CText(path))
+            ok = view != null
+            if ok {
+                Engine.NativeClose(book.native)
+                book.native = view
+                ok = Engine.NativeRefresh(book) != 0
+            }
+        }
+    } else if op == "save" {
+        name: [4096]u8
+        ok = Save(book, files, Text(request, "name", name[:]))
+    } else if op == "add-sheet" {
+        ok = Engine.WorkbookAddSheet(book, Engine.CText(value)) != null
+    } else if op == "set" {
+        result = Engine.WorkbookSetCell(book, sheet, row, col, Engine.CText(value))
+        ok = result != 0
+    } else if op == "copy" {
+        result = Engine.WorkbookCopyCell(book, sheet, Number(request, "from_row"), Number(request, "from_col"), row, col)
+        ok = result != 0
+    } else if op == "insert-row" { Engine.WorkbookInsertRow(book, sheet, row) }
+    else if op == "delete-row" { Engine.WorkbookDeleteRow(book, sheet, row) }
+    else if op == "insert-column" { Engine.WorkbookInsertColumn(book, sheet, col) }
+    else if op == "delete-column" { Engine.WorkbookDeleteColumn(book, sheet, col) }
+    else if op == "evaluate" { Engine.WorkbookEvaluate(book) }
+    else if op == "view" {
+        View(*bytes, book, sheet, row, col)
+        return Finish(context, *bytes)
+    } else if op == "find-ref" {
+        ref: Engine.FormulaRef
+        result = Engine.FormulaFindRef(book, Engine.CText(value), Number(request, "from"), *ref)
+        BuilderPrint(*bytes, "{\"ok\":true,\"result\":%,\"ref\":[%,%,%,%,%,%,%,%,%,%,%,%,%]}",
+            result, ref.start, ref.end, ref.corner_start, ref.sheet, ref.range,
+            ref.row1, ref.col1, ref.row2, ref.col2, ref.fixed_row1, ref.fixed_col1, ref.fixed_row2, ref.fixed_col2)
+        return Finish(context, *bytes)
+    } else if op == "prefix" {
+        prefix: [512]s8
+        Engine.FormulaSheetPrefix(Engine.CText(value), *prefix[0])
+        BuilderPrint(*bytes, "{\"ok\":true,\"text\":")
+        Quoted(*bytes, TextFromCString(cast(*u8)*prefix[0]))
+        BuilderPrint(*bytes, "}")
+        return Finish(context, *bytes)
+    } else if op == "relocate" {
+        relocated := Engine.FormulaRelocate(book, Engine.CText(value), row, col)
+        BuilderPrint(*bytes, "{\"ok\":true,\"text\":")
+        Quoted(*bytes, TextFromCString(cast(*u8)relocated))
+        Release(cast(*void)relocated)
+        BuilderPrint(*bytes, "}")
+        return Finish(context, *bytes)
+    } else if op != "new" && op != "info" && op != "clone" { ok = false }
+    BuilderPrint(*bytes, "{\"ok\":%,\"id\":%,\"result\":%", ifx ok then "true" else "false", id, result)
+    BuilderPrint(*bytes, ",\"document_status\":%", files.status)
+    Info(*bytes, book, sheet)
+    BuilderPrint(*bytes, "}")
+    return Finish(context, *bytes)
+}
