@@ -12,3 +12,5 @@
 private/
 dist/
 ziran.local.toml
+
+/backup/

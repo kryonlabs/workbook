@@ -1,14 +1,44 @@
 # Workbook ↔ Gnumeric parity notes
 
-Workbook targets drop-in compatibility with Gnumeric 1.12.x: it reads and
-writes `.gnumeric` files, evaluates the same expression language, and is
-tested 1:1 against the installed `gnumeric`/`ssconvert` (1.12.57) binaries.
+Imported documents use Gnumeric's installed native library, loaded through
+`src/gnumeric.zi`. The native document remains alive for calculation, edits,
+structural operations and saves. Undo clones it through an in-memory native
+save and load, so document metadata is part of the undo state too.
+
+`tests/gnumeric_test.zi` covers shared expressions, string time arithmetic,
+named expressions, date and decimal formats, literal strings, booleans,
+arrays and their edit boundaries, coordinates beyond 256 columns and 65,536
+rows, UTF-16 XML, edits, row changes, independent undo snapshots and native
+round trips. The source URI is retained for relative workbook links.
+Its synthetic `tests/document.gnumeric` lives outside the CSV fixture folder
+because its large coordinates would produce millions of empty CSV fields.
+
+Compare imported files against `ssconvert` from the same installed Gnumeric
+version. A newer reference can have functions or plugins missing from the
+runtime library. For the distribution installation:
+
+    GNUMERIC_SSCONVERT=/usr/bin/ssconvert make parity
+
+The basic grid displays Gnumeric's formatted cell values. Native document
+support does not imply complete UI parity: the grid retains its own layout
+and styling. Cell fonts, fills, borders, sizes, merged regions, charts, drawing
+objects and print layout are retained on save; drawing objects and print
+layout are not rendered or edited by the grid.
+Gnumeric canonicalizes function names to lowercase and exposes a leading
+apostrophe in entered text for literal strings that resemble formulas.
+Unknown features from versions newer than the installed Gnumeric are subject
+to that Gnumeric version's own import limitations.
+
+The notes below describe the file format and Workbook's independent Ziran
+engine, which still serves new workbooks and CSV. They do not define the
+native document library's feature inventory.
 
 ## The .gnumeric container
 
 A `.gnumeric` file is XML in the `http://www.gnumeric.org/v10.dtd` namespace,
 either plain or gzip-compressed. Gnumeric itself writes gzip; it accepts both
-on read. Workbook reads both and writes plain XML (valid for Gnumeric).
+on read. Workbook reads both. Imported documents are saved by Gnumeric in its native
+compressed format; new workbooks use the Ziran writer and plain XML.
 
 Minimal document Gnumeric 1.12.57 accepts:
 
@@ -16,7 +46,7 @@ Minimal document Gnumeric 1.12.57 accepts:
 <?xml version="1.0" encoding="UTF-8"?>
 <gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
   <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
-  <gnm:SheetNameIndex><gnm:SheetName>Cols="256" Rows="65536">Data</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:SheetNameIndex><gnm:SheetName gnm:Cols="256" gnm:Rows="65536">Data</gnm:SheetName></gnm:SheetNameIndex>
   <gnm:Sheets>
     <gnm:Sheet>
       <gnm:Name>Data</gnm:Name>
@@ -29,7 +59,6 @@ Minimal document Gnumeric 1.12.57 accepts:
     </gnm:Sheet>
   </gnm:Sheets>
   <gnm:UIData SelectedTab="0"/>
-</gnm:Workbook>
 </gnm:Workbook>
 ```
 
@@ -87,12 +116,11 @@ math 63, stat 103, string 29, financial 40, complex 49, random 34, lookup 20,
 info 21, date 13, database 13, eng 12, numtheory 9, logical 5, flt 4,
 christian-date 6, tsa 4, hebrew-date 1, derivatives 1.
 
-Workbook implements 131 functions today (arithmetic, aggregation,
-statistics, text, logical, date/time, lookup, information, radix
-conversions) — every one pinned 1:1 to Gnumeric's output by the fixture
-suite. The full inventory of what Gnumeric provides is tracked in
-`tests/functions-manifest.txt`; each addition follows the same recipe:
-implement, add fixture rows, verify against `ssconvert` cell by cell.
+The independent Ziran engine implements a subset of the function inventory
+for new workbooks and CSV. Imported Gnumeric documents use the installed
+native library's functions and plugins. The current parity suite verifies
+that document integration, evaluated exports and saved round trips; it is not
+a separate numerical oracle for the independent evaluator.
 
 ## 1:1 test methodology
 
@@ -101,6 +129,6 @@ Ground truth is the installed Gnumeric itself, never hand-computed:
 1. Fixture `.gnumeric` files live in `tests/fixtures/`.
 2. `ssconvert fixture.gnumeric out.csv` (LC_ALL=C) → expected values.
 3. `cell eval fixture.gnumeric` → workbook's own evaluation as CSV.
-4. `scripts/parity-test.sh` diffs both outputs cell-by-cell.
+4. `tests/parity_test.zi` compares both outputs cell by cell.
 5. Round-trip: `cell copy in out.gnumeric` writes a `.gnumeric` that Gnumeric
    re-reads with identical evaluated values.

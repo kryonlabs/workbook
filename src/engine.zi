@@ -3,10 +3,11 @@
 #load "formula_text.zi";
 #load "xml.zi";
 #load "gzip.zi";
+#load "gnumeric.zi";
 
 WB_MAX_SHEETS :: 64;
-WB_MAX_COLS :: 256;
-WB_MAX_ROWS :: 65536;
+WB_MAX_COLS :: 16384;
+WB_MAX_ROWS :: 16777216;
 WB_TEXT_MAX :: 512;
 WB_ARGS_MAX :: 4096;
 WB_DEPTH_MAX :: 64;
@@ -33,7 +34,7 @@ CELL_LITERAL :: 0;
 CELL_FORMULA :: 1;
 
 Cell :: struct {
-    key: s32
+    key: s64
     text: *s8
     kind: s32
     cached_kind: s32
@@ -56,6 +57,7 @@ Sheet :: struct {
 }
 
 Workbook :: struct {
+    native: *void
     sheets: *Sheet
     sheet_count: s32
     sheet_cap: s32
@@ -396,6 +398,7 @@ WorkbookFree :: (wb: *Workbook) {
         SheetFree(*wb.sheets[i])
         i += 1
     }
+    NativeClose(wb.native)
     MemoryFree(cast(*void)wb.sheets)
     MemoryFree(cast(*void)wb)
 }
@@ -404,6 +407,16 @@ WorkbookFree :: (wb: *Workbook) {
 // with its source, cached value and file value. The editor keeps such copies
 // as the states that undo and redo return to. Null when memory runs out.
 WorkbookClone :: (wb: *Workbook) -> *Workbook {
+    if wb.native != null {
+        copy: *Workbook = WorkbookNew()
+        if copy == null { return null }
+        copy.native = NativeClone(wb.native)
+        if copy.native == null || NativeRefresh(copy) == 0 {
+            WorkbookFree(copy)
+            return null
+        }
+        return copy
+    }
     copy: *Workbook = cast(*Workbook)MemoryAllocateZeroed(1, cast(u64)size_of(Workbook))
     if copy == null {
         return null
@@ -458,7 +471,7 @@ WorkbookCellCount :: (wb: *Workbook) -> s32 {
 }
 
 WorkbookAddSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
-    if wb.sheet_count >= WB_MAX_SHEETS {
+    if wb.native == null && wb.sheet_count >= WB_MAX_SHEETS {
         return null
     }
     if wb.sheet_count >= wb.sheet_cap {
@@ -488,19 +501,19 @@ WorkbookFindSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
     return null
 }
 
-CellKey :: (row: s32, col: s32) -> s32 {
-    return row * WB_MAX_COLS + col
+CellKey :: (row: s32, col: s32) -> s64 {
+    return cast(s64)row * WB_MAX_COLS + col
 }
 
-CellKeyRow :: (key: s32) -> s32 {
-    return key / WB_MAX_COLS
+CellKeyRow :: (key: s64) -> s32 {
+    return cast(s32)(key / WB_MAX_COLS)
 }
 
-CellKeyCol :: (key: s32) -> s32 {
-    return key % WB_MAX_COLS
+CellKeyCol :: (key: s64) -> s32 {
+    return cast(s32)(key % WB_MAX_COLS)
 }
 
-CellSearch :: (sheet: *Sheet, key: s32, at: *s32) -> s32 {
+CellSearch :: (sheet: *Sheet, key: s64, at: *s32) -> s32 {
     lo: s32 = 0
     hi: s32 = sheet.cell_count
     while lo < hi {
@@ -528,7 +541,7 @@ CellAt :: (sheet: *Sheet, row: s32, col: s32) -> *Cell {
 
 CellObtain :: (sheet: *Sheet, row: s32, col: s32) -> *Cell {
     index: s32 = 0
-    key: s32 = CellKey(row, col)
+    key: s64 = CellKey(row, col)
     if CellSearch(sheet, key, *index) != 0 {
         return *sheet.cells[index]
     }
@@ -628,6 +641,7 @@ SetCellText :: (wb: *Workbook, sheet_index: s32, row: s32, col: s32, text: *s8) 
     if row < 0 || row >= WB_MAX_ROWS || col < 0 || col >= WB_MAX_COLS {
         return 0
     }
+    if wb.native != null { return NativeSet(wb, sheet_index, row, col, text) }
     if text == null || text[0] == 0 {
         SheetDrop(sheet, row, col)
         return 1
@@ -2282,6 +2296,7 @@ SheetDeleteColumn :: (sheet: *Sheet, at_col: s32) -> s32 {
 }
 
 WorkbookInsertRow :: (wb: *Workbook, sheet_index: s32, row: s32) -> s32 {
+    if wb.native != null { return NativeShift(wb, sheet_index, row, true, true) }
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
@@ -2290,6 +2305,7 @@ WorkbookInsertRow :: (wb: *Workbook, sheet_index: s32, row: s32) -> s32 {
 }
 
 WorkbookDeleteRow :: (wb: *Workbook, sheet_index: s32, row: s32) -> s32 {
+    if wb.native != null { return NativeShift(wb, sheet_index, row, true, false) }
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
@@ -2298,6 +2314,7 @@ WorkbookDeleteRow :: (wb: *Workbook, sheet_index: s32, row: s32) -> s32 {
 }
 
 WorkbookInsertColumn :: (wb: *Workbook, sheet_index: s32, col: s32) -> s32 {
+    if wb.native != null { return NativeShift(wb, sheet_index, col, false, true) }
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
@@ -2306,6 +2323,7 @@ WorkbookInsertColumn :: (wb: *Workbook, sheet_index: s32, col: s32) -> s32 {
 }
 
 WorkbookDeleteColumn :: (wb: *Workbook, sheet_index: s32, col: s32) -> s32 {
+    if wb.native != null { return NativeShift(wb, sheet_index, col, false, false) }
     if sheet_index < 0 || sheet_index >= wb.sheet_count {
         return 0
     }
@@ -2314,6 +2332,7 @@ WorkbookDeleteColumn :: (wb: *Workbook, sheet_index: s32, col: s32) -> s32 {
 }
 
 WorkbookEvaluate :: (wb: *Workbook) {
+    if wb.native != null { unused NativeRefresh(wb); return }
     i: s32 = 0
     while i < wb.sheet_count {
         EvaluateSheet(wb, *wb.sheets[i])
@@ -28740,53 +28759,45 @@ FnPochhammer :: (st: *EvalState, args: *Val, count: s32, marks: *s32) -> Val {
 }
 
 WorkbookLoadFile :: (wb: *Workbook, path: *s8) -> s32 {
-    raw: *u8 = null
-    bytes: *u8 = null
     size: s32 = 0
-    text: *s8 = null
-    is_gzip: s32 = 0
-    ok: s32 = 0
-    raw = ReadFileBytes(path, *size)
-    if raw == null {
-        return 0
-    }
-    bytes = cast(*u8)MemoryAllocate(cast(u64)(size + 1))
-    if bytes == null {
-        FreeFileBytes(raw)
-        return 0
-    }
-    if size > 0 {
-        MemoryCopy(cast(*void)bytes, cast(*void)raw, cast(u64)size)
-    }
+    raw: *u8 = ReadFileBytes(path, *size)
+    if raw == null { return 0 }
+    bytes: *u8 = cast(*u8)MemoryAllocate(cast(u64)size + 1)
+    if bytes == null { FreeFileBytes(raw); return 0 }
+    if size > 0 { MemoryCopy(cast(*void)bytes, cast(*void)raw, cast(u64)size) }
     bytes[size] = 0
     FreeFileBytes(raw)
-    is_gzip = GzipIs(bytes, cast(u64)size)
-    if is_gzip != 0 {
-        inflated_len: u64 = 0
-        text = cast(*s8)GzipDecompress(bytes, cast(u64)size, *inflated_len)
+    first: *u8 = bytes
+    if size >= 3 && first[0] == 239 && first[1] == 187 && first[2] == 191 { first = *first[3] }
+    while IsSpaceByte(cast(s32)first[0]) != 0 { first = *first[1] }
+    length: u64 = TextLength(path)
+    document: bool = length >= 9 && TextCompareFoldLiteral(*path[length - 9], ".gnumeric") == 0
+    csv: bool = length >= 4 && TextCompareFoldLiteral(*path[length - 4], ".csv") == 0
+    csv_gzip: bool = length >= 7 && TextCompareFoldLiteral(*path[length - 7], ".csv.gz") == 0
+    if csv_gzip {
+        inflated: u64 = 0
+        text: *u8 = GzipDecompress(bytes, cast(u64)size, *inflated)
         FreeFileBytes(bytes)
-        if text == null {
-            return 0
-        }
-    } else {
-        text = cast(*s8)bytes
-    }
-    ok = 0
-    if TextCompareNLiteral(text, "<?xml", 5) == 0 || TextFindLiteral(text, "<gnm:Workbook") != null || TextFindLiteral(text, "<Workbook") != null {
-        ok = ParseGnumericXml(wb, text)
-    } else {
-        ok = ParseCsvIntoSheet(wb, text)
-    }
-    if is_gzip != 0 {
+        if text == null { return 0 }
+        ok: s32 = ParseCsvIntoSheet(wb, cast(*s8)text)
         MemoryFree(cast(*void)text)
-    } else {
-        FreeFileBytes(cast(*u8)text)
+        if ok != 0 { WorkbookEvaluate(wb) }
+        return ok
     }
-    if ok != 0 {
-        WorkbookEvaluate(wb)
-        return 1
+    if document || (!csv && (first[0] == 60 || GzipIs(bytes, cast(u64)size) != 0)) {
+        // Pass the original bytes and their length to Gnumeric: it handles
+        // compression, XML encodings, namespaces and shared expressions.
+        view: *void = NativeReadDocument(bytes, cast(s64)size, path)
+        FreeFileBytes(bytes)
+        if view == null { return 0 }
+        NativeClose(wb.native)
+        wb.native = view
+        return NativeRefresh(wb)
     }
-    return 0
+    ok: s32 = ParseCsvIntoSheet(wb, cast(*s8)bytes)
+    FreeFileBytes(bytes)
+    if ok != 0 { WorkbookEvaluate(wb) }
+    return ok
 }
 
 ParseGnumericXml :: (wb: *Workbook, text: *s8) -> s32 {
@@ -28902,6 +28913,7 @@ ParseGnumericCell :: (sheet: *Sheet, node: *XmlNode) {
 }
 
 WorkbookWriteGnumeric :: (wb: *Workbook, path: *s8) -> s32 {
+    if wb.native != null { return NativeSave(wb.native, path, false) }
     buf: XmlBuffer
     ok: s32 = 0
     sheet_index: s32 = 0
@@ -28911,7 +28923,18 @@ WorkbookWriteGnumeric :: (wb: *Workbook, path: *s8) -> s32 {
     XmlBufferRaw(*buf, CText("  <gnm:SheetNameIndex>\n"))
     sheet_index = 0
     while sheet_index < wb.sheet_count {
-        XmlBufferRaw(*buf, CText("    <gnm:SheetName gnm:Cols=\"256\" gnm:Rows=\"65536\">"))
+        columns: s32 = 256
+        rows: s32 = 65536
+        while columns <= wb.sheets[sheet_index].max_col && columns < WB_MAX_COLS { columns *= 2 }
+        while rows <= wb.sheets[sheet_index].max_row && rows < WB_MAX_ROWS { rows *= 2 }
+        dimension: [32]s8
+        XmlBufferRaw(*buf, CText("    <gnm:SheetName gnm:Cols=\""))
+        FormatNumber(cast(float64)columns, *dimension[0], 32)
+        XmlBufferRaw(*buf, *dimension[0])
+        XmlBufferRaw(*buf, CText("\" gnm:Rows=\""))
+        FormatNumber(cast(float64)rows, *dimension[0], 32)
+        XmlBufferRaw(*buf, *dimension[0])
+        XmlBufferRaw(*buf, CText("\">"))
         XmlBufferEsc(*buf, *wb.sheets[sheet_index].name[0])
         XmlBufferRaw(*buf, CText("</gnm:SheetName>\n"))
         sheet_index += 1
@@ -29099,6 +29122,7 @@ WriteCsvField :: (buf: *XmlBuffer, text: *s8) {
 }
 
 WorkbookExportCsv :: (wb: *Workbook, path: *s8) -> s32 {
+    if wb.native != null { return NativeSave(wb.native, path, true) }
     buf: XmlBuffer
     ok: s32 = 0
     if wb.sheet_count == 0 {
@@ -29212,6 +29236,10 @@ WorkbookCellText :: (wb: *Workbook, index: s32, row: s32, col: s32) -> *s8 {
 }
 
 WorkbookCellDisplay :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *s8, cap: s32) {
+    if wb.native != null && index >= 0 && index < wb.sheet_count {
+        NativeDisplay(wb, index, row, col, out, cap)
+        return
+    }
     cell: *Cell = null
     v: Val
     if index < 0 || index >= wb.sheet_count {

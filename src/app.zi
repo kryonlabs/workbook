@@ -40,8 +40,8 @@ FreeBytes :: (block: *void) #foreign libc "free";
 TimeSpec :: struct { seconds: s64; nanoseconds: s64; }
 ClockTime :: (clock: s32, value: *TimeSpec) -> s32 #foreign libc "clock_gettime";
 
-MaxRows :: 200;
-MaxColumns :: 40;
+MaxRows :: 16777216; // GNM_MAX_ROWS
+MaxColumns :: 16384; // GNM_MAX_COLS
 CellTextMax :: 256;
 ColumnWidth :: 110.0;
 RowHeight :: 28.0;
@@ -85,6 +85,7 @@ edit_sheet: s32 = 0;
 scroll_row: s32 = 0;
 scroll_column: s32 = 0;
 dirty: bool = false;
+load_failed: bool = false;
 // A failed save is tried again at this monotonic time, in milliseconds. It is
 // a time, not a frame count: an idle window draws fewer frames.
 save_retry_at: s64 = 0;
@@ -274,7 +275,13 @@ LoadWorkbook :: () {
         override = null
         if profile_name == "geld" { override = EnvironmentValue(CPath("GELD_DIR")) }
     }
-    if override != null && override[0] != 0 {
+    explicit: [4096]u8
+    if OpenFileArgument(explicit[:]) {
+        SetText(data_path[:], TextUntilNul(explicit[:]))
+        name: string = TextUntilNul(explicit[:])
+        base: s32 = cast(s32)name.count - cast(s32)FileName(name).count
+        if base > 0 { SetText(data_directory[:], name[0:base]) }
+    } else if override != null && override[0] != 0 {
         SetText(data_directory[:], TextFromCString(override))
         SetText(data_path[:], TextFromCString(override))
         AppendText(data_path[:], "/workbook.gnumeric")
@@ -313,7 +320,11 @@ LoadWorkbook :: () {
         }
     }
     if !imported && PathAccess(*data_path[0], 0) == 0 {
-        unused Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0])
+        load_failed = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) == 0
+        if load_failed {
+            SetText(status[:], "Could not open ")
+            AppendText(status[:], FileName(path))
+        }
     }
     // A file supplies its own sheets; a new workbook starts with one.
     if Engine.WorkbookSheetCount(workbook) == 0 {
@@ -346,6 +357,8 @@ EnsureDataDirectory :: () -> bool {
 }
 
 SaveWorkbook :: (finish_edit: bool) {
+    // A failed import must never autosave an empty grid over its source.
+    if load_failed { return }
     if finish_edit && edit_focused {
         CommitCell()
         EndEdit()
@@ -1292,7 +1305,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     while column < scroll_column + visible_columns && column < columns {
         name: [8]u8
         AppendCellColumn(name[:], column)
-        GridSquare(session, 20 + column, Rectangle.{ColumnX(table, column), table.y,
+        GridSquare(session, 20 + column - scroll_column, Rectangle.{ColumnX(table, column), table.y,
                 ColumnWidth, HeaderHeight}, ifx here && selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
         column += 1
     }
@@ -1302,14 +1315,15 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         y: float32 = RowY(table, row)
         number: [16]u8
         FormatBytes(*number[0], 16, cast(*u8)Engine.CText("%d"), row + 1)
-        GridSquare(session, 100 + row, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
+        GridSquare(session, 1000 + shown, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
             ifx here && selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
         column = scroll_column
         while column < scroll_column + visible_columns && column < columns {
             display: [256]u8
             Engine.WorkbookCellDisplay(workbook, sheet_index, row, column,
                 cast(*s8)*display[0], 256)
-            Engine.RoundForDisplay(cast(*s8)*display[0], 256)
+            // Imported cells already use Gnumeric's exact number format.
+            if workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
             fill: Color = CellBackground()
             // A range is shaded around its active cell, as in Gnumeric.
             active: bool = row == selected_row && column == selected_column
@@ -1317,7 +1331,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
             in_rows: bool = selection_axis == 2 || (row >= first_row && row <= last_row)
             in_columns: bool = selection_axis == 1 || (column >= first_column && column <= last_column)
             if here && in_rows && in_columns && !(spans && active) { fill = SelectedBackground() }
-            GridSquare(session, 1000 + row * 64 + column,
+            GridSquare(session, 10000 + shown * visible_columns + column - scroll_column,
                 Rectangle.{ColumnX(table, column), y, ColumnWidth, RowHeight},
                 fill, TextUntilNul(display[:]))
             column += 1
@@ -1703,14 +1717,14 @@ RowY :: (table: Rectangle, row: s32) -> float32 {
 // One grid square: a bordered box and its clipped text.
 GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: Color, text: string) {
     box: BoxProps
-    box.key = cast(u64)(100000 + key)
+    box.key = 1000000 + cast(u64)key * 2
     box.bounds = bounds
     box.fill = fill
     box.border = GridLineColor()
     Box(session, box)
     if text.count == 0 { return }
     label: TextProps
-    label.key = cast(u64)(200000 + key)
+    label.key = 1000001 + cast(u64)key * 2
     label.text = text
     label.font = Text14
     label.wrap = cast(TextWrap)TextWrapNone
@@ -1819,6 +1833,29 @@ ProfileName :: (name: string) -> bool {
         c: u8 = name[i]
         if !((c >= #char "a" && c <= #char "z") || (c >= #char "0" && c <= #char "9") || c == #char "-" || c == #char "_") { return false }
     }
+    return true
+}
+
+// Linux's native host owns main; read its file argument without changing
+// the profile selection for launches that supplied no document.
+OpenFileArgument :: (out: []u8) -> bool {
+    command: [8192]u8
+    descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
+    if descriptor < 0 { return false }
+    length: s64 = ReadFileBytes(descriptor, *command[0], 8191)
+    CloseFile(descriptor)
+    if length <= 0 { return false }
+    at: s32 = 0
+    while at < cast(s32)length && command[at] != 0 { at += 1 }
+    at += 1
+    if at >= cast(s32)length { return false }
+    end: s32 = at
+    while end < cast(s32)length && command[end] != 0 { end += 1 }
+    name: string = TextView(command[at:end])
+    if name.count < 9 { return false }
+    suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
+    if Engine.TextCompareFoldLiteral(cast(*s8)CPath(suffix), ".gnumeric") != 0 { return false }
+    SetText(out, name)
     return true
 }
 

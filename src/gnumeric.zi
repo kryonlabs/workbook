@@ -1,0 +1,373 @@
+// Gnumeric's native document engine owns imported .gnumeric workbooks.
+// Its public C ABI is loaded on demand; the editor and headless driver stay
+// Ziran. Keeping the native document retains styles, names, arrays, charts,
+// print settings and shared expressions through edits, saves and undo.
+NativeArray :: struct { data: **void; count: u32; }
+NativePosition :: struct { col: s32; row: s32; }
+
+#scope_file
+native_dl :: #system_library "dl";
+NativeOpenLibrary :: (name: *s8, flags: s32) -> *void #foreign native_dl "dlopen";
+NativeSymbol :: (library: *void, name: *s8) -> *void #foreign native_dl "dlsym";
+native_library: *void;
+native_context: *void;
+native_tried: bool;
+native_ready: bool;
+NativeFn_pre_init :: #type (s32, **s8) -> *void #c_call;
+native_pre_init: NativeFn_pre_init;
+NativeFn_initialize :: #type () #c_call;
+native_initialize: NativeFn_initialize;
+NativeFn_new_context :: #type () -> *void #c_call;
+native_new_context: NativeFn_new_context;
+NativeFn_plugins_init :: #type (*void) #c_call;
+native_plugins_init: NativeFn_plugins_init;
+NativeFn_plugins :: #type () -> *void #c_call;
+native_plugins: NativeFn_plugins;
+NativeFn_activate :: #type (*void, **void) #c_call;
+native_activate: NativeFn_activate;
+NativeFn_error_free :: #type (*void) #c_call;
+native_error_free: NativeFn_error_free;
+NativeFn_new_io :: #type (*void) -> *void #c_call;
+native_new_io: NativeFn_new_io;
+NativeFn_io_failed :: #type (*void) -> s32 #c_call;
+native_io_failed: NativeFn_io_failed;
+NativeFn_release :: #type (*void) #c_call;
+native_release: NativeFn_release;
+NativeFn_error_release :: #type (*void) #c_call;
+native_error_release: NativeFn_error_release;
+NativeFn_free :: #type (*void) #c_call;
+native_free: NativeFn_free;
+NativeFn_get_name :: #type (*void, *s8, **s8, *void) #c_call;
+native_get_name: NativeFn_get_name;
+NativeFn_array_release :: #type (*void) #c_call;
+native_array_release: NativeFn_array_release;
+NativeFn_input_memory :: #type (*u8, s64, s32) -> *void #c_call;
+native_input_memory: NativeFn_input_memory;
+NativeFn_read :: #type (*void, *s8, *void, *void, *s8) -> *void #c_call;
+native_read: NativeFn_read;
+NativeFn_book :: #type (*void) -> *void #c_call;
+native_book: NativeFn_book;
+NativeFn_sheet_count :: #type (*void) -> s32 #c_call;
+native_sheet_count: NativeFn_sheet_count;
+NativeFn_sheet :: #type (*void, s32) -> *void #c_call;
+native_sheet: NativeFn_sheet;
+NativeFn_positions :: #type (*void, s32) -> *NativeArray #c_call;
+native_positions: NativeFn_positions;
+NativeFn_cell :: #type (*void, s32, s32) -> *void #c_call;
+native_cell: NativeFn_cell;
+NativeFn_fetch :: #type (*void, s32, s32) -> *void #c_call;
+native_fetch: NativeFn_fetch;
+NativeFn_source :: #type (*void) -> *s8 #c_call;
+native_source: NativeFn_source;
+NativeFn_display :: #type (*void) -> *s8 #c_call;
+native_display: NativeFn_display;
+NativeFn_value :: #type (*void) -> *void #c_call;
+native_value: NativeFn_value;
+NativeFn_value_type :: #type (*void) -> s32 #c_call;
+native_value_type: NativeFn_value_type;
+NativeFn_number :: #type (*void) -> float64 #c_call;
+native_number: NativeFn_number;
+NativeFn_value_text :: #type (*void) -> *s8 #c_call;
+native_value_text: NativeFn_value_text;
+NativeFn_recalculate :: #type (*void) #c_call;
+native_recalculate: NativeFn_recalculate;
+NativeFn_set_text :: #type (*void, *s8, *void) #c_call;
+native_set_text: NativeFn_set_text;
+NativeFn_remove :: #type (*void, *void, s32, s32) #c_call;
+native_remove: NativeFn_remove;
+NativeFn_array_cell :: #type (*void) -> s32 #c_call;
+native_array_cell: NativeFn_array_cell;
+NativeFn_insert_rows :: #type (*void, s32, s32, *void, *void) -> s32 #c_call;
+native_insert_rows: NativeFn_insert_rows;
+NativeFn_delete_rows :: #type (*void, s32, s32, *void, *void) -> s32 #c_call;
+native_delete_rows: NativeFn_delete_rows;
+NativeFn_insert_cols :: #type (*void, s32, s32, *void, *void) -> s32 #c_call;
+native_insert_cols: NativeFn_insert_cols;
+NativeFn_delete_cols :: #type (*void, s32, s32, *void, *void) -> s32 #c_call;
+native_delete_cols: NativeFn_delete_cols;
+NativeFn_canonical_path :: #type (*s8, *s8) -> *s8 #c_call;
+native_canonical_path: NativeFn_canonical_path;
+NativeFn_filename_uri :: #type (*s8, *s8, *void) -> *s8 #c_call;
+native_filename_uri: NativeFn_filename_uri;
+NativeFn_document_uri :: #type (*void) -> *s8 #c_call;
+native_document_uri: NativeFn_document_uri;
+NativeFn_opener :: #type (*s8) -> *void #c_call;
+native_opener: NativeFn_opener;
+NativeFn_saver :: #type (*s8) -> *void #c_call;
+native_saver: NativeFn_saver;
+NativeFn_output_file :: #type (*s8, **void) -> *void #c_call;
+native_output_file: NativeFn_output_file;
+NativeFn_output_memory :: #type () -> *void #c_call;
+native_output_memory: NativeFn_output_memory;
+NativeFn_output_size :: #type (*void) -> s64 #c_call;
+native_output_size: NativeFn_output_size;
+NativeFn_output_bytes :: #type (*void) -> *u8 #c_call;
+native_output_bytes: NativeFn_output_bytes;
+NativeFn_output_closed :: #type (*void) -> s32 #c_call;
+native_output_closed: NativeFn_output_closed;
+NativeFn_output_close :: #type (*void) -> s32 #c_call;
+native_output_close: NativeFn_output_close;
+NativeFn_write :: #type (*void, *void, *void, *void) #c_call;
+native_write: NativeFn_write;
+NativeFn_current_sheet :: #type (*void) -> *void #c_call;
+native_current_sheet: NativeFn_current_sheet;
+NativeFn_focus_sheet :: #type (*void, *void) #c_call;
+native_focus_sheet: NativeFn_focus_sheet;
+
+NativeResolve :: (slot: *void, name: string) -> bool {
+    symbol: *void = NativeSymbol(native_library, CText(name))
+    if symbol == null { return false }
+    MemoryCopy(slot, cast(*void)*symbol, size_of(*void))
+    return true
+}
+
+#scope_export
+NativeReady :: () -> bool {
+    if native_tried { return native_ready }
+    native_tried = true
+    native_library = NativeOpenLibrary(CText("libspreadsheet.so"), 1)
+    if native_library == null { return false }
+    ok: bool = true
+    ok = ok && NativeResolve(cast(*void)*native_pre_init, "gnm_pre_parse_init")
+    ok = ok && NativeResolve(cast(*void)*native_initialize, "gnm_init")
+    ok = ok && NativeResolve(cast(*void)*native_new_context, "gnm_cmd_context_stderr_new")
+    ok = ok && NativeResolve(cast(*void)*native_plugins_init, "gnm_plugins_init")
+    ok = ok && NativeResolve(cast(*void)*native_plugins, "go_plugins_get_available_plugins")
+    ok = ok && NativeResolve(cast(*void)*native_activate, "go_plugin_db_activate_plugin_list")
+    ok = ok && NativeResolve(cast(*void)*native_error_free, "go_error_info_free")
+    ok = ok && NativeResolve(cast(*void)*native_new_io, "go_io_context_new")
+    ok = ok && NativeResolve(cast(*void)*native_io_failed, "go_io_error_occurred")
+    ok = ok && NativeResolve(cast(*void)*native_release, "g_object_unref")
+    ok = ok && NativeResolve(cast(*void)*native_free, "g_free")
+    ok = ok && NativeResolve(cast(*void)*native_get_name, "g_object_get")
+    ok = ok && NativeResolve(cast(*void)*native_array_release, "g_ptr_array_unref")
+    ok = ok && NativeResolve(cast(*void)*native_input_memory, "gsf_input_memory_new")
+    ok = ok && NativeResolve(cast(*void)*native_read, "workbook_view_new_from_input")
+    ok = ok && NativeResolve(cast(*void)*native_book, "wb_view_get_workbook")
+    ok = ok && NativeResolve(cast(*void)*native_sheet_count, "workbook_sheet_count")
+    ok = ok && NativeResolve(cast(*void)*native_sheet, "workbook_sheet_by_index")
+    ok = ok && NativeResolve(cast(*void)*native_positions, "sheet_cell_positions")
+    ok = ok && NativeResolve(cast(*void)*native_cell, "sheet_cell_get")
+    ok = ok && NativeResolve(cast(*void)*native_fetch, "sheet_cell_fetch")
+    ok = ok && NativeResolve(cast(*void)*native_source, "gnm_cell_get_entered_text")
+    ok = ok && NativeResolve(cast(*void)*native_display, "gnm_cell_get_rendered_text")
+    ok = ok && NativeResolve(cast(*void)*native_value, "gnm_cell_get_value")
+    ok = ok && NativeResolve(cast(*void)*native_value_type, "value_type_of")
+    ok = ok && NativeResolve(cast(*void)*native_number, "value_get_as_float")
+    ok = ok && NativeResolve(cast(*void)*native_value_text, "value_get_as_string")
+    ok = ok && NativeResolve(cast(*void)*native_recalculate, "workbook_recalc_all")
+    ok = ok && NativeResolve(cast(*void)*native_set_text, "sheet_cell_set_text")
+    ok = ok && NativeResolve(cast(*void)*native_remove, "sheet_cell_remove")
+    ok = ok && NativeResolve(cast(*void)*native_array_cell, "gnm_cell_is_nonsingleton_array")
+    ok = ok && NativeResolve(cast(*void)*native_insert_rows, "sheet_insert_rows")
+    ok = ok && NativeResolve(cast(*void)*native_delete_rows, "sheet_delete_rows")
+    ok = ok && NativeResolve(cast(*void)*native_insert_cols, "sheet_insert_cols")
+    ok = ok && NativeResolve(cast(*void)*native_delete_cols, "sheet_delete_cols")
+    ok = ok && NativeResolve(cast(*void)*native_saver, "go_file_saver_for_id")
+    ok = ok && NativeResolve(cast(*void)*native_output_file, "gsf_output_stdio_new")
+    ok = ok && NativeResolve(cast(*void)*native_output_memory, "gsf_output_memory_new")
+    ok = ok && NativeResolve(cast(*void)*native_output_size, "gsf_output_size")
+    ok = ok && NativeResolve(cast(*void)*native_output_bytes, "gsf_output_memory_get_bytes")
+    ok = ok && NativeResolve(cast(*void)*native_output_closed, "gsf_output_is_closed")
+    ok = ok && NativeResolve(cast(*void)*native_output_close, "gsf_output_close")
+    ok = ok && NativeResolve(cast(*void)*native_write, "workbook_view_save_to_output")
+    ok = ok && NativeResolve(cast(*void)*native_current_sheet, "wb_view_cur_sheet")
+    ok = ok && NativeResolve(cast(*void)*native_focus_sheet, "wb_view_sheet_focus")
+    ok = ok && NativeResolve(cast(*void)*native_error_release, "g_error_free")
+    ok = ok && NativeResolve(cast(*void)*native_opener, "go_file_opener_for_id")
+    ok = ok && NativeResolve(cast(*void)*native_canonical_path, "g_canonicalize_filename")
+    ok = ok && NativeResolve(cast(*void)*native_filename_uri, "g_filename_to_uri")
+    ok = ok && NativeResolve(cast(*void)*native_document_uri, "go_doc_get_uri")
+    if !ok { return false }
+    argv: [2]*s8
+    argv[0] = CText("workbook")
+    unused native_pre_init(1, *argv[0])
+    native_initialize()
+    native_context = native_new_context()
+    native_plugins_init(native_context)
+    error: *void
+    native_activate(native_plugins(), *error)
+    // Optional plugin activation failures do not disable the core reader.
+    if error != null { native_error_free(error) }
+    native_ready = true
+    return true
+}
+
+NativeRead :: (bytes: *u8, count: s64, uri: *s8 = null) -> *void {
+    if !NativeReady() { return null }
+    input: *void = native_input_memory(bytes, count, 0)
+    if input == null { return null }
+    io: *void = native_new_io(native_context)
+    opener: *void = native_opener(CText("Gnumeric_XmlIO:sax"))
+    view: *void
+    if opener != null { view = native_read(input, uri, opener, io, null) }
+    failed: bool = native_io_failed(io) != 0
+    native_release(io)
+    native_release(input)
+    if failed && view != null { native_release(view); view = null }
+    return view
+}
+
+// Supply the source URI so Gnumeric can resolve relative workbook links.
+NativeReadDocument :: (bytes: *u8, count: s64, path: *s8) -> *void {
+    if !NativeReady() { return null }
+    absolute: *s8 = native_canonical_path(path, null)
+    if absolute == null { return null }
+    uri: *s8 = native_filename_uri(absolute, null, null)
+    native_free(cast(*void)absolute)
+    if uri == null { return null }
+    view: *void = NativeRead(bytes, count, uri)
+    native_free(cast(*void)uri)
+    return view
+}
+
+NativeClose :: (view: *void) { if view != null { native_release(view) } }
+
+NativeWriteOutput :: (view: *void, output: *void, format: *s8) -> bool {
+    saver: *void = native_saver(format)
+    if saver == null { return false }
+    io: *void = native_new_io(native_context)
+    native_write(view, saver, output, io)
+    ok: bool = native_io_failed(io) == 0
+    if native_output_closed(output) == 0 {
+        if native_output_close(output) == 0 { ok = false }
+    }
+    native_release(io)
+    return ok
+}
+
+NativeSave :: (view: *void, path: *s8, csv: bool) -> s32 {
+    error: *void
+    // CSV is also written to pipes such as /dev/stdout. The native file
+    // output requires a seekable file; its memory output has no such limit.
+    output: *void = ifx csv then native_output_memory() else native_output_file(path, *error)
+    if output == null {
+        if error != null { native_error_release(error) }
+        return 0
+    }
+    previous: *void = native_current_sheet(view)
+    if csv { native_focus_sheet(view, native_sheet(native_book(view), 0)) }
+    ok: bool = NativeWriteOutput(view, output,
+        ifx csv then CText("Gnumeric_stf:stf_csv") else CText("Gnumeric_XmlIO:sax"))
+    if csv {
+        native_focus_sheet(view, previous)
+        if ok {
+            count: s64 = native_output_size(output)
+            bytes: *s8 = cast(*s8)MemoryAllocate(cast(u64)count + 1)
+            if bytes == null { ok = false }
+            else {
+                MemoryCopy(cast(*void)bytes, cast(*void)native_output_bytes(output), cast(u64)count)
+                bytes[count] = 0
+                ok = WriteFileText(path, bytes)
+                MemoryFree(cast(*void)bytes)
+            }
+        }
+    }
+    native_release(output)
+    return ifx ok then 1 else 0
+}
+
+NativeClone :: (view: *void) -> *void {
+    output: *void = native_output_memory()
+    if output == null { return null }
+    copy: *void
+    if NativeWriteOutput(view, output, CText("Gnumeric_XmlIO:sax")) {
+        copy = NativeRead(native_output_bytes(output), native_output_size(output), native_document_uri(native_book(view)))
+    }
+    native_release(output)
+    return copy
+}
+
+NativeRefresh :: (wb: *Workbook) -> s32 {
+    // All model text is owned by Workbook; native pointers never outlive a
+    // call. Rebuilding also picks up dependencies changed by an edit.
+    for i: 0..wb.sheet_count - 1 { SheetFree(*wb.sheets[i]) }
+    wb.sheet_count = 0
+    book: *void = native_book(wb.native)
+    native_recalculate(book)
+    count: s32 = native_sheet_count(book)
+    index: s32 = 0
+    while index < count {
+        source: *void = native_sheet(book, index)
+        name: *s8
+        native_get_name(source, CText("name"), *name, null)
+        sheet: *Sheet = WorkbookAddSheet(wb, name)
+        native_free(cast(*void)name)
+        if sheet == null { return 0 }
+        positions: *NativeArray = native_positions(source, 0)
+        if positions != null {
+            at: u32 = 0
+            while at < positions.count {
+                position: *NativePosition = cast(*NativePosition)positions.data[at]
+                node: *void = native_cell(source, position.col, position.row)
+                cell: *Cell = CellObtain(sheet, position.row, position.col)
+                if cell != null && node != null {
+                    cell.text = native_source(node)
+                    value: *void = native_value(node)
+                    kind: s32 = native_value_type(value)
+                    cell.kind = ifx cell.text != null && cell.text[0] == 61 then CELL_FORMULA else CELL_LITERAL
+                    cell.computed = 1
+                    if kind == 20 || kind == 40 {
+                        cell.cached_kind = ifx kind == 20 then VAL_BOOL else VAL_FLOAT
+                        cell.cached_number = native_number(value)
+                    } else if kind == 50 {
+                        cell.cached_kind = VAL_ERROR
+                        message: *s8 = native_value_text(value)
+                        cell.cached_err = ErrFromText(message)
+                        native_free(cast(*void)message)
+                    } else if kind == 60 {
+                        cell.cached_kind = VAL_STRING
+                        cell.cached_text = native_value_text(value)
+                    }
+                }
+                at += 1
+            }
+            native_array_release(cast(*void)positions)
+        }
+        SheetExtent(sheet)
+        index += 1
+    }
+    return 1
+}
+
+NativeSet :: (wb: *Workbook, index: s32, row: s32, col: s32, text: *s8) -> s32 {
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    cell: *void = native_cell(sheet, col, row)
+    // Match Gnumeric: an array cannot be changed one constituent cell at a time.
+    if cell != null && native_array_cell(cell) != 0 { return 0 }
+    if text == null || text[0] == 0 {
+        if cell != null { native_remove(sheet, cell, 0, 1) }
+    } else {
+        cell = native_fetch(sheet, col, row)
+        if cell == null { return 0 }
+        native_set_text(cell, text, null)
+    }
+    return NativeRefresh(wb)
+}
+
+NativeShift :: (wb: *Workbook, index: s32, at: s32, rows: bool, insert: bool) -> s32 {
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    result: s32
+    if rows {
+        if insert { result = native_insert_rows(sheet, at, 1, null, native_context) }
+        else { result = native_delete_rows(sheet, at, 1, null, native_context) }
+    } else {
+        if insert { result = native_insert_cols(sheet, at, 1, null, native_context) }
+        else { result = native_delete_cols(sheet, at, 1, null, native_context) }
+    }
+    if result != 0 { return 0 }
+    return NativeRefresh(wb)
+}
+
+NativeDisplay :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *s8, cap: s32) {
+    out[0] = 0
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    cell: *void = native_cell(sheet, col, row)
+    if cell == null { return }
+    text: *s8 = native_display(cell)
+    if text != null {
+        FormatText(out, cast(u64)cap, CText("%s"), text)
+        native_free(cast(*void)text)
+    }
+}

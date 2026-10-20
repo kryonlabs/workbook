@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="57" Full="1.12.57"/>
+  <gnm:SheetNameIndex><gnm:SheetName gnm:Cols="512" gnm:Rows="131072">Time</gnm:SheetName><gnm:SheetName>Notes</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets>
+    <gnm:Sheet>
+      <gnm:Name>Time</gnm:Name><gnm:MaxCol>300</gnm:MaxCol><gnm:MaxRow>100000</gnm:MaxRow>
+      <gnm:Names><gnm:Name><gnm:name>Duration</gnm:name><gnm:value>$D$2+$D$3</gnm:value><gnm:position>A1</gnm:position></gnm:Name></gnm:Names>
+      <gnm:Styles>
+        <gnm:StyleRegion startCol="0" startRow="1" endCol="0" endRow="2"><gnm:Style Format="yyyy-mm-dd" Back="CCCC:FFFF:FFFF" Shade="1"><gnm:Font Bold="1" Unit="10">Sans</gnm:Font></gnm:Style></gnm:StyleRegion>
+        <gnm:StyleRegion startCol="3" startRow="1" endCol="3" endRow="4"><gnm:Style Format="0.00"/></gnm:StyleRegion>
+      </gnm:Styles>
+      <gnm:Cols DefaultSizePts="67.5"><gnm:ColInfo No="0" Unit="100" Count="1" HardSize="1"/></gnm:Cols>
+      <gnm:Rows DefaultSizePts="15"><gnm:RowInfo No="0" Unit="22" Count="1" HardSize="1"/></gnm:Rows>
+      <gnm:Cells>
+        <gnm:Cell Row="0" Col="0" ValueType="60">Date</gnm:Cell>
+        <gnm:Cell Row="1" Col="0" ValueType="40">46027</gnm:Cell>
+        <gnm:Cell Row="1" Col="1" ValueType="60">09:15</gnm:Cell>
+        <gnm:Cell Row="1" Col="2" ValueType="60">10:15</gnm:Cell>
+        <gnm:Cell Row="1" Col="3" ExprID="1">=(C2-B2)*24</gnm:Cell>
+        <gnm:Cell Row="2" Col="0" ValueType="40">46028</gnm:Cell>
+        <gnm:Cell Row="2" Col="1" ValueType="60">09:15</gnm:Cell>
+        <gnm:Cell Row="2" Col="2" ValueType="60">10:45</gnm:Cell>
+        <gnm:Cell Row="2" Col="3" ExprID="1"/>
+        <gnm:Cell Row="3" Col="3">=SUM(D2:D3)</gnm:Cell>
+        <gnm:Cell Row="4" Col="3">=Duration</gnm:Cell>
+        <gnm:Cell Row="7" Col="0" Rows="2" Cols="1">=TRANSPOSE({1,2})</gnm:Cell>
+        <gnm:Cell Row="100000" Col="300" ValueType="40">42</gnm:Cell>
+      </gnm:Cells>
+      <gnm:MergedRegions><gnm:Merge>A6:B6</gnm:Merge></gnm:MergedRegions>
+    </gnm:Sheet>
+    <gnm:Sheet><gnm:Name>Notes</gnm:Name><gnm:MaxCol>1</gnm:MaxCol><gnm:MaxRow>1</gnm:MaxRow>
+      <gnm:Cells>
+        <gnm:Cell Row="0" Col="0" ValueType="60">=literal &amp; text</gnm:Cell>
+        <gnm:Cell Row="0" Col="1" ValueType="60">000123</gnm:Cell>
+        <gnm:Cell Row="1" Col="0" ValueType="20">TRUE</gnm:Cell>
+        <gnm:Cell Row="1" Col="1" ValueType="60">Überprüfung</gnm:Cell>
+      </gnm:Cells>
+    </gnm:Sheet>
+  </gnm:Sheets><gnm:UIData SelectedTab="0"/>
+</gnm:Workbook>

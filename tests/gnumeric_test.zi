@@ -1,0 +1,112 @@
+// Imported documents use Gnumeric for interpretation and round trips. The
+// fixture is synthetic; no owner workbooks belong in the repository.
+#load "test_support.zi";
+Engine :: #import "engine";
+
+ExpectSource :: (book: *Engine.Workbook, sheet: s32, row: s32, col: s32, text: string) {
+    Check(Engine.TextCompareLiteral(Engine.WorkbookCellText(book, sheet, row, col), text) == 0,
+        "imported cell source differs")
+}
+ExpectDisplay :: (book: *Engine.Workbook, sheet: s32, row: s32, col: s32, text: string) {
+    output: [256]s8
+    Engine.WorkbookCellDisplay(book, sheet, row, col, *output[0], 256)
+    if Engine.TextCompareLiteral(*output[0], text) != 0 {
+        SayWith("Expected: ", text)
+        SayWith("Actual: ", TextFromCString(cast(*u8)*output[0]))
+        Fail("Gnumeric display differs")
+    }
+}
+
+#program_export
+main :: () -> s32 {
+    book: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(book, Engine.CText("tests/document.gnumeric")) != 0, "cannot import Gnumeric document")
+    Check(book.native != null && Engine.WorkbookSheetCount(book) == 2, "native document not retained")
+    ExpectSource(book, 0, 2, 3, "=(C3-B3)*24")
+    ExpectSource(book, 0, 100000, 300, "42")
+    ExpectDisplay(book, 0, 1, 0, "2026-01-05")
+    ExpectDisplay(book, 0, 2, 3, "1.50")
+    ExpectDisplay(book, 0, 3, 3, "2.50")
+    ExpectDisplay(book, 0, 4, 3, "2.50")
+    ExpectDisplay(book, 1, 0, 0, "=literal & text")
+    ExpectDisplay(book, 1, 0, 1, "000123")
+    ExpectDisplay(book, 1, 1, 0, "TRUE")
+    ExpectDisplay(book, 0, 7, 0, "1")
+    ExpectDisplay(book, 0, 8, 0, "2")
+    Check(Engine.WorkbookSetCell(book, 0, 8, 0, Engine.CText("99")) == 0, "part of an array was overwritten")
+    copy: *Engine.Workbook = Engine.WorkbookClone(book)
+    Check(copy != null, "native undo snapshot failed")
+    Check(Engine.WorkbookSetCell(book, 0, 2, 2, Engine.CText("11:15")) != 0, "native edit failed")
+    ExpectDisplay(book, 0, 2, 3, "2.00")
+    ExpectDisplay(book, 0, 4, 3, "3.00")
+    ExpectDisplay(copy, 0, 2, 3, "1.50")
+    Check(Engine.WorkbookInsertRow(book, 0, 0) != 0, "native row insertion failed")
+    ExpectDisplay(book, 0, 2, 0, "2026-01-05")
+    ExpectDisplay(book, 0, 5, 3, "3.00")
+    Check(Engine.WorkbookDeleteRow(book, 0, 0) != 0, "native row deletion failed")
+    ExpectDisplay(book, 0, 1, 0, "2026-01-05")
+    template: [4096]u8
+    SetText(template[:], "/tmp/workbook-gnumeric-XXXXXX")
+    work: string = MakeTemporaryDirectory(template[:])
+    Check(work.count > 0, "cannot create test output directory")
+    SetText(cleanup_directory[:], work)
+    path: [4096]u8
+    SetText(path[:], work)
+    AppendText(path[:], "/saved.gnumeric")
+    Check(Engine.WorkbookWriteGnumeric(book, cast(*s8)*path[0]) != 0, "native save failed")
+    saved: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(saved, cast(*s8)*path[0]) != 0, "native round trip failed")
+    ExpectDisplay(saved, 0, 1, 0, "2026-01-05")
+    ExpectDisplay(saved, 0, 2, 3, "2.00")
+    ExpectDisplay(saved, 0, 4, 3, "3.00")
+    ExpectSource(saved, 0, 100000, 300, "42")
+    ExpectDisplay(saved, 1, 0, 1, "000123")
+    ExpectDisplay(saved, 0, 8, 0, "2")
+    // A native document is not a NUL-terminated UTF-8 string. UTF-16 XML
+    // contains embedded zero bytes and must reach Gnumeric intact.
+    xml: string = "<?xml version=\"1.0\" encoding=\"UTF-16\"?><Workbook xmlns=\"http://www.gnumeric.org/v10.dtd\"><Sheets><Sheet><Name>Wide</Name><Cells><Cell Row=\"0\" Col=\"0\" ValueType=\"40\">42</Cell></Cells></Sheet></Sheets></Workbook>"
+    wide: [4096]u8
+    wide[0] = 255; wide[1] = 254
+    for at: 0..cast(s32)xml.count - 1 { wide[2 + at * 2] = xml[at]; wide[3 + at * 2] = 0 }
+    SetText(path[:], work); AppendText(path[:], "/encoded.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(path[:]), TextView(wide[0:2 + cast(s32)xml.count * 2])), "cannot write UTF-16 fixture")
+    encoded: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(encoded, cast(*s8)*path[0]) != 0, "UTF-16 document was truncated")
+    ExpectDisplay(encoded, 0, 0, 0, "42")
+    Engine.WorkbookFree(encoded)
+    // The independent writer also declares enough grid space when a new
+    // workbook reaches beyond the original 256-column/65,536-row default.
+    fresh: *Engine.Workbook = Engine.WorkbookNew()
+    Engine.WorkbookAddSheet(fresh, Engine.CText("Large"))
+    Check(Engine.WorkbookSetCell(fresh, 0, 100000, 300, Engine.CText("42")) != 0, "cannot create a large-coordinate cell")
+    SetText(path[:], work); AppendText(path[:], "/large.gnumeric")
+    Check(Engine.WorkbookWriteGnumeric(fresh, cast(*s8)*path[0]) != 0, "cannot write large dimensions")
+    imported: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(imported, cast(*s8)*path[0]) != 0, "cannot re-read large dimensions")
+    ExpectSource(imported, 0, 100000, 300, "42")
+    Engine.WorkbookFree(imported)
+    Engine.WorkbookFree(fresh)
+    // CSV's first field can begin with '<'; it must not be mistaken for XML.
+    SetText(path[:], work); AppendText(path[:], "/literal.csv")
+    Check(WriteWholeFile(TextUntilNul(path[:]), "<not xml,42\n"), "cannot write CSV fixture")
+    table: *Engine.Workbook = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(table, cast(*s8)*path[0]) != 0 && table.native == null, "CSV was routed to the Gnumeric reader")
+    ExpectSource(table, 0, 0, 0, "<not xml")
+    ExpectDisplay(table, 0, 0, 1, "42")
+    Engine.WorkbookFree(table)
+    compressed: [32]u8 = .{31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 179, 201, 203, 47, 81, 168, 200, 205, 209, 49, 49, 226, 2, 0, 135, 87, 141, 239, 12, 0, 0, 0}
+    SetText(path[:], work); AppendText(path[:], "/literal.csv.gz")
+    Check(WriteWholeFile(TextUntilNul(path[:]), TextView(compressed[:])), "cannot write compressed CSV fixture")
+    table = Engine.WorkbookNew()
+    Check(Engine.WorkbookLoadFile(table, cast(*s8)*path[0]) != 0 && table.native == null, "compressed CSV changed behavior")
+    ExpectSource(table, 0, 0, 0, "<not xml")
+    ExpectDisplay(table, 0, 0, 1, "42")
+    Engine.WorkbookFree(table)
+    Engine.WorkbookFree(saved)
+    Engine.WorkbookFree(copy)
+    Engine.WorkbookFree(book)
+    RemoveTree(work)
+    cleanup_directory[0] = 0
+    Say("Gnumeric: shared formulas, time arithmetic, names, formatting, arrays, large coordinates, edits, structure, undo and round trips passed")
+    return 0
+}

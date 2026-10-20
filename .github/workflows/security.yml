@@ -26,7 +26,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config xvfb xdotool xfwm4 dbus-x11 x11-utils imagemagick \
-            libsdl2-dev libcairo2-dev
+            libsdl2-dev libcairo2-dev gnumeric
 
       - name: Install the locked Ziran toolchain
         run: |

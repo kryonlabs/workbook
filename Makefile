@@ -11,7 +11,7 @@ DIST_DIR ?= dist
 
 APP := build/workbook-desktop
 CELL := build/cell
-TESTS := source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test
+TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
 SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 
@@ -20,7 +20,7 @@ SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 # has the same layout.
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-.PHONY: build cell check run test test-ci structure-test conversion-test desktop-test parity fuzz audit install deb clean
+.PHONY: build cell check run test test-ci structure-test conversion-test gnumeric-test desktop-test parity fuzz audit install deb clean
 
 build: $(APP) $(CELL)
 
@@ -61,9 +61,9 @@ audit: build/source_audit_test
 # functions need a Gnumeric master build (see tests/parity_test.zi), which a
 # stock CI runner lacks, so CI runs test-ci and the full gate is `make test`.
 desktop-test: build build/desktop_test
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY build/desktop_test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 GSETTINGS_BACKEND=memory build/desktop_test
 
-test-ci: build audit structure-test conversion-test desktop-test
+test-ci: build audit structure-test conversion-test gnumeric-test desktop-test
 
 test: test-ci parity
 
@@ -88,6 +88,8 @@ install: build
 	@$(ZIRAN) install --prefix $(PREFIX)
 	@mkdir -p $(PREFIX)/bin $(PREFIX)/share/applications
 	@install -m 0755 $(CELL) $(PREFIX)/bin/cell
+	@sed 's|^Exec=workbook %f$$|Exec=$(PREFIX)/bin/workbook %f|' packaging/workbook.desktop \
+		> $(PREFIX)/share/applications/workbook.desktop
 	@ln -sf workbook $(PREFIX)/bin/geld
 	@sed 's|^Exec=geld$$|Exec=$(PREFIX)/bin/geld|' packaging/geld.desktop \
 		> $(PREFIX)/share/applications/geld.desktop
@@ -103,7 +105,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Waozi <waozi@proton.me>
 Installed-Size: INSTALLED_SIZE
-Depends: libc6, libsdl2-2.0-0, libcairo2
+Depends: libc6, libsdl2-2.0-0, libcairo2, gnumeric
 Homepage: https://github.com/kryonlabs/workbook
 Description: Spreadsheet editor compatible with Gnumeric
  Workbook is a native spreadsheet editor written in Ziran with Kryon. It reads
@@ -135,3 +137,6 @@ structure-test: build/structure_test
 
 conversion-test: build/conversion_test
 	@build/conversion_test
+
+gnumeric-test: build/gnumeric_test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS GSETTINGS_BACKEND=memory build/gnumeric_test

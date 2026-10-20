@@ -8,18 +8,35 @@ from the Makefile and configuration. `src/app.zi` is the desktop application and
 function library, .gnumeric/CSV I/O). `src/cell.zi` is the headless driver
 built on the same engine, and `tests/*.zi` are the test programs.
 
-The engine reads and writes `.gnumeric` (Gnumeric XML, gzipped or plain),
-evaluates the Gnumeric expression language (references, ranges, sheets,
-operators, 120+ functions with Gnumeric semantics including errors and
-date serials), and is verified 1:1 against the installed Gnumeric by
-`tests/parity_test.zi` — every fixture is evaluated by both engines and
-compared cell by cell, including round-trips through our own
-`.gnumeric` writer. Format notes: `docs/GNUMERIC_PARITY.md`.
+Imported `.gnumeric` documents use the installed Gnumeric document library
+(`libspreadsheet.so`). Workbook keeps that native document for reading,
+calculation, editing, row and column operations, saving, and undo. Shared
+expressions, arrays, named expressions, time arithmetic, number formats,
+styles, merged regions, print settings and other Gnumeric document features
+therefore survive a save. Dates and numbers display with Gnumeric's formatting.
+Both gzip-compressed and plain XML documents are accepted.
 
-The engine's helpers live beside it: `src/quad.zi` (double-double arithmetic),
-`src/xml.zi` and `src/gzip.zi` (the Gnumeric file format), `src/formula_text.zi`
-(cell names and rounding used by formulas), and `src/c_runtime.zi` (the C
-library calls the engine makes).
+The editor can open a file directly:
+
+    workbook /path/to/file.gnumeric
+
+This saves edits back to that file. A file that fails to load is never replaced
+by an autosaved empty workbook. Launching without a file keeps the existing
+profile behavior described below. The desktop entry advertises Gnumeric files.
+
+Install `gnumeric` for native document support. The library loads on demand;
+when it is unavailable, a Gnumeric import fails without changing its file.
+Compatibility follows the installed Gnumeric version and plugins. Workbook's
+UI remains a basic cell editor. Cell fonts, fills, borders, row/column sizes,
+merged-cell geometry, charts, drawing objects and print layout are preserved
+in the document; the grid retains its own visual layout and styling, and does
+not render or edit drawing objects. Complete visual parity is still pending.
+
+New workbooks and CSV use Workbook's independent Ziran engine. Its helpers
+live beside it: `src/quad.zi` (double-double arithmetic), `src/xml.zi`,
+`src/gzip.zi`, `src/formula_text.zi`, and `src/c_runtime.zi`.
+`src/gnumeric.zi` is the Ziran adapter for Gnumeric's public native ABI.
+Format and verification notes: `docs/GNUMERIC_PARITY.md`.
 
 ## build & run
 
@@ -35,7 +52,8 @@ development packages installed.
     make run          # open the editor
     make test         # source audit, structure and conversion tests, desktop test on a private display, gnumeric parity
     make test-ci      # the same without parity, which is what CI runs
-    make parity       # 1:1 evaluation tests against the installed gnumeric
+    make gnumeric-test # native document, edit, undo and round-trip regressions
+    make parity       # evaluation and round-trip tests against Gnumeric
     make fuzz REFERENCE=PATH   # compare this cell with another on generated inputs
     make install      # install workbook, cell, and geld under ~/.local
     make deb          # build a Debian package
@@ -59,7 +77,9 @@ display; it never opens a window on your desktop. Parity compares against the
 against `GNUMERIC_SSCONVERT`, or a local master build at
 `~/Tools/gnumeric-1.12.62`; the newest catalog functions exist only in a
 Gnumeric master build, so an older distribution Gnumeric reports those fixtures
-as different. CI therefore runs `make test-ci`.
+as different. For imported documents, use a reference from the same installed
+version, e.g. `GNUMERIC_SSCONVERT=/usr/bin/ssconvert make parity`.
+CI runs `make test-ci` with Gnumeric installed.
 
 The menu test also runs a private Xfce window manager and D-Bus session. It
 checks that the first right-click after another window has focus shows the

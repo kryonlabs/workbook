@@ -266,15 +266,20 @@ StartApp :: (directory: string) {
     LaunchApp(directory, directory)
 }
 
-LaunchApp :: (directory: string, data: string) {
+LaunchApp :: (directory: string, data: string, document: string = "") {
     SetText(data_directory[:], directory)
     SetText(saved_path[:], data)
     AppendText(saved_path[:], "/workbook.gnumeric")
     SetText(log_path[:], directory)
     AppendText(log_path[:], "/app.log")
     UnsetEnvironment("KRYON_CAPTURE_PATH")
-    command: [1]string = .{DesktopAppPath()}
-    app_pid = Spawn(command[:], TextUntilNul(log_path[:]))
+    command: [2]string = .{DesktopAppPath(), document}
+    count: s32 = 1
+    if document.count > 0 {
+        count = 2
+        SetText(saved_path[:], document)
+    }
+    app_pid = Spawn(command[0:count], TextUntilNul(log_path[:]))
     Check(app_pid > 0, "the app could not be started")
     cleanup_pid = app_pid
     FindWindow()
@@ -582,8 +587,10 @@ DriveAutosave :: (directory: string) -> s32 {
 
 ExpectSavedSheetCell :: (sheet: s32, row: s32, column: s32, expected: string, message: string) {
     saved: *Engine.Workbook = Engine.WorkbookNew()
-    Check(Engine.WorkbookLoadFile(saved, cast(*s8)*saved_path[0]) != 0,
-        "cannot read the saved workbook")
+    if Engine.WorkbookLoadFile(saved, cast(*s8)*saved_path[0]) == 0 {
+        ShowLog()
+        Fail("cannot read the saved workbook")
+    }
     source: *s8 = Engine.WorkbookCellText(saved, sheet, row, column)
     actual: string = ""
     if source != null { actual = TextFromCString(cast(*u8)source) }
@@ -599,14 +606,7 @@ ExpectSavedSheetCell :: (sheet: s32, row: s32, column: s32, expected: string, me
 }
 
 ExpectSavedCell :: (row: s32, column: s32, expected: string) {
-    saved: *Engine.Workbook = Engine.WorkbookNew()
-    Check(Engine.WorkbookLoadFile(saved, cast(*s8)*saved_path[0]) != 0,
-        "cannot read the menu test's saved workbook")
-    source: *s8 = Engine.WorkbookCellText(saved, 0, row, column)
-    actual: string = ""
-    if source != null { actual = TextFromCString(cast(*u8)source) }
-    Check(actual == expected, "the cell menu changed the wrong cell")
-    Engine.WorkbookFree(saved)
+    ExpectSavedSheetCell(0, row, column, expected, "saved cell differs")
 }
 
 HeaderWorkbook :: #string END
@@ -614,11 +614,11 @@ HeaderWorkbook :: #string END
 END;
 
 RowMenuWorkbook :: #string END
-<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:Sheets><gnm:Sheet><gnm:Name>Rows</gnm:Name><gnm:Cells><gnm:Cell Row="0" Col="1" ValueType="40">12</gnm:Cell><gnm:Cell Row="1" Col="1" ValueType="40">22</gnm:Cell><gnm:Cell Row="1" Col="2">=B2*2</gnm:Cell><gnm:Cell Row="20" Col="1" ValueType="40">212</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
+<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:SheetNameIndex><gnm:SheetName gnm:Cols="256" gnm:Rows="65536">Rows</gnm:SheetName></gnm:SheetNameIndex><gnm:Sheets><gnm:Sheet><gnm:Name>Rows</gnm:Name><gnm:Cells><gnm:Cell Row="0" Col="1" ValueType="40">12</gnm:Cell><gnm:Cell Row="1" Col="1" ValueType="40">22</gnm:Cell><gnm:Cell Row="1" Col="2">=B2*2</gnm:Cell><gnm:Cell Row="20" Col="1" ValueType="40">212</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
 END;
 
 LargeHeaderWorkbook :: #string END
-<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:Sheets><gnm:Sheet><gnm:Name>Large</gnm:Name><gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell><gnm:Cell Row="1" Col="40" ValueType="40">88</gnm:Cell><gnm:Cell Row="220" Col="1" ValueType="40">99</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
+<?xml version="1.0"?><gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd"><gnm:SheetNameIndex><gnm:SheetName gnm:Cols="256" gnm:Rows="65536">Large</gnm:SheetName></gnm:SheetNameIndex><gnm:Sheets><gnm:Sheet><gnm:Name>Large</gnm:Name><gnm:Cells><gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell><gnm:Cell Row="1" Col="40" ValueType="40">88</gnm:Cell><gnm:Cell Row="220" Col="1" ValueType="40">99</gnm:Cell></gnm:Cells></gnm:Sheet></gnm:Sheets></gnm:Workbook>
 END;
 
 ReadOwnedWindowScreenshot :: (path: string) {
@@ -649,10 +649,10 @@ DriveHeaders :: (directory: string) -> s32 {
     Check(CsvCellText(0,0,1)=="" && CsvCellText(0,1,1)=="" && CsvCellText(0,20,1)=="","delete clears the entire column")
     Check(CsvCellText(0,0,0)=="11" && CsvCellText(0,20,2)=="212","column delete preserves neighboring columns")
     Press(GridLeft-30,GridTop+14); Key("Delete"); Save()
-    result=Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read cleared row")
-    // CSV export begins at the first nonempty row, now row 2.
-    Check(CsvCellText(0,0,0)=="" && CsvCellText(0,0,2)=="22","row number selects the whole row")
-    Check(CsvCellText(0,19,2)=="212","row delete preserves other rows")
+    // Native CSV trims leading empty rows and columns. Check the saved
+    // coordinates directly so export bounds do not change this selection test.
+    ExpectSavedCell(0,0,""); ExpectSavedCell(0,2,"")
+    ExpectSavedCell(1,2,"22"); ExpectSavedCell(20,2,"212")
     Check(StopApp()==0,"header test app exits cleanly")
     }
 
@@ -763,7 +763,8 @@ DriveFormulas :: (directory: string) -> s32 {
     Check(HasTint(GridLeft + ColumnWidth - 2, GridTop + RowHeight + 2, 6, RowHeight - 4, false),
         "the formula's second reference is not outlined in its color")
     Key("Return")
-    ExpectSavedCell(4, 0, "=SUM(A1:A3)+B2")
+    // Gnumeric serializes function names in their canonical lowercase.
+    ExpectSavedCell(4, 0, "=sum(A1:A3)+B2")
     Say("formulas: clicks and drags write references, and a new click replaces the last")
 
     // Another sheet's cell gets that sheet's name; Enter returns to the edited sheet.
@@ -919,11 +920,13 @@ DriveUndo :: (directory: string) -> s32 {
     TypeText("+10")
     ExpectSavedSheetCell(0, 2, 0, "=A2*2+10", "typing in a formula is saved")
     Key("ctrl+z")
-    ExpectSavedSheetCell(0, 2, 0, "=A2*2+", "Ctrl+Z in an edit takes back the last word")
+    // Incomplete formulas are literal strings; Gnumeric exposes the leading
+    // apostrophe that makes them safe to edit without parsing as a formula.
+    ExpectSavedSheetCell(0, 2, 0, "'=A2*2+", "Ctrl+Z in an edit takes back the last word")
     Key("ctrl+z")
     ExpectSavedSheetCell(0, 2, 0, "=A2*2", "Ctrl+Z in an edit takes back the word before")
     Key("ctrl+y")
-    ExpectSavedSheetCell(0, 2, 0, "=A2*2+", "Ctrl+Y in an edit puts a word back")
+    ExpectSavedSheetCell(0, 2, 0, "'=A2*2+", "Ctrl+Y in an edit puts a word back")
     TypeText("7")
     Key("Return")
     ExpectSavedSheetCell(0, 2, 0, "=A2*2+7", "the edit keeps typing after undo")
@@ -970,7 +973,7 @@ DriveUndo :: (directory: string) -> s32 {
     Key("ctrl+z")
     ExpectSavedSheetCell(0, 5, 0, "=A1", "Ctrl+Z in a formula brings back the reference picked before")
     Key("ctrl+z")
-    ExpectSavedSheetCell(0, 5, 0, "=", "Ctrl+Z in a formula takes back the first pick")
+    ExpectSavedSheetCell(0, 5, 0, "'=", "Ctrl+Z in a formula takes back the first pick")
     Key("Escape")
     ExpectSavedSheetCell(0, 5, 0, "", "Escape after undo leaves the cell as it was")
 
@@ -1114,6 +1117,43 @@ CheckFrame :: (work: string) {
     Say("frame: layout, selection, and cell text rendered")
 }
 
+// An explicit document must receive keyboard edits and autosaves itself,
+// even when a profile directory is set. A broken import must stay untouched.
+DriveDocument :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1", "document test needs a private display")
+    SetEnvironment("WORKBOOK_DIR", directory)
+    document: [4096]u8
+    SetText(document[:], directory)
+    AppendText(document[:], "/Time Sheet.gnumeric")
+    source: [32768]u8
+    count: s32 = ReadWholeFile("tests/document.gnumeric", source[:])
+    Check(count > 0, "cannot read synthetic Gnumeric fixture")
+    Check(WriteWholeFile(TextUntilNul(document[:]), TextView(source[0:count])), "cannot write document fixture")
+    LaunchApp(directory, directory, TextUntilNul(document[:]))
+    ClickCell(1, 4)
+    TypeText("keyboard works")
+    Key("Return")
+    Save()
+    ExpectSavedSheetCell(0, 1, 4, "keyboard works", "typing edits the opened document")
+    ExpectSavedSheetCell(0, 2, 3, "=(C3-B3)*24", "saving retains shared formulas")
+    Check(StopApp() == 0, "document app did not exit cleanly")
+    SetText(document[:], directory)
+    AppendText(document[:], "/broken.gnumeric")
+    broken: string = "<gnm:Workbook"
+    Check(WriteWholeFile(TextUntilNul(document[:]), broken), "cannot write invalid fixture")
+    LaunchApp(directory, directory, TextUntilNul(document[:]))
+    ClickCell(0, 0)
+    TypeText("must not replace the document")
+    Key("Return")
+    Save()
+    Check(StopApp() == 0, "failed-import app did not exit cleanly")
+    count = ReadWholeFile(TextUntilNul(document[:]), source[:])
+    Check(count == cast(s32)broken.count && TextView(source[0:count]) == broken,
+        "a failed import was overwritten")
+    Say("document: file arguments, keyboard input, autosave and failed-import protection passed")
+    return 0
+}
+
 // ----------------------------------------------------------------- the run
 
 RunSession :: (self: string, mode: string, directory: string) {
@@ -1222,6 +1262,11 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
         AppendText(undo[:], "/undo")
         Check(MakeDirectory(TextUntilNul(undo[:])), "cannot create the undo directory")
         RunSession(self, "--drive-undo", TextUntilNul(undo[:]))
+        document: [4096]u8
+        SetText(document[:], work)
+        AppendText(document[:], "/document")
+        Check(MakeDirectory(TextUntilNul(document[:])), "cannot create document test directory")
+        RunSession(self, "--drive-document", TextUntilNul(document[:]))
     }
     headers: [4096]u8; SetText(headers[:],work); AppendText(headers[:],"/headers")
     Check(MakeDirectory(TextUntilNul(headers[:])),"cannot create header test directory")
@@ -1241,6 +1286,9 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
 
 #program_export
 main :: (argc: s32, argv: **s8) -> s32 {
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-document" {
+        return DriveDocument(TextFromCString(cast(*u8)argv[2]))
+    }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-headers" { return DriveHeaders(TextFromCString(cast(*u8)argv[2])) }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive" {
         return Drive(TextFromCString(cast(*u8)argv[2]))

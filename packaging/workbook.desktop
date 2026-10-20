@@ -2,6 +2,7 @@
 Type=Application
 Name=Workbook
 Comment=Spreadsheet editor compatible with Gnumeric
-Exec=workbook
+Exec=workbook %f
 Terminal=false
 Categories=Office;
+MimeType=application/x-gnumeric;
