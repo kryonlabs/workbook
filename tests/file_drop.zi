@@ -1,0 +1,146 @@
+// A file-manager source for the Xdnd protocol. Runs only inside the desktop
+// test's private display and targets the child window found by its PID.
+x11 :: #system_library "X11";
+DropDisplayOpen :: (name: *u8) -> *void #foreign x11 "XOpenDisplay";
+DropDisplayClose :: (display: *void) -> s32 #foreign x11 "XCloseDisplay";
+DropRoot :: (display: *void) -> u64 #foreign x11 "XDefaultRootWindow";
+DropWindowNew :: (display: *void, parent: u64, x: s32, y: s32, width: u32,
+    height: u32, border: u32, border_pixel: u64, background: u64) -> u64 #foreign x11 "XCreateSimpleWindow";
+DropWindowFree :: (display: *void, window: u64) -> s32 #foreign x11 "XDestroyWindow";
+DropAtom :: (display: *void, name: *u8, only_existing: s32) -> u64 #foreign x11 "XInternAtom";
+DropSelectionOwner :: (display: *void, selection: u64, window: u64, time: u64) -> s32 #foreign x11 "XSetSelectionOwner";
+DropSend :: (display: *void, window: u64, propagate: s32, mask: s64, event: *void) -> s32 #foreign x11 "XSendEvent";
+DropFlush :: (display: *void) -> s32 #foreign x11 "XFlush";
+DropPending :: (display: *void) -> s32 #foreign x11 "XPending";
+DropNext :: (display: *void, event: *void) -> s32 #foreign x11 "XNextEvent";
+DropProperty :: (display: *void, window: u64, property: u64, kind: u64,
+    format: s32, mode: s32, data: *u8, length: s32) -> s32 #foreign x11 "XChangeProperty";
+
+DropClient :: struct {
+    kind: s32
+    serial: u64
+    sent: s32
+    display: *void
+    window: u64
+    message: u64
+    format: s32
+    data: [5]u64
+    padding: [96]u8
+}
+DropRequest :: struct {
+    kind: s32
+    serial: u64
+    sent: s32
+    display: *void
+    owner: u64
+    requestor: u64
+    selection: u64
+    target: u64
+    property: u64
+    time: u64
+}
+DropNotify :: struct {
+    kind: s32
+    serial: u64
+    sent: s32
+    display: *void
+    requestor: u64
+    selection: u64
+    target: u64
+    property: u64
+    time: u64
+    padding: [120]u8
+}
+
+DropName :: (display: *void, name: string) -> u64 {
+    bytes: [128]u8
+    Check(CopyCString(name, bytes[:]), "drop atom too long")
+    return DropAtom(display, *bytes[0], 0)
+}
+
+DropMessage :: (display: *void, target: u64, source: u64, name: string,
+    second: u64, third: u64, fourth: u64, fifth: u64) {
+    event: DropClient
+    event.kind = 33 // ClientMessage
+    event.display = display
+    event.window = target
+    event.message = DropName(display, name)
+    event.format = 32
+    event.data = .{source, second, third, fourth, fifth}
+    Check(DropSend(display, target, 0, cast(s64)0, cast(*void)*event) != 0, "cannot send drop message")
+    DropFlush(display)
+}
+
+DropDocument :: (path: string) {
+    Check(Environment(PrivateMarker) == "1", "file drops require the private display")
+    display := DropDisplayOpen(null)
+    Check(display != null, "cannot open the private drop display")
+    defer { DropDisplayClose(display) }
+    source := DropWindowNew(display, DropRoot(display), 0, 0, 1, 1, 0, cast(u64)0, cast(u64)0)
+    defer { DropWindowFree(display, source) }
+    target: u64 = cast(u64)0
+    for byte: WindowId() { target = target * cast(u64)10 + cast(u64)(byte - 48) }
+    selection := DropName(display, "XdndSelection")
+    uri_type := DropName(display, "text/uri-list")
+    action := DropName(display, "XdndActionCopy")
+    status_atom := DropName(display, "XdndStatus")
+    finished_atom := DropName(display, "XdndFinished")
+    DropSelectionOwner(display, selection, source, cast(u64)0)
+    uri: [16384]u8
+    SetText(uri[:], "file://")
+    hex: string = "0123456789ABCDEF"
+    for byte: path {
+        encoded: [3]u8
+        if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
+           (byte >= 48 && byte <= 57) || byte == 47 || byte == 45 || byte == 46 || byte == 95 || byte == 126 {
+            encoded[0] = byte
+            AppendText(uri[:], TextView(encoded[0:1]))
+        } else {
+            encoded[0] = 37
+            encoded[1] = hex[cast(s32)byte / 16]
+            encoded[2] = hex[cast(s32)byte % 16]
+            AppendText(uri[:], TextView(encoded[:]))
+        }
+    }
+    AppendText(uri[:], "\r\n")
+    DropMessage(display, target, source, "XdndEnter", cast(u64)0x05000000, uri_type, cast(u64)0, cast(u64)0)
+    DropMessage(display, target, source, "XdndPosition", cast(u64)0, cast(u64)0, cast(u64)0, action)
+    dropped: bool = false
+    served: bool = false
+    finished: bool = false
+    for attempt: 0..999 {
+        while DropPending(display) > 0 {
+            event: DropClient
+            DropNext(display, cast(*void)*event)
+            if event.kind == 33 && event.message == status_atom && !dropped {
+                Check((event.data[1] & cast(u64)1) != cast(u64)0, "the app refused file drops")
+                DropMessage(display, target, source, "XdndDrop", cast(u64)0, cast(u64)0, cast(u64)0, cast(u64)0)
+                dropped = true
+            }
+            if event.kind == 30 { // SelectionRequest
+                request := cast(*DropRequest)*event
+                Check(request.selection == selection && request.target == uri_type, "unexpected drop selection")
+                property := request.property
+                if property == cast(u64)0 { property = request.target }
+                DropProperty(display, request.requestor, property, uri_type, 8, 0,
+                    *uri[0], cast(s32)TextUntilNul(uri[:]).count)
+                reply: DropNotify
+                reply.kind = 31
+                reply.display = display
+                reply.requestor = request.requestor
+                reply.selection = request.selection
+                reply.target = request.target
+                reply.property = property
+                reply.time = request.time
+                Check(DropSend(display, reply.requestor, 0, cast(s64)0, cast(*void)*reply) != 0, "cannot answer drop selection")
+                DropFlush(display)
+                served = true
+            }
+            if event.kind == 33 && event.message == finished_atom { finished = true }
+        }
+        if finished { break }
+        SleepMilliseconds(10)
+    }
+    Check(dropped && served && finished, "file drop did not complete through the native host")
+    SleepMilliseconds(500)
+}

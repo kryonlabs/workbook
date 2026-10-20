@@ -33,7 +33,7 @@ $(APP): $(SOURCES)
 define program
 	@$(ZIRAN) build --project --target=c --entry $(1):main -o $(3)-c $(2)
 	@$(CC) $(NATIVE_FLAGS) -I$(shell $(ZIRAN) pkg path ziran)/include -I$(3)-c \
-		$(3)-c/*.c -lm -o $(3)
+		$(3)-c/*.c -lm $(if $(filter desktop_test,$(1)),-lX11) -o $(3)
 endef
 
 # The engine driver, and the test programs, which are Ziran too.
@@ -93,6 +93,8 @@ install: build
 	@ln -sf workbook $(PREFIX)/bin/geld
 	@sed 's|^Exec=geld$$|Exec=$(PREFIX)/bin/geld|' packaging/geld.desktop \
 		> $(PREFIX)/share/applications/geld.desktop
+	@if command -v update-desktop-database >/dev/null 2>&1; then \
+		update-desktop-database $(PREFIX)/share/applications; fi
 
 # A Debian package of the same files.
 DEB_NAME := workbook_$(VERSION)_amd64
@@ -107,7 +109,7 @@ Maintainer: Waozi <waozi@proton.me>
 Installed-Size: INSTALLED_SIZE
 Depends: libc6, libsdl2-2.0-0, libcairo2, gnumeric
 Homepage: https://github.com/kryonlabs/workbook
-Description: Spreadsheet editor compatible with Gnumeric
+Description: Spreadsheet editor
  Workbook is a native spreadsheet editor written in Ziran with Kryon. It reads
  and writes Gnumeric and CSV files and evaluates Gnumeric formulas; the cell
  command does the same without a window. Installed profile commands such as

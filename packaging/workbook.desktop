@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Workbook
-Comment=Spreadsheet editor compatible with Gnumeric
+Comment=Spreadsheet editor
 Exec=workbook %f
 Terminal=false
-Categories=Office;
+Categories=Office;Spreadsheet;
 MimeType=application/x-gnumeric;

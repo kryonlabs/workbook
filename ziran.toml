@@ -33,5 +33,5 @@ backend = "desktop"
 [tool.kryon.install]
 profile = "desktop"
 name = "Workbook"
-comment = "Spreadsheet editor compatible with Gnumeric"
+comment = "Spreadsheet editor"
 categories = "Office;Spreadsheet;"

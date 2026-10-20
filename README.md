@@ -1,42 +1,22 @@
 # workbook
 
 Native spreadsheet editor written in [Ziran](https://github.com/ziranlang/ziran)
-with [Kryon](https://github.com/kryonlabs/kryon), compatible with Gnumeric file
-formats and expressions. Everything in the repository is Ziran (`.zi`) apart
-from the Makefile and configuration. `src/app.zi` is the desktop application and
-`src/engine.zi` is the spreadsheet engine (grid model, formula evaluator,
-function library, .gnumeric/CSV I/O). `src/cell.zi` is the headless driver
-built on the same engine, and `tests/*.zi` are the test programs.
-
-Imported `.gnumeric` documents use the installed Gnumeric document library
-(`libspreadsheet.so`). Workbook keeps that native document for reading,
-calculation, editing, row and column operations, saving, and undo. Shared
-expressions, arrays, named expressions, time arithmetic, number formats,
-styles, merged regions, print settings and other Gnumeric document features
-therefore survive a save. Dates and numbers display with Gnumeric's formatting.
-Both gzip-compressed and plain XML documents are accepted.
-
-The editor can open a file directly:
+with [Kryon](https://github.com/kryonlabs/kryon). Open a document from your file
+manager, drop it onto Workbook, or pass its path directly:
 
     workbook /path/to/file.gnumeric
 
-This saves edits back to that file. A file that fails to load is never replaced
-by an autosaved empty workbook. Launching without a file keeps the existing
-profile behavior described below. The desktop entry advertises Gnumeric files.
+The window title shows the document's filename. Edits save back to that file;
+when you drop another document, Workbook saves the current edit before opening
+it. Launching without a file uses the profile described below.
 
-Install `gnumeric` for native document support. The library loads on demand;
-when it is unavailable, a Gnumeric import fails without changing its file.
-Compatibility follows the installed Gnumeric version and plugins. Workbook's
-UI remains a basic cell editor. Cell fonts, fills, borders, row/column sizes,
-merged-cell geometry, charts, drawing objects and print layout are preserved
-in the document; the grid retains its own visual layout and styling, and does
-not render or edit drawing objects. Complete visual parity is still pending.
-
-New workbooks and CSV use Workbook's independent Ziran engine. Its helpers
-live beside it: `src/quad.zi` (double-double arithmetic), `src/xml.zi`,
-`src/gzip.zi`, `src/formula_text.zi`, and `src/c_runtime.zi`.
-`src/gnumeric.zi` is the Ziran adapter for Gnumeric's public native ABI.
-Format and verification notes: `docs/GNUMERIC_PARITY.md`.
+Everything in the repository is Ziran (`.zi`) apart from the Makefile and
+configuration. `src/app.zi` is the desktop application, `src/engine.zi` is the
+spreadsheet engine, and `src/cell.zi` is the headless driver. Imported documents
+use the installed `gnumeric` library for loading, calculation and saving.
+New workbooks and CSV use the independent Ziran engine. Document format,
+dependencies and rendering limitations are covered in
+[format notes](docs/GNUMERIC_PARITY.md).
 
 ## build & run
 

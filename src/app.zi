@@ -2,6 +2,7 @@
 // cell grid of the spreadsheet engine.
 using UI :: #import "Widgets";
 Engine :: #import "engine";
+Desktop :: #import "kryon/Desktop";
 Json :: #import "json_scan";
 SystemStyle :: #import "kss/SystemStyle";
 SystemThemeLinux :: #import "SystemThemeLinux";
@@ -185,8 +186,8 @@ theme_name: [128]u8;
 theme_frames: s32 = 0;
 theme_installed: bool = false;
 
-data_path: [1024]u8;
-data_directory: [1024]u8;
+data_path: [4096]u8;
+data_directory: [4096]u8;
 status: [256]u8;
 
 #scope_export
@@ -197,6 +198,11 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     if workbook == null {
         LoadWorkbook()
         SelectCell(0, 0)
+        UpdateDocumentTitle()
+    }
+    dropped: [4096]u8
+    while Desktop.DesktopTakeDroppedFile(dropped[:]) {
+        OpenDocument(TextUntilNul(dropped[:]))
     }
     key: s32 = KeyboardTake(session)
     control: bool = (KeyboardModifiers(session) & KeyModifierControl) != 0
@@ -333,6 +339,60 @@ LoadWorkbook :: () {
     dirty = false
 }
 
+UpdateDocumentTitle :: () {
+    unused Desktop.DesktopSetTitle(FileName(TextUntilNul(data_path[:])))
+}
+
+// Finish and save the current document before replacing it. A failed import
+// leaves the current workbook, its path, selection, and undo history intact.
+OpenDocument :: (path: string) {
+    if !DocumentPath(path) { return }
+    if edit_focused { CommitCell() }
+    if dirty && !load_failed {
+        SaveWorkbook(false)
+        if dirty { return }
+    }
+    next: *Engine.Workbook = Engine.WorkbookNew()
+    if Engine.WorkbookLoadFile(next, cast(*s8)CPath(path)) == 0 {
+        Engine.WorkbookFree(next)
+        SetText(status[:], "Could not open ")
+        AppendText(status[:], FileName(path))
+        return
+    }
+    if edit_focused { EndEdit() }
+    FinishEditStep()
+    while undo_count > 0 {
+        undo_count -= 1
+        Engine.WorkbookFree(undo_steps[undo_count].book)
+    }
+    while redo_count > 0 {
+        redo_count -= 1
+        Engine.WorkbookFree(redo_steps[redo_count].book)
+    }
+    Engine.WorkbookFree(workbook)
+    workbook = next
+    SetText(data_path[:], path)
+    data_directory[0] = 0
+    base := cast(s32)path.count - cast(s32)FileName(path).count
+    if base > 0 { SetText(data_directory[:], path[0:base]) }
+    sheet_index = 0
+    edit_sheet = 0
+    scroll_row = 0
+    scroll_column = 0
+    grid_menu_open = false
+    drag_mode = DragNone
+    edit_refocus = false
+    edit_claim = false
+    copied_sheet = -1
+    copied_length = 0
+    dirty = false
+    load_failed = false
+    save_retry_at = 0
+    status[0] = 0
+    SelectCell(0, 0)
+    UpdateDocumentTitle()
+}
+
 MonotonicMilliseconds :: () -> s64 {
     now: TimeSpec
     ClockTime(1, *now)
@@ -342,7 +402,7 @@ MonotonicMilliseconds :: () -> s64 {
 // Creates every missing parent, including a fresh XDG data directory.
 EnsureDataDirectory :: () -> bool {
     path: string = TextUntilNul(data_directory[:])
-    prefix: [1024]u8
+    prefix: [4096]u8
     at: s32 = 1
     while at <= cast(s32)path.count {
         if at == cast(s32)path.count || path[at] == #char "/" {
@@ -368,7 +428,7 @@ SaveWorkbook :: (finish_edit: bool) {
     saved: bool = false
     // Replace the previous file only after its replacement has been written
     // and synced. A failed write leaves the last saved workbook intact.
-    temporary: [1100]u8
+    temporary: [4160]u8
     SetText(temporary[:], path)
     AppendText(temporary[:], ".tmp-XXXXXX")
     if EnsureDataDirectory() {
@@ -1852,11 +1912,16 @@ OpenFileArgument :: (out: []u8) -> bool {
     end: s32 = at
     while end < cast(s32)length && command[end] != 0 { end += 1 }
     name: string = TextView(command[at:end])
-    if name.count < 9 { return false }
-    suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
-    if Engine.TextCompareFoldLiteral(cast(*s8)CPath(suffix), ".gnumeric") != 0 { return false }
+    if !DocumentPath(name) { return false }
+    if name.count >= out.count { return false }
     SetText(out, name)
     return true
+}
+
+DocumentPath :: (name: string) -> bool {
+    if name.count < 9 || name.count >= 4096 { return false }
+    suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
+    return Engine.TextCompareFoldLiteral(cast(*s8)CPath(suffix), ".gnumeric") == 0
 }
 
 // Whether the program was started under the given name. `geld` is a link to

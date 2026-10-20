@@ -8,6 +8,7 @@
 #load "test_support.zi";
 #load "csv_table.zi";
 #load "screenshot.zi";
+#load "file_drop.zi";
 
 RawCurrentDirectory :: (output: *u8, size: u64) -> *u8 #foreign libc "getcwd";
 RawChangeDirectory :: (path: *u8) -> s32 #foreign libc "chdir";
@@ -15,7 +16,6 @@ RawChangeDirectory :: (path: *u8) -> s32 #foreign libc "chdir";
 AppPath :: "build/workbook-desktop";
 CellPath :: "build/cell";
 FixturePath :: "tests/fixtures/operators.gnumeric";
-WindowName :: "Kryon Ziran";
 PrivateMarker :: "WORKBOOK_TEST_PRIVATE_DISPLAY";
 
 // Grid geometry from src/app.zi, in window pixels.
@@ -291,7 +291,8 @@ FindWindow :: () {
     attempts: s32 = 0
     while attempts < 100 {
         output: [1024]u8
-        search: [4]string = .{"xdotool", "search", "--name", WindowName}
+        pid: [32]u8
+        search: [5]string = .{"xdotool", "search", "--onlyvisible", "--pid", NumberText(pid[:], app_pid)}
         result: CaptureResult = Run(search[:], output[:])
         if result.code == 0 && result.length > 0 {
             end: s32 = 0
@@ -1117,6 +1118,20 @@ CheckFrame :: (work: string) {
     Say("frame: layout, selection, and cell text rendered")
 }
 
+ExpectTitle :: (expected: string) {
+    output: [4096]u8
+    command: [3]string = .{"xdotool", "getwindowname", WindowId()}
+    result := Run(command[:], output[:])
+    title: [4096]u8
+    SetText(title[:], expected)
+    AppendText(title[:], "\n")
+    if result.code != 0 || TextView(output[0:result.length]) != TextUntilNul(title[:]) {
+        SayWith("expected title: ", expected)
+        SayWith("actual title: ", TextView(output[0:result.length]))
+        Fail("the window title does not match the document")
+    }
+}
+
 // An explicit document must receive keyboard edits and autosaves itself,
 // even when a profile directory is set. A broken import must stay untouched.
 DriveDocument :: (directory: string) -> s32 {
@@ -1130,12 +1145,46 @@ DriveDocument :: (directory: string) -> s32 {
     Check(count > 0, "cannot read synthetic Gnumeric fixture")
     Check(WriteWholeFile(TextUntilNul(document[:]), TextView(source[0:count])), "cannot write document fixture")
     LaunchApp(directory, directory, TextUntilNul(document[:]))
+    ExpectTitle("Time Sheet.gnumeric")
     ClickCell(1, 4)
     TypeText("keyboard works")
     Key("Return")
     Save()
     ExpectSavedSheetCell(0, 1, 4, "keyboard works", "typing edits the opened document")
     ExpectSavedSheetCell(0, 2, 3, "=(C3-B3)*24", "saving retains shared formulas")
+    // A real Xdnd URI-list drop opens the next document and finishes the
+    // current edit without Enter. Spaces, punctuation and UTF-8 are decoded
+    // by the desktop host, just as for a file-manager drag.
+    ClickCell(1, 4)
+    TypeText("saved before drop")
+    dropped: [4096]u8
+    SetText(dropped[:], directory)
+    AppendText(dropped[:], "/Budget #1 % café.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(dropped[:]), TextView(source[0:count])), "cannot write drop fixture")
+    DropDocument(TextUntilNul(dropped[:]))
+    ExpectTitle("Budget #1 % café.gnumeric")
+    ExpectSavedSheetCell(0, 1, 4, "saved before drop", "drop preserves the preceding edit")
+    SetText(saved_path[:], TextUntilNul(dropped[:]))
+    // Undo from the previous document must never be applied to this one.
+    Key("ctrl+z")
+    ClickCell(1, 4)
+    TypeText("edited dropped document")
+    Key("Return")
+    ExpectSavedSheetCell(0, 1, 4, "edited dropped document", "the dropped document receives keyboard edits")
+    // A failed drop retains the current document and its undo history.
+    invalid: [4096]u8
+    SetText(invalid[:], directory)
+    AppendText(invalid[:], "/invalid drop.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(invalid[:]), "<gnm:Workbook"), "cannot write invalid drop fixture")
+    DropDocument(TextUntilNul(invalid[:]))
+    ExpectTitle("Budget #1 % café.gnumeric")
+    Key("ctrl+z")
+    ExpectSavedSheetCell(0, 1, 4, "", "a failed drop preserves undo for the open document")
+    ClickCell(1, 4)
+    TypeText("still editable")
+    Key("Return")
+    ExpectSavedSheetCell(0, 1, 4, "still editable", "a failed drop keeps editing the current file")
+    // A valid drop also recovers a window whose original import failed.
     Check(StopApp() == 0, "document app did not exit cleanly")
     SetText(document[:], directory)
     AppendText(document[:], "/broken.gnumeric")
@@ -1146,11 +1195,18 @@ DriveDocument :: (directory: string) -> s32 {
     TypeText("must not replace the document")
     Key("Return")
     Save()
+    DropDocument(TextUntilNul(dropped[:]))
+    ExpectTitle("Budget #1 % café.gnumeric")
+    SetText(saved_path[:], TextUntilNul(dropped[:]))
+    ClickCell(1, 4)
+    TypeText("recovered")
+    Key("Return")
+    ExpectSavedSheetCell(0, 1, 4, "recovered", "a valid drop recovers a failed initial import")
     Check(StopApp() == 0, "failed-import app did not exit cleanly")
     count = ReadWholeFile(TextUntilNul(document[:]), source[:])
     Check(count == cast(s32)broken.count && TextView(source[0:count]) == broken,
         "a failed import was overwritten")
-    Say("document: file arguments, keyboard input, autosave and failed-import protection passed")
+    Say("document: file arguments, titles, real file drops, keyboard edits and failed-import protection passed")
     return 0
 }
 
