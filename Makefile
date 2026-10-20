@@ -108,7 +108,7 @@ Architecture: amd64
 Maintainer: Waozi <waozi@proton.me>
 Installed-Size: INSTALLED_SIZE
 Depends: libc6, libsdl2-2.0-0, libcairo2, gnumeric
-Homepage: https://github.com/kryonlabs/workbook
+Homepage: https://github.com/waozixyz/workbook
 Description: Spreadsheet editor
  Workbook is a native spreadsheet editor written in Ziran with Kryon. It reads
  and writes Gnumeric and CSV files and evaluates Gnumeric formulas; the cell

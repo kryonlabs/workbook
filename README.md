@@ -137,15 +137,15 @@ first of:
 
     WORKBOOK_DIR      generic workbook directory
     workbook.gnumeric in the current directory
-    workbook.json     in the current directory (the legacy profile format)
     ~/.local/share/workbook/workbook.gnumeric
 
 Geld always uses `GELD_DIR` when set, or `$XDG_DATA_HOME/geld` (default
 `~/.local/share/geld`). A workbook in the directory Geld was launched from
 does not replace its finance profile. Missing data directories are created
-automatically. Legacy `workbook.json` files are imported when no
-`workbook.gnumeric` exists beside them; subsequent changes go to
-`workbook.gnumeric`, keeping the original JSON intact.
+automatically. Named profiles and explicit data-directory overrides import
+legacy `workbook.json` files when no `workbook.gnumeric` exists beside them; subsequent changes go to
+`workbook.gnumeric`, keeping the original JSON intact. Ordinary Workbook launches leave the former
+finance JSON untouched and start with an empty sheet when no saved document exists.
 
 `workbook.json` holds private workbook data and is intentionally ignored by
 git. `workbook.example.json` is safe sample data for demos.

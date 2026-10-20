@@ -281,6 +281,7 @@ LoadWorkbook :: () {
         override = null
         if profile_name == "geld" { override = EnvironmentValue(CPath("GELD_DIR")) }
     }
+    legacy_profile: bool = application != "workbook"
     explicit: [4096]u8
     if OpenFileArgument(explicit[:]) {
         SetText(data_path[:], TextUntilNul(explicit[:]))
@@ -288,11 +289,12 @@ LoadWorkbook :: () {
         base: s32 = cast(s32)name.count - cast(s32)FileName(name).count
         if base > 0 { SetText(data_directory[:], name[0:base]) }
     } else if override != null && override[0] != 0 {
+        legacy_profile = true
         SetText(data_directory[:], TextFromCString(override))
         SetText(data_path[:], TextFromCString(override))
         AppendText(data_path[:], "/workbook.gnumeric")
     } else if application == "workbook" &&
-        (FileExists("workbook.gnumeric") || FileExists("workbook.json")) {
+        FileExists("workbook.gnumeric") {
         SetText(data_path[:], "workbook.gnumeric")
     } else {
         base: *u8 = EnvironmentValue(CPath("XDG_DATA_HOME"))
@@ -315,9 +317,10 @@ LoadWorkbook :: () {
     path: string = TextUntilNul(data_path[:])
     imported: bool = false
     legacy: [4096]u8
-    if PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
-        // No workbook yet: import the older workbook.json beside it. It is
-        // only read; the first save writes workbook.gnumeric.
+    if legacy_profile && PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
+        // Named or explicitly selected profiles may import their old JSON.
+        // Ordinary Workbook launches must not load the former finance seed.
+        // The original JSON is only read and remains available.
         SetText(legacy[:], path[0:cast(s32)path.count - 8])
         AppendText(legacy[:], "json")
         if PathAccess(*legacy[0], 0) == 0 {

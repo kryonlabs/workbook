@@ -459,6 +459,68 @@ DriveTabs :: (directory: string) -> s32 {
 // Geld must keep the last edit through a restart without Enter or Save, and
 // must ignore a generic workbook in its launch directory. A fresh XDG base
 // also exercises creation of all the missing data-directory parents.
+DriveStandalone :: (directory: string) -> s32 {
+    Check(Environment(PrivateMarker) == "1", "standalone checks require a private display")
+    root: [4096]u8
+    Check(RawCurrentDirectory(*root[0], 4096) != null, "cannot find repository directory")
+    app: [4096]u8
+    SetText(app[:], DesktopAppPath())
+    if app[0] != 47 {
+        SetText(app[:], TextUntilNul(root[:]))
+        AppendText(app[:], "/")
+        AppendText(app[:], DesktopAppPath())
+    }
+    SetEnvironment("WORKBOOK_TEST_APP", TextUntilNul(app[:]))
+    SetText(absolute_cell_path[:], TextUntilNul(root[:]))
+    AppendText(absolute_cell_path[:], "/")
+    AppendText(absolute_cell_path[:], CellPath)
+    generic: [4096]u8
+    SetText(generic[:], directory)
+    AppendText(generic[:], "/workbook")
+    Check(MakeDirectory(TextUntilNul(generic[:])), "cannot make generic data directory")
+    legacy: [4096]u8
+    SetText(legacy[:], TextUntilNul(generic[:]))
+    AppendText(legacy[:], "/workbook.json")
+    finance: string = "{\"rows\":[{\"label\":\"finance seed\",\"units\":5}]}\n"
+    Check(WriteWholeFile(TextUntilNul(legacy[:]), finance), "cannot write legacy finance fixture")
+    geld: [4096]u8
+    SetText(geld[:], directory)
+    AppendText(geld[:], "/geld")
+    Check(MakeDirectory(TextUntilNul(geld[:])), "cannot make Geld data directory")
+    geld_file: [4096]u8
+    SetText(geld_file[:], TextUntilNul(geld[:]))
+    AppendText(geld_file[:], "/workbook.gnumeric")
+    Check(WriteWholeFile(TextUntilNul(geld_file[:]), TwoSheets), "cannot write Geld fixture")
+    UnsetEnvironment("WORKBOOK_PROFILE")
+    UnsetEnvironment("WORKBOOK_DIR")
+    UnsetEnvironment("GELD_DIR")
+    SetEnvironment("XDG_DATA_HOME", directory)
+    work: [4096]u8
+    Check(CopyCString(directory, work[:]) && RawChangeDirectory(*work[0]) == 0,
+        "cannot enter standalone test directory")
+    LaunchApp(directory, TextUntilNul(generic[:]))
+    TypeText("plain Workbook")
+    Key("Return")
+    ExpectSavedCell(0, 0, "plain Workbook")
+    ExpectSavedCell(0, 1, "")
+    ExpectSizes("1 sheet(s)\nSheet1: 1 rows x 1 cols\n", "ordinary Workbook must start without finance data")
+    Check(StopApp() == 0, "standalone Workbook did not exit cleanly")
+    bytes: [4096]u8
+    count := ReadWholeFile(TextUntilNul(legacy[:]), bytes[:])
+    Check(count == finance.count && TextView(bytes[:count]) == finance, "legacy finance data changed")
+    count = ReadWholeFile(TextUntilNul(geld_file[:]), bytes[:])
+    Check(count == TwoSheets.count && TextView(bytes[:count]) == TwoSheets, "Geld data changed")
+    LaunchApp(directory, TextUntilNul(generic[:]))
+    ClickCell(0, 1)
+    TypeText("reopened")
+    Key("Return")
+    ExpectSavedCell(0, 0, "plain Workbook")
+    ExpectSavedCell(0, 1, "reopened")
+    Check(StopApp() == 0, "reopened Workbook did not exit cleanly")
+    Say("standalone: starts without the legacy finance seed, preserves Geld and legacy data, and reopens its own edits")
+    return 0
+}
+
 DriveAutosave :: (directory: string) -> s32 {
     Check(Environment(PrivateMarker) == "1",
         "the autosave driver requires the desktop test's private display")
@@ -1303,6 +1365,11 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
         AppendText(tabs[:], "/tabs")
         Check(MakeDirectory(TextUntilNul(tabs[:])), "cannot create the tabs directory")
         RunSession(self, "--drive-tabs", TextUntilNul(tabs[:]))
+        standalone: [4096]u8
+        SetText(standalone[:], work)
+        AppendText(standalone[:], "/standalone")
+        Check(MakeDirectory(TextUntilNul(standalone[:])), "cannot make standalone test directory")
+        RunSession(self, "--drive-standalone", TextUntilNul(standalone[:]))
         autosave: [4096]u8
         SetText(autosave[:], work)
         AppendText(autosave[:], "/autosave")
@@ -1342,6 +1409,9 @@ RunAll :: (self: string, menus_only: bool, headers_only: bool = false) -> s32 {
 
 #program_export
 main :: (argc: s32, argv: **s8) -> s32 {
+    if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-standalone" {
+        return DriveStandalone(TextFromCString(cast(*u8)argv[2]))
+    }
     if argc == 3 && TextFromCString(cast(*u8)argv[1]) == "--drive-document" {
         return DriveDocument(TextFromCString(cast(*u8)argv[2]))
     }
