@@ -147,6 +147,7 @@ gnumeric-test: build/gnumeric_test
 .PHONY: bundle
 bundle: build/workbook.zib
 build/workbook.zib: $(SOURCES)
+	@mkdir -p $(@D)
 	@$(ZIRAN) bundle --root . --module-path src --module-path $(shell $(ZIRAN) pkg path ziran)/std --module-path kryon=$(shell $(ZIRAN) pkg path kryon)/src/ui --module-path kryon=$(shell $(ZIRAN) pkg path kryon)/src/backend --module-path $(shell $(ZIRAN) pkg path kryon)/src/ui --module-path $(shell $(ZIRAN) pkg path kryon)/src/backend --module-path $(shell $(ZIRAN) pkg path mingcute)/src --define KRYON_HOSTED_UI --entry app:Main -o $@ src/app.zi
 
 .PHONY: service-test
