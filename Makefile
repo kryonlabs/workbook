@@ -140,8 +140,11 @@ structure-test: build/structure_test
 conversion-test: build/conversion_test
 	@build/conversion_test
 
+# A decimal-comma locale, when one is installed, checks that importing a
+# Gnumeric document keeps Workbook's numbers in the C format.
+COMMA_LOCALE := $(shell locale -a 2>/dev/null | grep -m1 -i -E '^(de_DE|es_ES|es_PY|fr_FR|pt_BR)\.utf-?8$$')
 gnumeric-test: build/gnumeric_test
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS GSETTINGS_BACKEND=memory build/gnumeric_test
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u LC_ALL $(if $(COMMA_LOCALE),LC_NUMERIC=$(COMMA_LOCALE)) GSETTINGS_BACKEND=memory build/gnumeric_test
 
 # The same editor, with input, files and calculation supplied by its host.
 .PHONY: bundle

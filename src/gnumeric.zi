@@ -9,6 +9,9 @@ NativePosition :: struct { col: s32; row: s32; }
 native_dl :: #system_library "dl";
 NativeOpenLibrary :: (name: *s8, flags: s32) -> *void #foreign native_dl "dlopen";
 NativeSymbol :: (library: *void, name: *s8) -> *void #foreign native_dl "dlsym";
+native_libc :: #system_library "libc";
+NativeSetLocale :: (category: s32, locale: *s8) -> *s8 #foreign native_libc "setlocale";
+NATIVE_LC_ALL :: 6;
 native_library: *void;
 native_context: *void;
 native_tried: bool;
@@ -181,6 +184,12 @@ NativeReady :: () -> bool {
     if !ok { return false }
     argv: [2]*s8
     argv[0] = CText("workbook")
+    // Gnumeric's start-up adopts the user's locale. Restore Workbook's
+    // afterwards, so a decimal comma never reaches its number parser or display.
+    saved: [256]s8
+    current := NativeSetLocale(NATIVE_LC_ALL, null)
+    kept := current != null && TextLength(current) < 256
+    if kept { unused MemoryCopy(cast(*void)*saved[0], cast(*void)current, TextLength(current) + 1) }
     unused native_pre_init(1, *argv[0])
     native_initialize()
     native_context = native_new_context()
@@ -189,6 +198,7 @@ NativeReady :: () -> bool {
     native_activate(native_plugins(), *error)
     // Optional plugin activation failures do not disable the core reader.
     if error != null { native_error_free(error) }
+    if kept { unused NativeSetLocale(NATIVE_LC_ALL, *saved[0]) }
     native_ready = true
     return true
 }
