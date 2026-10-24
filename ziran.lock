@@ -12,16 +12,16 @@
     },
     {
       "commit": "ac8c7e3cdfa89bc676d1aa60ced8b3f73b8ca8b7",
-      "dependencies": {"kryon": "p9dcb025ac3b40978"},
+      "dependencies": {"kryon": "pd5b0097c6461f2c1"},
       "id": "p7faa8aa31304f089",
       "name": "Kss",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kss.git"
     },
     {
-      "commit": "3ac50079a41765a08ca99adc9181dfa33bf65a91",
+      "commit": "9a17c574f7c61f812ee716c7c1ce90b1e07b322e",
       "dependencies": {"raylib": "p5a77c9c35110e925"},
-      "id": "p9dcb025ac3b40978",
+      "id": "pd5b0097c6461f2c1",
       "name": "kryon",
       "ref": "master",
       "url": "https://github.com/kryonlabs/kryon.git"
@@ -36,11 +36,11 @@
     }
   ],
   "root": {
-    "dependencies": {"kryon": "p9dcb025ac3b40978", "kss": "p7faa8aa31304f089", "mingcute": "pe1027b9d16704793"},
+    "dependencies": {"kryon": "pd5b0097c6461f2c1", "kss": "p7faa8aa31304f089", "mingcute": "pe1027b9d16704793"},
     "name": "workbook"
   },
   "toolchain": {
-    "commit": "130b263f42e9332896f7bc63cfed2508d34098dc",
+    "commit": "5f003e5893c90bede8d42644bf180deecdc31575",
     "ref": "master",
     "url": "https://github.com/ziranlang/ziran.git"
   }
