@@ -2,14 +2,6 @@
   "format": 1,
   "packages": [
     {
-      "commit": "d208dc030fe068ff8a40ed49444536736b4b45d6",
-      "dependencies": {"kryon": "pcec085fc76d6fd7b"},
-      "id": "p415d809184a859cd",
-      "name": "Kss",
-      "ref": "d208dc030fe068ff8a40ed49444536736b4b45d6",
-      "url": "https://github.com/kryonlabs/kss.git"
-    },
-    {
       "commit": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
       "dependencies": {},
       "id": "p5a77c9c35110e925",
@@ -17,6 +9,14 @@
       "ref": "fafa2cea97d0cb379d832086ba45a989fa6f9c8e",
       "source": true,
       "url": "https://github.com/raysan5/raylib.git"
+    },
+    {
+      "commit": "62a22c28d1209d8eed2ab5734146faca2ae35b92",
+      "dependencies": {"kryon": "p79167729f20b4a95"},
+      "id": "p5a7a7f36bbe80b6d",
+      "name": "Kss",
+      "ref": "62a22c28d1209d8eed2ab5734146faca2ae35b92",
+      "url": "https://github.com/kryonlabs/kss.git"
     },
     {
       "commit": "1844042d1ca751e62e61df7617dba19c98588339",
@@ -28,11 +28,11 @@
       "url": "https://github.com/webmproject/libwebp.git"
     },
     {
-      "commit": "7dc62902389544bf8d1fb3a159152cbd3b889c78",
+      "commit": "ead3eb7aa63535447a1116ecae7bb4d712d72034",
       "dependencies": {"libwebp": "p651a2c7a393977c0", "raylib": "p5a77c9c35110e925"},
-      "id": "pcec085fc76d6fd7b",
+      "id": "p79167729f20b4a95",
       "name": "kryon",
-      "ref": "7dc62902389544bf8d1fb3a159152cbd3b889c78",
+      "ref": "ead3eb7aa63535447a1116ecae7bb4d712d72034",
       "url": "https://github.com/kryonlabs/kryon.git"
     },
     {
@@ -45,7 +45,7 @@
     }
   ],
   "root": {
-    "dependencies": {"kryon": "pcec085fc76d6fd7b", "kss": "p415d809184a859cd", "mingcute": "pe1027b9d16704793"},
+    "dependencies": {"kryon": "p79167729f20b4a95", "kss": "p5a7a7f36bbe80b6d", "mingcute": "pe1027b9d16704793"},
     "name": "workbook"
   },
   "toolchain": {
