@@ -54,6 +54,44 @@ main :: () -> s32 {
     view.scroll_row = 9
     Grid.GridClamp(book, *view)
     Check(view.scroll_row == 2, "scrolling stops at a full last screen")
+
+    // The wheel: three rows a notch, one for a small touchpad step, a column
+    // with shift, and nothing outside the grid.
+    tall := Grid.GridAddSheet(book, "Sessions")
+    for row: 0..39 { Check(Grid.GridSet(book, tall, cast(s32)row, 0, "x"), "tall sheet") }
+    Check(Grid.GridSet(book, tall, 0, 4, "wide"), "wide sheet")
+    view.sheet = tall
+    view.scroll_row = 0
+    view.visible_rows = 10
+    area := Rectangle.{0.0, 0.0, 400.0, 300.0}
+    input: Grid.GridInput
+    input.x = 20.0
+    input.y = 20.0
+    input.wheel = -1.0
+    Grid.GridScroll(book, *view, input, area)
+    Check(view.scroll_row == Grid.GridWheelRows, "a notch down scrolls three rows")
+    input.wheel = 0.2
+    Grid.GridScroll(book, *view, input, area)
+    Check(view.scroll_row == Grid.GridWheelRows - 1, "a small step up scrolls one row")
+    input.wheel = -100.0
+    Grid.GridScroll(book, *view, input, area)
+    Check(view.scroll_row == 30, "the wheel stops at a full last screen")
+    input.shift = true
+    input.wheel = -1.0
+    Grid.GridScroll(book, *view, input, area)
+    Check(view.scroll_column == 1 && view.scroll_row == 30, "shift scrolls one column")
+    input.shift = false
+    input.x = 500.0
+    input.wheel = 1.0
+    Grid.GridScroll(book, *view, input, area)
+    Check(view.scroll_row == 30, "the wheel outside the grid does nothing")
+    // An ISO date stays the text it was given.
+    Check(Grid.GridSet(book, tall, 0, 1, "2026-11-03"), "date cell")
+    Engine.WorkbookEvaluate(book)
+    out5: [256]u8
+    day, dated := Grid.GridCellText(book, *view, 0, 1, out5[:])
+    Check(day == "2026-11-03", "dates show as YYYY-MM-DD")
+    unused dated
     WriteText(1, "grid: ok\n")
     return 0
 }

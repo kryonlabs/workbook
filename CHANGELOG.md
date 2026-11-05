@@ -6,6 +6,9 @@
   `workbook/engine`: real cells and formulas, sheet tabs, column widths and
   count or money formats. The editor paints with the same grid squares. It
   replaces the short-lived `workbook/sheet_table`.
+- The embedded grid scrolls three rows a wheel notch (Shift+wheel for
+  columns), can keep title rows on top and style total rows, and can draw
+  only the used cells like a report.
 - Workbook now lives at github.com/kryonlabs/workbook.
 - Hide selected rows from the row-number menu and click their thin lines to
   restore them, with undo and redo support.

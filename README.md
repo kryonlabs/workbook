@@ -165,7 +165,11 @@ editor's column letters, row numbers, cell squares, theme colors and sheet tabs,
 showing a real workbook from `workbook/engine`. Cells hold numbers, text and
 formulas such as `=SUM(B2:B9)`; columns can have their own width and a count
 (`1,250,734`) or money (`$12.85`) format. The view is read-only and scrolls with
-the wheel. The Workbook editor paints its grid with the same squares.
+the wheel, three rows a notch or a column with Shift. `frozen_rows` keeps title
+rows on top, `total_rows` styles closing rows like headers, and `trim` draws only
+the used cells. Hosts whose windows route the wheel themselves fill in
+`GridInput`; others use `GridSample`. The Workbook editor paints its grid with
+the same squares.
 
 ```jai
 Engine :: #import "workbook/engine";
