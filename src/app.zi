@@ -33,6 +33,8 @@
     Picker :: #import "kryon/file_picker";
 }
 Json :: #import "json_scan";
+// The grid's metrics, colors and cell squares, shared with embedded grids.
+Grid :: #import "grid";
 #if !#defined(KRYON_HOSTED_UI) {
     SystemStyle :: #import "kss/SystemStyle";
     SystemThemeLinux :: #import "SystemThemeLinux";
@@ -83,11 +85,6 @@ using TextWrap;
 MaxRows :: 16777216; // GNM_MAX_ROWS
 MaxColumns :: 16384; // GNM_MAX_COLS
 CellTextMax :: 256;
-ColumnWidth :: 96.0;
-RowHeight :: 22.0;
-HiddenRowHeight :: 6.0;
-HeaderHeight :: 24.0;
-RowHeaderWidth :: 40.0;
 TableTop :: 86.0;
 Margin :: 0.0;
 // Distances from the window's bottom edge to the sheet tabs and the grid.
@@ -1424,7 +1421,7 @@ visible_columns: s32 = 8;
 grid_body_height: float32 = 352.0;
 
 RowHidden :: (row: s32) -> bool { return Engine.WorkbookRowHidden(workbook, sheet_index, row) != 0 }
-GridRowHeight :: (row: s32) -> float32 { return ifx RowHidden(row) then HiddenRowHeight else RowHeight }
+GridRowHeight :: (row: s32) -> float32 { return ifx RowHidden(row) then Grid.GridHiddenRowHeight else Grid.GridRowHeight }
 
 NextVisibleRow :: (row: s32, step: s32) -> s32 {
     next: s32 = row + step
@@ -1434,7 +1431,7 @@ NextVisibleRow :: (row: s32, step: s32) -> s32 {
 
 GridRowAt :: (table: Rectangle, y: float32) -> s32 {
     row: s32 = scroll_row
-    top: float32 = table.y + HeaderHeight
+    top: float32 = table.y + Grid.GridHeaderHeight
     while row < scroll_row + visible_rows - 1 && y >= top + GridRowHeight(row) {
         top += GridRowHeight(row)
         row += 1
@@ -1461,7 +1458,7 @@ last_click_column: s32 = -1;
 EnsureVisible :: () {
     if selected_row < scroll_row { scroll_row = selected_row }
     if selected_row >= scroll_row + visible_rows {
-        scroll_row = Max(0, selected_row - Max(1, cast(s32)(grid_body_height / RowHeight)) + 1)
+        scroll_row = Max(0, selected_row - Max(1, cast(s32)(grid_body_height / Grid.GridRowHeight)) + 1)
     }
     if selected_column < scroll_column { scroll_column = selected_column }
     if selected_column >= scroll_column + visible_columns {
@@ -1474,9 +1471,9 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         viewport.width - Margin * 2.0, viewport.height - TableTop - GridBottom}
     grid_right = table.x + table.width
     grid_bottom = table.y + table.height
-    grid_body_height = table.height - HeaderHeight
-    visible_rows = cast(s32)((grid_body_height + RowHeight - 1.0) / RowHeight)
-    visible_columns = cast(s32)((table.width - RowHeaderWidth + ColumnWidth - 1.0) / ColumnWidth)
+    grid_body_height = table.height - Grid.GridHeaderHeight
+    visible_rows = cast(s32)((grid_body_height + Grid.GridRowHeight - 1.0) / Grid.GridRowHeight)
+    visible_columns = cast(s32)((table.width - Grid.GridRowHeaderWidth + Grid.GridColumnWidth - 1.0) / Grid.GridColumnWidth)
     rows: s32 = GridRows()
     columns: s32 = GridColumns()
 
@@ -1512,14 +1509,14 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
     last_column: s32 = SelectionLastColumn()
     spans: bool = selection_axis == 0 && (first_row != last_row || first_column != last_column)
 
-    GridSquare(session, 10, Rectangle.{table.x, table.y, RowHeaderWidth, HeaderHeight},
+    GridSquare(session, 10, Rectangle.{table.x, table.y, Grid.GridRowHeaderWidth, Grid.GridHeaderHeight},
         HeaderBackground(), "")
     column: s32 = scroll_column
     while column < scroll_column + visible_columns && column < columns {
         name: [8]u8
         AppendCellColumn(name[:], column)
         GridSquare(session, 20 + column - scroll_column, Rectangle.{ColumnX(table, column), table.y,
-                ColumnWidth, HeaderHeight}, ifx here && selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
+                Grid.GridColumnWidth, Grid.GridHeaderHeight}, ifx here && selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
         column += 1
     }
     shown: s32 = 0
@@ -1527,7 +1524,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         row: s32 = scroll_row + shown
         y: float32 = RowY(table, row)
         if RowHidden(row) {
-            GridSquare(session, 1000 + shown, Rectangle.{table.x, y, table.width, HiddenRowHeight}, HeaderBackground(), "")
+            GridSquare(session, 1000 + shown, Rectangle.{table.x, y, table.width, Grid.GridHiddenRowHeight}, HeaderBackground(), "")
             strip: BoxProps
             strip.key = cast(u64)(500000 + shown)
             strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
@@ -1539,7 +1536,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         number: [16]u8
         row_digits: [16]u8
         SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
-        GridSquare(session, 1000 + shown, Rectangle.{table.x, y, RowHeaderWidth, RowHeight},
+        GridSquare(session, 1000 + shown, Rectangle.{table.x, y, Grid.GridRowHeaderWidth, Grid.GridRowHeight},
             ifx here && selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
         column = scroll_column
         while column < scroll_column + visible_columns && column < columns {
@@ -1557,7 +1554,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
             in_columns: bool = selection_axis == 1 || (column >= first_column && column <= last_column)
             if here && in_rows && in_columns && !(spans && active) { fill = SelectedBackground() }
             GridSquare(session, 10000 + shown * visible_columns + column - scroll_column,
-                Rectangle.{ColumnX(table, column), y, ColumnWidth, RowHeight},
+                Rectangle.{ColumnX(table, column), y, Grid.GridColumnWidth, Grid.GridRowHeight},
                 fill, TextUntilNul(display[:]))
             column += 1
         }
@@ -1588,10 +1585,10 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
 
     if menus_block_input { return }
     pointer: PointerFrame = EditorPointer(session)
-    body: Rectangle = Rectangle.{table.x + RowHeaderWidth, table.y + HeaderHeight,
-        table.width - RowHeaderWidth, table.height - HeaderHeight}
+    body: Rectangle = Rectangle.{table.x + Grid.GridRowHeaderWidth, table.y + Grid.GridHeaderHeight,
+        table.width - Grid.GridRowHeaderWidth, table.height - Grid.GridHeaderHeight}
     hit_row: s32 = GridRowAt(table, pointer.y)
-    hit_column: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
+    hit_column: s32 = scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
     on_cell: bool = PointInBounds(pointer.x, pointer.y, body) && hit_row < rows &&
     hit_row < scroll_row + visible_rows && hit_column < columns && hit_column < scroll_column + visible_columns
     if pointer.pressed && !grid_menu_open {
@@ -1649,7 +1646,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         if pointer.y > body.y { row = GridRowAt(table, pointer.y) }
         row = Min(row, Min(scroll_row + visible_rows - 1, MaxRows - 1))
         column = scroll_column
-        if pointer.x > body.x { column = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth) }
+        if pointer.x > body.x { column = scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth) }
         column = Min(column, Min(scroll_column + visible_columns - 1, MaxColumns - 1))
         if drag_mode == DragRange && !edit_focused && here {
             selection_axis = 0
@@ -1685,7 +1682,7 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         // The secondary button opens the menu; outside the selection it first
         // selects the cell under it.
         row: s32 = GridRowAt(table, pointer.y)
-        clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / ColumnWidth)
+        clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
         if row < rows && !RowHidden(row) && clicked < columns && clicked < scroll_column + visible_columns {
             inside: bool = here && selection_axis == 0 && row >= first_row && row <= last_row &&
             clicked >= first_column && clicked <= last_column
@@ -1709,8 +1706,8 @@ FillHandleBounds :: (table: Rectangle) -> Rectangle {
     if RowHidden(row) { return none }
     if row < scroll_row || row >= scroll_row + visible_rows ||
     column < scroll_column || column >= scroll_column + visible_columns { return none }
-    x: float32 = ColumnX(table, column) + ColumnWidth
-    y: float32 = RowY(table, row) + RowHeight
+    x: float32 = ColumnX(table, column) + Grid.GridColumnWidth
+    y: float32 = RowY(table, row) + Grid.GridRowHeight
     return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
 }
 
@@ -1799,12 +1796,12 @@ DrawCellEditor :: (session: Session, table: Rectangle) {
     x: float32 = ColumnX(table, selected_column)
     y: float32 = RowY(table, selected_row)
     width: float32 = cast(float32)(EditorGlyphWidth(text) + 16)
-    if width < ColumnWidth { width = ColumnWidth }
+    if width < Grid.GridColumnWidth { width = Grid.GridColumnWidth }
     limit: float32 = ColumnX(table, scroll_column + visible_columns) - x
     if width > limit { width = limit }
     box: BoxProps
     box.key = cast(u64)400500
-    box.bounds = Rectangle.{x, y, width, RowHeight}
+    box.bounds = Rectangle.{x, y, width, Grid.GridRowHeight}
     box.fill = CellBackground()
     box.border = AccentColor()
     Box(session, box)
@@ -1813,14 +1810,14 @@ DrawCellEditor :: (session: Session, table: Rectangle) {
     label.text = text
     label.font = Text14
     label.wrap = cast(TextWrap)TextWrapNone
-    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, RowHeight - 4.0}
+    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, Grid.GridRowHeight - 4.0}
     Text(session, label)
     cursor: s32 = Min(edit_cursor, cast(s32)text.count)
     caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
     if caret_x < x + width - 2.0 {
         caret: BoxProps
         caret.key = cast(u64)400502
-        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, RowHeight - 10.0}
+        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, Grid.GridRowHeight - 10.0}
         caret.fill = AccentColor()
         caret.border = AccentColor()
         Box(session, caret)
@@ -1838,7 +1835,7 @@ CellOutline :: (session: Session, key: s32, table: Rectangle, first_row: s32, fi
     if top > bottom || left > right { return }
     x: float32 = ColumnX(table, left)
     y: float32 = RowY(table, top)
-    width: float32 = cast(float32)(right - left + 1) * ColumnWidth
+    width: float32 = cast(float32)(right - left + 1) * Grid.GridColumnWidth
     height: float32 = RowY(table, bottom) + GridRowHeight(bottom) - y
     width = MinFloat(width, grid_right - x)
     height = MinFloat(height, grid_bottom - y)
@@ -1943,18 +1940,18 @@ GridCommand :: (id: s32) {
 }
 
 // The grid takes its colors from the installed style, so it follows the theme.
-HeaderBackground :: () -> Color { return EditorColor("surface") }
-CellBackground :: () -> Color { return EditorColor("card") }
-SelectedBackground :: () -> Color { return EditorColor("accent-soft") }
-AccentColor :: () -> Color { return EditorColor("accent") }
-GridLineColor :: () -> Color { return EditorColor("border-soft") }
+HeaderBackground :: () -> Color { return Grid.GridHeaderBackground() }
+CellBackground :: () -> Color { return Grid.GridCellBackground() }
+SelectedBackground :: () -> Color { return Grid.GridSelectedBackground() }
+AccentColor :: () -> Color { return Grid.GridAccentColor() }
+GridLineColor :: () -> Color { return Grid.GridLineColor() }
 
 ColumnX :: (table: Rectangle, column: s32) -> float32 {
-    return table.x + RowHeaderWidth + cast(float32)(column - scroll_column) * ColumnWidth
+    return table.x + Grid.GridRowHeaderWidth + cast(float32)(column - scroll_column) * Grid.GridColumnWidth
 }
 
 RowY :: (table: Rectangle, row: s32) -> float32 {
-    y: float32 = table.y + HeaderHeight
+    y: float32 = table.y + Grid.GridHeaderHeight
     at: s32 = scroll_row
     while at < row { y += GridRowHeight(at); at += 1 }
     return y
@@ -1962,24 +1959,7 @@ RowY :: (table: Rectangle, row: s32) -> float32 {
 
 // One grid square: a bordered box and its clipped text.
 GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: Color, text: string) {
-    if bounds.x + bounds.width > grid_right { bounds.width = grid_right - bounds.x }
-    if bounds.y + bounds.height > grid_bottom { bounds.height = grid_bottom - bounds.y }
-    if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
-    box: BoxProps
-    box.key = 1000000 + cast(u64)key * 2
-    box.bounds = bounds
-    box.fill = fill
-    box.border = GridLineColor()
-    Box(session, box)
-    if text.count == 0 { return }
-    label: TextProps
-    label.key = 1000001 + cast(u64)key * 2
-    label.text = text
-    label.font = Text14
-    label.wrap = cast(TextWrap)TextWrapNone
-    label.bounds = Rectangle.{bounds.x + 4.0, bounds.y + 3.0,
-        bounds.width - 8.0, bounds.height - 4.0}
-    Text(session, label)
+    Grid.GridSquare(session, 1000000 + cast(u64)key * 2, bounds, grid_right, grid_bottom, fill, text)
 }
 
 
@@ -2389,23 +2369,7 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
     EditorClipboardHasText :: () -> bool { return SystemClipboardHasText() }
 }
 
-EditorColor :: (name: string) -> Color {
-    #if #defined(KRYON_HOSTED_UI) {
-        accent := Theme.AppThemeColor("focus-ring", Color.{37, 99, 235, 255})
-        if name == "accent" { return accent }
-        if name == "border-soft" { return Theme.AppThemeColor("border", Color.{208, 216, 224, 255}) }
-        if name == "surface" { return Theme.AppThemeColor("button", Color.{236, 239, 243, 255}) }
-        if name == "accent-soft" {
-            base := Theme.AppThemeColor("card", Color.{255, 255, 255, 255})
-            return Color.{cast(u8)((cast(s32)base.r * 4 + cast(s32)accent.r) / 5),
-                cast(u8)((cast(s32)base.g * 4 + cast(s32)accent.g) / 5),
-                cast(u8)((cast(s32)base.b * 4 + cast(s32)accent.b) / 5), 255}
-        }
-        return Theme.AppThemeColor(name, Color.{245, 245, 245, 255})
-    } else {
-        return StyleTokenColor(name)
-    }
-}
+EditorColor :: (name: string) -> Color { return Grid.GridColor(name) }
 
 EditorMenu :: (session: Session, props: MenuProps, groups: []MenuGroup, state: *MenuState) -> MenuResult {
     #if #defined(KRYON_HOSTED_UI) {

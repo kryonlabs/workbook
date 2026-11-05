@@ -158,28 +158,30 @@ finance JSON untouched and start with an empty sheet when no saved document exis
 git. `workbook.example.json` is safe sample data for demos.
 
 
-## Embedded tables
+## Embedded grid
 
-Other Ziran apps can show a read-only, CSV-like table with the
-`workbook/sheet_table` export. It holds typed columns (text, counts, money)
-and rows of plain decimal text, adds a totals row, formats numbers, fits the
-column widths to the content, lays out the cells of one screen and writes
-CSV. The host app draws the cells, so the module needs no UI toolkit.
+Other Kryon apps embed Workbook's grid with the `workbook/grid` export: the
+editor's column letters, row numbers, cell squares, theme colors and sheet tabs,
+showing a real workbook from `workbook/engine`. Cells hold numbers, text and
+formulas such as `=SUM(B2:B9)`; columns can have their own width and a count
+(`1,250,734`) or money (`$12.85`) format. The view is read-only and scrolls with
+the wheel. The Workbook editor paints its grid with the same squares.
 
 ```jai
-using Sheet :: #import "workbook/sheet_table";
-table: SheetTable
-SheetAddColumn(*table, "Folder", SheetText)
-SheetAddColumn(*table, "Tokens", SheetNumber)
-SheetAddColumn(*table, "Cost", SheetMoney)
-table.total_label = "Total"
-row := SheetAddRow(*table)
-SheetSet(*table, row, 0, "aurea"); SheetSet(*table, row, 1, "4795296906"); SheetSet(*table, row, 2, "1475.75")
-SheetFit(*table, Measure, 13.0, 8.0, width)
-cells := SheetLayout(*table, x, y, 28.0, 30.0, height, first_row)
+Engine :: #import "workbook/engine";
+using Grid :: #import "workbook/grid";
+book := Engine.WorkbookNew()
+sheet := GridAddSheet(book, "Usage")
+unused GridSet(book, sheet, 0, 0, "Folder"); unused GridSet(book, sheet, 0, 1, "Tokens")
+unused GridSet(book, sheet, 1, 0, "aurea"); unused GridSet(book, sheet, 1, 1, "4795296906")
+unused GridSet(book, sheet, 2, 0, "Total"); unused GridSet(book, sheet, 2, 1, "=SUM(B2:B2)")
+Engine.WorkbookEvaluate(book)
+view: GridView
+view.key = 5000000; view.widths[0] = 180.0; view.formats[1] = GridCount
+GridDraw(session, bounds, book, *view, GridSample(session, bounds))
 ```
 
-`make sheet-table-test` checks it.
+`make grid-test` checks it.
 
 
 ## Werkzeug app bundle

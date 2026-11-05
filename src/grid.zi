@@ -1,0 +1,403 @@
+// Workbook's cell grid for any Kryon app: the editor's metrics, theme colors
+// and cell squares, and a read-only view of a workbook with column letters,
+// row numbers, the cells of one sheet and its sheet tabs. The Workbook editor
+// paints its own grid with the same squares and colors.
+#if #defined(KRYON_HOSTED_UI) {
+    #import "geometry"
+    #import "session"
+    #import "drawing_props"
+    #import "box_props"
+    #import "box_widget"
+    #import "text_props"
+    #import "text_align"
+    #import "text_widget"
+    #import "tab_bar_props"
+    #import "tab_bar_widget"
+    Engine :: #import "portable_engine";
+    Theme :: #import "kryon/app_theme";
+} else {
+    using UI :: #import "kryon/Widgets";
+    Engine :: #import "engine";
+    #import "std/c_string"
+}
+#import "std/vec"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+
+GridColumnWidth :: 96.0;
+GridRowHeight :: 22.0;
+GridHiddenRowHeight :: 6.0;
+GridHeaderHeight :: 24.0;
+GridRowHeaderWidth :: 40.0;
+GridTabsHeight :: 28.0;
+// Columns with their own width or number format.
+GridColumnsMax :: 64;
+
+// Number formats of a column: as calculated, a whole count with thousands
+// separators, or dollars and cents.
+GridGeneral :: 0;
+GridCount :: 1;
+GridMoney :: 2;
+
+// What a host keeps for one embedded grid between frames.
+GridView :: struct {
+    // The first widget key; the view's widgets use keys from here up.
+    key: u64;
+    sheet: s32;
+    scroll_row: s32;
+    scroll_column: s32;
+    // Zero keeps GridColumnWidth.
+    widths: [64]float32;
+    formats: [64]s32;
+    // Filled in by GridDraw: the rows and columns that fit.
+    visible_rows: s32;
+    visible_columns: s32;
+}
+
+// The host's pointer for this frame; wheel is positive when scrolled up.
+GridInput :: struct {
+    x: float32;
+    y: float32;
+    wheel: float32;
+}
+
+// The grid takes its colors from the installed style, so it follows the theme.
+GridColor :: (name: string) -> Color {
+    #if #defined(KRYON_HOSTED_UI) {
+        accent := Theme.AppThemeColor("focus-ring", Color.{37, 99, 235, 255})
+        if name == "accent" { return accent }
+        if name == "border-soft" { return Theme.AppThemeColor("border", Color.{208, 216, 224, 255}) }
+        if name == "surface" { return Theme.AppThemeColor("button", Color.{236, 239, 243, 255}) }
+        if name == "accent-soft" {
+            base := Theme.AppThemeColor("card", Color.{255, 255, 255, 255})
+            return Color.{cast(u8)((cast(s32)base.r * 4 + cast(s32)accent.r) / 5),
+                cast(u8)((cast(s32)base.g * 4 + cast(s32)accent.g) / 5),
+                cast(u8)((cast(s32)base.b * 4 + cast(s32)accent.b) / 5), 255}
+        }
+        return Theme.AppThemeColor(name, Color.{245, 245, 245, 255})
+    } else {
+        return StyleTokenColor(name)
+    }
+}
+GridHeaderBackground :: () -> Color { return GridColor("surface") }
+GridCellBackground :: () -> Color { return GridColor("card") }
+GridSelectedBackground :: () -> Color { return GridColor("accent-soft") }
+GridAccentColor :: () -> Color { return GridColor("accent") }
+GridLineColor :: () -> Color { return GridColor("border-soft") }
+
+// One grid square: a bordered box and its text, clipped at right and bottom.
+// It uses two widget keys, key and key + 1.
+GridSquare :: (session: Session, key: u64, bounds: Rectangle, right: float32, bottom: float32,
+    fill: Color, text: string, align_end: bool = false) {
+    if bounds.x + bounds.width > right { bounds.width = right - bounds.x }
+    if bounds.y + bounds.height > bottom { bounds.height = bottom - bounds.y }
+    if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
+    box: BoxProps
+    box.key = key
+    box.bounds = bounds
+    box.fill = fill
+    box.border = GridLineColor()
+    Box(session, box)
+    if text.count == 0 { return }
+    label: TextProps
+    label.key = key + 1
+    label.text = text
+    label.font = Text14
+    label.wrap = TextWrap.TextWrapNone
+    if align_end { label.align = TextAlign.TextAlignEnd }
+    label.bounds = Rectangle.{bounds.x + 4.0, bounds.y + 3.0,
+        bounds.width - 8.0, bounds.height - 4.0}
+    Text(session, label)
+}
+
+// Column letters: A to Z, then AA to ZZ.
+GridColumnName :: (column: s32) -> string {
+    letters: [2]u8
+    out: Vec(u8)
+    if column < 26 {
+        letters[0] = cast(u8)(65 + column)
+        BuilderAppend(out, TextView(letters[0:1]))
+    } else {
+        letters[0] = cast(u8)(65 + column / 26 - 1)
+        letters[1] = cast(u8)(65 + column % 26)
+        BuilderAppend(out, TextView(letters[0:2]))
+    }
+    return BuilderFinish(out)
+}
+
+GridWidth :: (view: *GridView, column: s32) -> float32 {
+    if column >= 0 && column < GridColumnsMax && view.widths[column] > 0.0 { return view.widths[column] }
+    return GridColumnWidth
+}
+
+// The left edge of a shown column in a grid whose row numbers start at x.
+GridColumnX :: (view: *GridView, x: float32, column: s32) -> float32 {
+    at := x + GridRowHeaderWidth
+    index := view.scroll_column
+    while index < column { at += GridWidth(view, index); index += 1 }
+    return at
+}
+
+GridFormat :: (view: *GridView, column: s32) -> s32 {
+    return ifx column >= 0 && column < GridColumnsMax then view.formats[column] else GridGeneral
+}
+
+// ------------------------------------------------------------ numbers
+
+GridScale :: 1000000;
+
+// Decimal text in millionths, rounded half up; no exponents.
+GridMicros :: (text: string) -> (value: s64, ok: bool) {
+    if text == "" { return 0, false }
+    at: s64 = 0
+    negative := false
+    if text[0] == 45 || text[0] == 43 {
+        negative = text[0] == 45
+        at = 1
+    }
+    whole: s64 = 0
+    fraction: s64 = 0
+    kept: s32 = 0
+    digits: s32 = 0
+    point := false
+    up := false
+    while at < text.count {
+        c := text[at]
+        at += 1
+        if c == 46 && !point {
+            point = true
+            continue
+        }
+        if c < 48 || c > 57 { return 0, false }
+        digit := cast(s64)(c - 48)
+        digits += 1
+        if !point {
+            if whole > 922337203684 { return 0, false }
+            whole = whole * 10 + digit
+        } else if kept < 6 {
+            fraction = fraction * 10 + digit
+            kept += 1
+        } else if kept == 6 {
+            up = digit >= 5
+            kept += 1
+        }
+    }
+    if digits == 0 { return 0, false }
+    places := ifx kept > 6 then 6 else kept
+    while places < 6 {
+        fraction *= 10
+        places += 1
+    }
+    value := whole * GridScale + fraction
+    if up { value += 1 }
+    return ifx negative then -value else value, true
+}
+
+GridGrouped :: (out: *Vec(u8), value: s64) {
+    digits: [24]u8
+    count: s32 = 0
+    rest := value
+    while true {
+        digits[count] = cast(u8)(48 + rest % 10)
+        count += 1
+        rest /= 10
+        if rest == 0 { break }
+    }
+    index := count - 1
+    while index >= 0 {
+        unused VecPush(out.*, digits[index])
+        if index > 0 && index % 3 == 0 { unused VecPush(out.*, 44) }
+        index -= 1
+    }
+}
+
+// Millionths rounded half away from zero to a whole unit.
+GridRound :: (micros: s64, unit: s64) -> s64 {
+    half := unit / 2
+    return ifx micros < 0 then -((-micros + half) / unit) else (micros + half) / unit
+}
+
+GridCountText :: (micros: s64) -> string {
+    out: Vec(u8)
+    whole := GridRound(micros, GridScale)
+    if whole < 0 { BuilderPrint(*out, "-") }
+    GridGrouped(*out, ifx whole < 0 then -whole else whole)
+    return BuilderFinish(out)
+}
+
+GridDollars :: (micros: s64) -> string {
+    out: Vec(u8)
+    cents := GridRound(micros, 10000)
+    magnitude := ifx cents < 0 then -cents else cents
+    if cents < 0 { BuilderPrint(*out, "-") }
+    BuilderPrint(*out, "$")
+    GridGrouped(*out, magnitude / 100)
+    BuilderPrint(*out, ".")
+    if magnitude % 100 < 10 { BuilderPrint(*out, "0") }
+    BuilderPrint(*out, "%", magnitude % 100)
+    return BuilderFinish(out)
+}
+
+// A calculated value in a column's format; other text is kept as it is.
+GridFormatText :: (format: s32, text: string) -> (text: string, number: bool) {
+    micros, ok := GridMicros(text)
+    if !ok { return text, false }
+    if format == GridCount { return GridCountText(micros), true }
+    if format == GridMoney { return GridDollars(micros), true }
+    return text, true
+}
+
+// ------------------------------------------------------------ workbook
+
+// A new sheet at the end; its index, or -1.
+GridAddSheet :: (book: *Engine.Workbook, name: string) -> s32 {
+    #if #defined(KRYON_HOSTED_UI) {
+        return Engine.WorkbookAddSheet(book, name)
+    } else {
+        copy: [256]u8
+        if !CopyCString(name, copy[:]) || Engine.WorkbookAddSheet(book, cast(*s8)*copy[0]) == null { return -1 }
+        return Engine.WorkbookSheetCount(book) - 1
+    }
+}
+
+// Sets a cell's source: a number, text, or a formula starting with "=".
+GridSet :: (book: *Engine.Workbook, sheet: s32, row: s32, column: s32, source: string) -> bool {
+    #if #defined(KRYON_HOSTED_UI) {
+        return Engine.WorkbookSetCell(book, sheet, row, column, source) != 0
+    } else {
+        copy: [1024]u8
+        if !CopyCString(source, copy[:]) { return false }
+        return Engine.WorkbookSetCell(book, sheet, row, column, cast(*s8)*copy[0]) != 0
+    }
+}
+
+GridSheetName :: (book: *Engine.Workbook, sheet: s32) -> string {
+    #if #defined(KRYON_HOSTED_UI) {
+        return Engine.WorkbookSheetName(book, sheet)
+    } else {
+        return TextFromCString(cast(*u8)Engine.WorkbookSheetName(book, sheet))
+    }
+}
+
+// The calculated value of a cell as the grid shows it, in its column's
+// format; number tells whether it is a number. Call WorkbookEvaluate after
+// changing cells.
+GridCellText :: (book: *Engine.Workbook, view: *GridView, row: s32, column: s32, out: []u8) -> (text: string, number: bool) {
+    out[0] = 0
+    #if #defined(KRYON_HOSTED_UI) {
+        Engine.WorkbookCellDisplay(book, view.sheet, row, column, out, cast(s32)out.count)
+    } else {
+        Engine.WorkbookCellDisplay(book, view.sheet, row, column, cast(*s8)*out[0], cast(s32)out.count)
+        if book.native == null { Engine.RoundForDisplay(cast(*s8)*out[0], cast(s32)out.count) }
+    }
+    return GridFormatText(GridFormat(view, column), TextUntilNul(out))
+}
+
+// Keeps the scroll position inside the sheet's rows and columns.
+GridClamp :: (book: *Engine.Workbook, view: *GridView) {
+    count := Engine.WorkbookSheetCount(book)
+    if view.sheet >= count { view.sheet = count - 1 }
+    if view.sheet < 0 { view.sheet = 0 }
+    rows := Engine.WorkbookSheetRows(book, view.sheet)
+    last_row := rows - view.visible_rows
+    if view.scroll_row > last_row { view.scroll_row = last_row }
+    if view.scroll_row < 0 { view.scroll_row = 0 }
+    columns := Engine.WorkbookSheetColumns(book, view.sheet)
+    if view.scroll_column > columns - 1 { view.scroll_column = columns - 1 }
+    if view.scroll_column < 0 { view.scroll_column = 0 }
+}
+
+GridInside :: (x: float32, y: float32, bounds: Rectangle) -> bool {
+    return x >= bounds.x && y >= bounds.y && x < bounds.x + bounds.width && y < bounds.y + bounds.height
+}
+
+#if !#defined(KRYON_HOSTED_UI) {
+    // The session's pointer and the wheel over bounds, taken for this grid.
+    GridSample :: (session: Session, bounds: Rectangle) -> GridInput {
+        pointer := PointerSample(session)
+        input: GridInput
+        input.x = pointer.x
+        input.y = pointer.y
+        input.wheel = PointerWheelTake(session, bounds)
+        return input
+    }
+}
+
+// Draws the sheet tabs along the bottom when the workbook has more than one
+// sheet, and the shown sheet's grid above them, filling bounds with empty
+// rows and columns as the editor does. The wheel scrolls the rows.
+GridDraw :: (session: Session, bounds: Rectangle, book: *Engine.Workbook, view: *GridView, input: GridInput) {
+    sheets := Engine.WorkbookSheetCount(book)
+    if book == null || sheets < 1 { return }
+    table := bounds
+    if sheets > 1 { table.height -= GridTabsHeight }
+    right := table.x + table.width
+    bottom := table.y + table.height
+    view.visible_rows = cast(s32)((table.height - GridHeaderHeight) / GridRowHeight)
+    if view.visible_rows < 1 { view.visible_rows = 1 }
+    if GridInside(input.x, input.y, table) {
+        if input.wheel > 0.0 { view.scroll_row -= 1 }
+        if input.wheel < 0.0 { view.scroll_row += 1 }
+    }
+    GridClamp(book, view)
+    view.visible_columns = 0
+    at := table.x + GridRowHeaderWidth
+    while at < right && view.visible_columns < GridColumnsMax {
+        at += GridWidth(view, view.scroll_column + view.visible_columns)
+        view.visible_columns += 1
+    }
+
+    GridSquare(session, view.key, Rectangle.{table.x, table.y, GridRowHeaderWidth, GridHeaderHeight}, right, bottom, GridHeaderBackground(), "")
+    for shown: 0..view.visible_columns - 1 {
+        column := view.scroll_column + shown
+        name := GridColumnName(column)
+        GridSquare(session, view.key + cast(u64)(2 + shown * 2), Rectangle.{GridColumnX(view, table.x, column), table.y, GridWidth(view, column), GridHeaderHeight},
+            right, bottom, GridHeaderBackground(), name)
+    }
+    // Every row that fits, past the sheet's last row as well.
+    shown_rows := cast(s32)((table.height - GridHeaderHeight + GridRowHeight - 1.0) / GridRowHeight)
+    for shown: 0..shown_rows - 1 {
+        row := view.scroll_row + shown
+        y := table.y + GridHeaderHeight + cast(float32)shown * GridRowHeight
+        number: Vec(u8)
+        BuilderPrint(*number, "%", row + 1)
+        GridSquare(session, view.key + cast(u64)(2000 + shown * 2), Rectangle.{table.x, y, GridRowHeaderWidth, GridRowHeight},
+            right, bottom, GridHeaderBackground(), BuilderFinish(number))
+        for index: 0..view.visible_columns - 1 {
+            column := view.scroll_column + index
+            display: [256]u8
+            text, numeric := GridCellText(book, view, row, column, display[:])
+            GridSquare(session, view.key + cast(u64)(100000 + (shown * GridColumnsMax + index) * 2),
+                Rectangle.{GridColumnX(view, table.x, column), y, GridWidth(view, column), GridRowHeight},
+                right, bottom, GridCellBackground(), text, numeric)
+        }
+    }
+
+    if sheets < 2 { return }
+    count := ifx sheets > 16 then 16 else sheets
+    tabs: [16]Tab
+    for index: 0..count - 1 {
+        tabs[index].key = view.key + cast(u64)(90000 + index)
+        tabs[index].label = GridSheetName(book, index)
+    }
+    strip: BoxProps
+    strip.key = view.key + 89998
+    strip.bounds = Rectangle.{bounds.x, bottom, bounds.width, GridTabsHeight}
+    strip.fill = GridHeaderBackground()
+    strip.border = GridLineColor()
+    Box(session, strip)
+    bar: TabBarProps
+    bar.key = view.key + 89999
+    bar.placement = TabBarPlacement.TabBarBottom
+    bar.selected_index = view.sheet
+    width := 140.0 * cast(float32)count
+    bar.bounds = Rectangle.{bounds.x, bottom, ifx width < bounds.width then width else bounds.width, GridTabsHeight}
+    bar.min_tab_width = 96
+    bar.max_tab_width = 160
+    result := TabBar(session, bar, tabs[0:count])
+    if result.selected_index != view.sheet && result.selected_index >= 0 {
+        view.sheet = result.selected_index
+        view.scroll_row = 0
+        view.scroll_column = 0
+    }
+}
