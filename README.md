@@ -158,6 +158,30 @@ finance JSON untouched and start with an empty sheet when no saved document exis
 git. `workbook.example.json` is safe sample data for demos.
 
 
+## Embedded tables
+
+Other Ziran apps can show a read-only, CSV-like table with the
+`workbook/sheet_table` export. It holds typed columns (text, counts, money)
+and rows of plain decimal text, adds a totals row, formats numbers, fits the
+column widths to the content, lays out the cells of one screen and writes
+CSV. The host app draws the cells, so the module needs no UI toolkit.
+
+```jai
+using Sheet :: #import "workbook/sheet_table";
+table: SheetTable
+SheetAddColumn(*table, "Folder", SheetText)
+SheetAddColumn(*table, "Tokens", SheetNumber)
+SheetAddColumn(*table, "Cost", SheetMoney)
+table.total_label = "Total"
+row := SheetAddRow(*table)
+SheetSet(*table, row, 0, "aurea"); SheetSet(*table, row, 1, "4795296906"); SheetSet(*table, row, 2, "1475.75")
+SheetFit(*table, Measure, 13.0, 8.0, width)
+cells := SheetLayout(*table, x, y, 28.0, 30.0, height, first_row)
+```
+
+`make sheet-table-test` checks it.
+
+
 ## Werkzeug app bundle
 
 `make bundle` builds `build/workbook.zib`, the spreadsheet editor for a host

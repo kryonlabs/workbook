@@ -1,0 +1,77 @@
+// The embeddable read-only table: number and money text, totals, fitted
+// column widths, the cells of one screen, and CSV text.
+#load "test_support.zi";
+using Sheet :: #import "sheet_table";
+
+// Every character is 7 units wide at size 10.
+Fixed :: (text: string, size: float32) -> float32 {
+    count: s32 = 0
+    for c: text {
+        if (c & 192) != 128 { count += 1 }
+    }
+    return cast(float32)count * size * 0.7
+}
+
+Usage :: (table: *Sheet.SheetTable) {
+    Sheet.SheetAddColumn(table, "Session", Sheet.SheetText)
+    Sheet.SheetAddColumn(table, "Tokens", Sheet.SheetNumber)
+    Sheet.SheetAddColumn(table, "API", Sheet.SheetMoney)
+    table.total_label = "Total"
+    rows: [3][3]string = .{.{"=SUM(A1), \"quoted\"", "1250000", "12.345"}, .{"Second", "734", ""}, .{"Third", "", "-0.5"}}
+    for index: 0..2 {
+        row := Sheet.SheetAddRow(table)
+        for column: 0..2 { Sheet.SheetSet(table, row, column, rows[index][column]) }
+    }
+}
+
+#program_export
+main :: () -> s32 {
+    micros, ok := Sheet.SheetMicros("-12.3456785")
+    Check(ok && micros == -12345679, "decimal text in millionths, rounded")
+    unused_value, bad := Sheet.SheetMicros("1e5")
+    Check(!bad && unused_value == 0, "exponents are not numbers")
+    Check(Sheet.SheetCount(4795296906000000) == "4,795,296,906", "count separators")
+    Check(Sheet.SheetCount(999000000) == "999" && Sheet.SheetCount(-1000000000) == "-1,000", "short and negative counts")
+    Check(Sheet.SheetDollars(1475751234) == "$1,475.75" && Sheet.SheetDollars(-3204999) == "-$3.20" && Sheet.SheetDollars(5000) == "$0.01", "money rounds to cents")
+    Check(Sheet.SheetShort(1250000000000) == "1.25M" && Sheet.SheetShort(734000000) == "734" && Sheet.SheetShort(4795296906000000) == "4.80B" && Sheet.SheetShort(12400000000) == "12.4K" && Sheet.SheetShort(999600000000) == "1.00M", "compact counts")
+    Check(Sheet.SheetPlain(1481803028) == "1481.803028" && Sheet.SheetPlain(-500000) == "-0.5" && Sheet.SheetPlain(2000000) == "2", "plain CSV decimals")
+
+    table: Sheet.SheetTable
+    Usage(*table)
+    defer { Sheet.SheetFree(*table) }
+    Check(table.rows == 3 && Sheet.SheetValue(*table, 1, 0) == "Second" && Sheet.SheetValue(*table, 5, 0) == "", "rows and bounded reads")
+    Check(Sheet.SheetDisplay(*table, 0, 1) == "1,250,000" && Sheet.SheetDisplay(*table, 0, 2) == "$12.35" && Sheet.SheetDisplay(*table, 1, 2) == "—" && Sheet.SheetDisplay(*table, 2, 2) == "-$0.50", "cells show formatted numbers and dashes for unknown")
+    total, known := Sheet.SheetSum(*table, 2)
+    Check(known && total == 11845000, "totals add the known cells")
+    Check(Sheet.SheetTotalText(*table, 0) == "Total" && Sheet.SheetTotalText(*table, 1) == "1,250,734" && Sheet.SheetTotalText(*table, 2) == "$11.85", "totals row text")
+
+    // Natural widths fit: spare width goes to the text column.
+    Sheet.SheetFit(*table, Fixed, 10.0, 6.0, 600.0)
+    Check(!table.compact && Sheet.SheetWidth(*table) == 600.0, "columns fill the width")
+    Check(table.columns[1].width == 9.0 * 7.0 + 12.0 && table.columns[2].width == 6.0 * 7.0 + 12.0, "numbers keep their natural width")
+    // Too narrow: the text column gives way first.
+    Sheet.SheetFit(*table, Fixed, 10.0, 6.0, 250.0)
+    Check(!table.compact && Sheet.SheetWidth(*table) <= 250.5 && table.columns[0].width >= 8.0 * 7.0 + 12.0, "text column shrinks to its floor")
+    // Far too narrow: numbers shorten.
+    Sheet.SheetFit(*table, Fixed, 10.0, 6.0, 150.0)
+    Check(table.compact && Sheet.SheetDisplay(*table, 0, 1) == "1.25M", "numbers shorten when nothing else gives way")
+
+    // A screen with room for two body rows under the header, then totals.
+    Sheet.SheetFit(*table, Fixed, 10.0, 6.0, 600.0)
+    Check(Sheet.SheetVisibleRows(*table, 20.0, 24.0, 84.0) == 2, "whole rows that fit")
+    cells := Sheet.SheetLayout(*table, 10.0, 100.0, 20.0, 24.0, 84.0, 1)
+    defer { VecFree(cells) }
+    Check(cells.count == 12, "header, two rows and totals")
+    Check(cells[0].role == Sheet.SheetHeader && cells[0].row == -1 && cells[0].text == "Session" && cells[0].x == 10.0 && cells[0].y == 100.0, "header first")
+    Check(cells[3].row == 1 && cells[3].role == Sheet.SheetStripe && cells[3].y == 124.0 && cells[6].role == Sheet.SheetBody && cells[6].y == 144.0, "rows from the first row, striped")
+    Check(cells[4].align == Sheet.SheetRight && cells[3].align == Sheet.SheetLeft && cells[4].x == 10.0 + table.columns[0].width, "numbers align right, columns follow")
+    Check(cells[9].role == Sheet.SheetTotal && cells[9].row == 3 && cells[9].y == 164.0 && cells[10].text == "1,250,734", "totals under the last row")
+    late := Sheet.SheetLayout(*table, 0.0, 0.0, 20.0, 24.0, 84.0, 9)
+    defer { VecFree(late) }
+    Check(late[3].row == 1, "first row stops at a full last page")
+
+    csv := Sheet.SheetCsv(*table)
+    Check(csv == "Session,Tokens,API\r\n\"'=SUM(A1), \"\"quoted\"\"\",1250000,12.345\r\nSecond,734,\r\nThird,,-0.5\r\nTotal,1250734,11.845\r\n", "CSV quotes, protects formulas and adds totals")
+    WriteText(1, "sheet_table: ok\n")
+    return 0
+}

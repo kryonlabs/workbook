@@ -11,7 +11,7 @@ DIST_DIR ?= dist
 
 APP := build/workbook-desktop
 CELL := build/cell
-TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test service_test
+TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test service_test sheet_table_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
 SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 
@@ -20,7 +20,7 @@ SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 # has the same layout.
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-.PHONY: build cell check run test test-ci structure-test conversion-test gnumeric-test desktop-test hidden-rows-test parity fuzz audit install deb clean
+.PHONY: build cell check run test test-ci sheet-table-test structure-test conversion-test gnumeric-test desktop-test hidden-rows-test parity fuzz audit install deb clean
 
 build: $(APP) $(CELL)
 
@@ -67,7 +67,7 @@ desktop-test: build build/desktop_test
 hidden-rows-test: build build/desktop_test
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 GSETTINGS_BACKEND=memory build/desktop_test --hidden-only
 
-test-ci: build service-test audit structure-test conversion-test gnumeric-test desktop-test
+test-ci: build service-test sheet-table-test audit structure-test conversion-test gnumeric-test desktop-test
 
 test: test-ci parity
 
@@ -137,6 +137,10 @@ deb: build
 
 clean:
 	rm -rf build
+
+# The read-only table other apps embed; see src/sheet_table.zi.
+sheet-table-test: build/sheet_table_test
+	@build/sheet_table_test
 
 structure-test: build/structure_test
 	@build/structure_test

@@ -38,3 +38,4 @@ categories = "Office;Spreadsheet;"
 
 [exports]
 service = "src/service.zi"
+sheet_table = "src/sheet_table.zi"
