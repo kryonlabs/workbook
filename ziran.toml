@@ -11,15 +11,15 @@ ref = "master"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "ead3eb7aa63535447a1116ecae7bb4d712d72034"
+ref = "b9aed7589e9af2935a9cd9cb260e72944c195762"
 
 [dependencies.mingcute]
 git = "https://github.com/kryonlabs/mingcute.git"
 ref = "master"
 
-[dependencies.kss]
-git = "https://github.com/kryonlabs/kss.git"
-ref = "62a22c28d1209d8eed2ab5734146faca2ae35b92"
+[dependencies.css]
+git = "https://github.com/kryonlabs/css.git"
+ref = "60692b80dce3b32e2de1057c39a4793b500419b6"
 
 [install]
 bin = "workbook"

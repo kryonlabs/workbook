@@ -36,7 +36,7 @@ Json :: #import "json_scan";
 // The grid's metrics, colors and cell squares, shared with embedded grids.
 Grid :: #import "grid";
 #if !#defined(KRYON_HOSTED_UI) {
-    SystemStyle :: #import "kss/SystemStyle";
+    SystemStyle :: #import "css/SystemStyle";
     SystemThemeLinux :: #import "SystemThemeLinux";
 }
 #import "byte_text_linux"
