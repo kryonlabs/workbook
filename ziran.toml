@@ -11,7 +11,7 @@ ref = "master"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "b9aed7589e9af2935a9cd9cb260e72944c195762"
+ref = "af027a528c6e42b44b68fdaa90b13a7c1136d161"
 
 [dependencies.mingcute]
 git = "https://github.com/kryonlabs/mingcute.git"
