@@ -29511,7 +29511,7 @@ WorkbookRowHidden :: (wb: *Workbook, index: s32, row: s32) -> s32 {
 
 WorkbookSetRowsHidden :: (wb: *Workbook, index: s32, first: s32, last: s32, hidden: s32) -> s32 {
     if wb == null || index < 0 || index >= wb.sheet_count ||
-        first < 0 || first > last || first >= WB_MAX_ROWS || last >= WB_MAX_ROWS {
+    first < 0 || first > last || first >= WB_MAX_ROWS || last >= WB_MAX_ROWS {
         return 0
     }
     if wb.native != null {

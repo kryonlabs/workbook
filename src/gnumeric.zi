@@ -211,10 +211,10 @@ NativeSubtotalVisit :: (
     position: *NativeEvalPosition,
     value: *void,
     closure: *void
-) -> *void {
+    ) -> *void {
     collector: *NativeSubtotalCollector = cast(*NativeSubtotalCollector)closure
     if collector.ignore_hidden && position != collector.base_position && position.sheet != null &&
-            native_row_hidden(position.sheet, position.eval.row) != 0 {
+    native_row_hidden(position.sheet, position.eval.row) != 0 {
         return null
     }
     kind: s32 = ifx value == null then 10 else native_value_type(value)
@@ -241,7 +241,7 @@ NativeSubtotalVisit :: (
         collector.values = cast(*float64)native_realloc(
             cast(*void)collector.values,
             cast(usize)collector.capacity * size_of(float64)
-        )
+            )
     }
     collector.values[collector.count] = number
     collector.count += 1
@@ -323,7 +323,7 @@ NativeSubtotal :: (eval_info: *NativeFunctionEvalInfo, argc: s32, argv: **void) 
                 remaining = cast(**void)native_realloc(
                     cast(*void)remaining,
                     cast(usize)remaining_capacity * size_of(*void)
-                )
+                    )
             }
             remaining[remaining_count] = argv[argument]
             remaining_count += 1
@@ -338,7 +338,7 @@ NativeSubtotal :: (eval_info: *NativeFunctionEvalInfo, argc: s32, argv: **void) 
         remaining,
         0,
         24
-    )
+        )
     native_g_free(cast(*void)remaining)
     if error != null { return error }
     result: float64 = 0

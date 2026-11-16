@@ -1,65 +1,63 @@
+Menu :: #import "kryon/menu";
+ContextMenu :: #import "kryon/context_menu";
+TabBar :: #import "kryon/tab_bar";
+TextField :: #import "kryon/text_field";
+Box :: #import "kryon/box";
+Text :: #import "kryon/text";
+Button :: #import "kryon/button";
+#import "kryon/system_clipboard"
+#if !#defined(KRYON_HOSTED_UI) {
+    #import "kryon/key_input"
+}
+#if !#defined(KRYON_HOSTED_UI) {
+    #import "kryon/tree_input"
+}
 // Workbook desktop editor: a toolbar, sheet tabs, a formula bar, and the
 // cell grid of the spreadsheet engine.
-#if #defined(KRYON_HOSTED_UI) {
-    #import "geometry"
-    #import "session"
-    #import "drawing_props"
-    #import "box_props"
-    #import "box_widget"
-    #import "button_props"
-    #import "button_widget"
-    #import "control_props"
-    #import "text_props"
-    #import "text_widget"
-    #import "text_input"
-    #import "text_input_props"
-    #import "text_field_widget"
-    #import "tab_bar_props"
-    #import "tab_bar_widget"
-    #import "context_menu_widget"
-    #import "menu_props"
-    #import "kryon/input_protocol"
-    #import "kryon/app_protocol"
-} else {
-    using UI :: #import "Widgets";
-}
+#import "kryon/geometry"
+#import "kryon/session"
+#import "kryon/drawing_props"
+#import "kryon/control_props"
+#import "kryon/text_input"
+#import "kryon/input_protocol"
+#import "kryon/app_protocol"
 #if #defined(KRYON_HOSTED_UI) {
     Engine :: #import "portable_engine";
     #import "kryon/app_context"
     Theme :: #import "kryon/app_theme";
 } else {
     Engine :: #import "engine";
-    Desktop :: #import "kryon/Desktop";
+    Desktop :: #import "kryon/desktop_runtime";
     Picker :: #import "kryon/file_picker";
 }
-Json :: #import "json_scan";
+Json :: #import "std/json_scan";
 // The grid's metrics, colors and cell squares, shared with embedded grids.
 Grid :: #import "grid";
 #if !#defined(KRYON_HOSTED_UI) {
-    SystemStyle :: #import "css/SystemStyle";
-    SystemThemeLinux :: #import "SystemThemeLinux";
+    SystemStyle :: #import "kryon/SystemTheme";
+    SystemThemeLinux :: #import "kryon/SystemThemeLinux";
 }
-#import "byte_text_linux"
-#import "font_metrics"
-#import "text_buffer"
+#import "std/byte_text_linux"
+#import "kryon/font_metrics"
+#import "std/text_buffer"
 #import "std/vec"
 #import "std/number_text"
 
-SaveIcon :: #import "mingcute_regular_save_2";
-RowAddIcon :: #import "mingcute_extra_table_row_add";
-RowRemoveIcon :: #import "mingcute_extra_table_row_remove";
-ColumnAddIcon :: #import "mingcute_extra_table_column_add";
-ColumnRemoveIcon :: #import "mingcute_extra_table_column_remove";
-LeftIcon :: #import "mingcute_regular_arrow_left";
-RightIcon :: #import "mingcute_regular_arrow_right";
-UpIcon :: #import "mingcute_regular_arrow_up";
-DownIcon :: #import "mingcute_regular_arrow_down";
+SaveIcon :: #import "mingcute/mingcute_regular_save_2";
+RowAddIcon :: #import "mingcute/mingcute_extra_table_row_add";
+RowRemoveIcon :: #import "mingcute/mingcute_extra_table_row_remove";
+ColumnAddIcon :: #import "mingcute/mingcute_extra_table_column_add";
+ColumnRemoveIcon :: #import "mingcute/mingcute_extra_table_column_remove";
+LeftIcon :: #import "mingcute/mingcute_regular_arrow_left";
+RightIcon :: #import "mingcute/mingcute_regular_arrow_right";
+UpIcon :: #import "mingcute/mingcute_regular_arrow_up";
+DownIcon :: #import "mingcute/mingcute_regular_arrow_down";
 
 using ButtonEmphasis;
 using ButtonTone;
 using ControlSize;
-using TabBarPlacement;
-using TextWrap;
+using TabBar.TabBarPlacement;
+using Text.Wrap;
 
 #scope_file
 
@@ -106,7 +104,7 @@ grid_menu_x: float32 = 0.0;
 grid_menu_y: float32 = 0.0;
 grid_menu_row: bool = false;
 clipboard_text: [8192]u8;
-menu_state: MenuState;
+menu_state: Menu.MenuState;
 menus_block_input: bool;
 menu_key: s32;
 menu_modifiers: s32;
@@ -324,7 +322,7 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
         }
         name: string = SystemThemeLinux.SystemThemeName()
         if theme_installed && name == TextUntilNul(theme_name[:]) { return }
-        SystemStyle.StyleInstallSystem(SystemThemeLinux.SystemPaletteRead())
+        unused SystemStyle.SystemPaletteInstall(SystemThemeLinux.SystemPaletteRead())
         SetText(theme_name[:], name)
         theme_installed = true
     }
@@ -1097,11 +1095,11 @@ PutEditText :: (state: *EditTextState) {
 
 // The window's own color: the theme's canvas behind every widget.
 DrawBackground :: (session: Session, viewport: Rectangle) {
-    background: BoxProps
+    background: Box.Props
     background.key = cast(u64)7
     background.bounds = viewport
     background.fill = EditorColor("canvas")
-    Box(session, background)
+    Box.Draw(session, background)
 }
 
 DrawToolbar :: (session: Session, viewport: Rectangle) {
@@ -1146,19 +1144,19 @@ DrawToolbar :: (session: Session, viewport: Rectangle) {
 // Saving is automatic, so the window says nothing about it unless it fails.
 DrawStatus :: (session: Session, viewport: Rectangle) {
     if status[0] == 0 { return }
-    label: TextProps
+    label: Text.Props
     label.key = cast(u64)5
     label.text = TextUntilNul(status[:])
-    label.font = Text14
+    label.size = Text.Text14
     label.bounds = Rectangle.{viewport.x + 180.0, viewport.y + viewport.height - 24.0,
         viewport.width - 184.0, 20.0}
-    Text(session, label)
+    Text.Draw(session, label)
 }
 
 
 ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
     primary: bool) -> bool {
-    button: ButtonProps
+    button: Button.Props
     button.id = id
     button.icon_shape = shape
     button.icon_only = true
@@ -1169,7 +1167,7 @@ ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
     }
     button.bounds = Rectangle.{x.*, layout_origin.y + 28.0, 28.0, 28.0}
     x.* = x.* + 30.0
-    return Button(session, button) != 0
+    return Button.Draw(session, button) != 0
 }
 
 Changed :: () {
@@ -1194,27 +1192,27 @@ DrawSheetTabs :: (session: Session, viewport: Rectangle) {
     if count < 1 { return }
     // Sixteen tabs fill the bar; a workbook can hold more sheets than that.
     if count > 16 { count = 16 }
-    tabs: [16]Tab
+    tabs: [16]TabBar.Tab
     index: s32 = 0
     while index < count {
         tabs[index].key = cast(u64)(1100 + index)
         tabs[index].label = EditorString(Engine.WorkbookSheetName(workbook, index))
         index += 1
     }
-    strip: BoxProps
+    strip: Box.Props
     strip.key = cast(u64)1098
     strip.bounds = Rectangle.{viewport.x, viewport.y + viewport.height - TabsBottom, viewport.width, TabsBottom}
     strip.fill = HeaderBackground()
     strip.border = GridLineColor()
-    Box(session, strip)
-    bar: TabBarProps
+    Box.Draw(session, strip)
+    bar: TabBar.Props
     bar.key = cast(u64)1099
-    bar.placement = cast(TabBarPlacement)TabBarBottom
+    bar.placement = cast(TabBar.TabBarPlacement)TabBarBottom
     bar.selected_index = sheet_index
     bar.bounds = SheetTabsBounds(viewport)
     bar.min_tab_width = 72
     bar.max_tab_width = 104
-    result: TabBarResult = TabBar(session, bar, tabs[0:count])
+    result: TabBar.Result = TabBar.Draw(session, bar, tabs[0:count])
     if result.selected_index != sheet_index && result.selected_index >= 0 {
         sheet_index = result.selected_index
         scroll_row = 0
@@ -1226,14 +1224,14 @@ DrawSheetTabs :: (session: Session, viewport: Rectangle) {
 
 DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
     control: bool, typed: []u8, typed_length: s32) {
-    label: TextProps
+    label: Text.Props
     label.key = cast(u64)3
     label.text = "fx"
-    label.font = Text16
+    label.size = Text.Text16
     label.disabled = true
     label.bounds = Rectangle.{viewport.x + 8.0, viewport.y + 61.0, 24.0, 20.0}
-    Text(session, label)
-    result: TextFieldResult = RunFormulaField(session, viewport, key, control,
+    Text.Draw(session, label)
+    result: TextField.Result = RunFormulaField(session, viewport, key, control,
         typed, typed_length)
     edit_claim = false
     // Typing or moving the cursor ends a pick: the next one inserts anew.
@@ -1353,8 +1351,8 @@ WritePick :: (start: s32, end: s32, new_step: bool) {
 // The field's props view the edit buffer and composition state, so they
 // live only for the widget call; the caller then updates that storage.
 RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
-    control: bool, typed: []u8, typed_length: s32) -> TextFieldResult {
-    field: TextFieldProps
+    control: bool, typed: []u8, typed_length: s32) -> TextField.Result {
+    field: TextField.Props
     field.key = cast(u64)4
     field.bounds = Rectangle.{viewport.x + 40.0, viewport.y + 58.0, viewport.width - 42.0, 26.0}
     field.value = TextUntilNul(edit[:])
@@ -1384,7 +1382,7 @@ RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
         field.input.commit = key == KeyEnter
         field.input.escape = key == KeyEscape
     }
-    return TextField(session, field)
+    return TextField.Draw(session, field)
 }
 
 // The grid shows the used cells and reaches the selection, a fill being
@@ -1525,11 +1523,11 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         y: float32 = RowY(table, row)
         if RowHidden(row) {
             GridSquare(session, 1000 + shown, Rectangle.{table.x, y, table.width, Grid.GridHiddenRowHeight}, HeaderBackground(), "")
-            strip: BoxProps
+            strip: Box.Props
             strip.key = cast(u64)(500000 + shown)
             strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
             strip.fill = GridLineColor()
-            Box(session, strip)
+            Box.Draw(session, strip)
             shown += 1
             continue
         }
@@ -1565,12 +1563,12 @@ DrawGrid :: (session: Session, viewport: Rectangle) {
         CellOutline(session, 400000, table, first_row, first_column, last_row, last_column, AccentColor(), 2)
         handle: Rectangle = FillHandleBounds(table)
         if handle.width > 0.0 {
-            mark: BoxProps
+            mark: Box.Props
             mark.key = cast(u64)400008
             mark.bounds = Rectangle.{handle.x + 2.0, handle.y + 2.0, 7.0, 7.0}
             mark.fill = AccentColor()
             mark.border = CellBackground()
-            Box(session, mark)
+            Box.Draw(session, mark)
         }
     }
     if drag_mode == DragFill && fill_axis != 0 {
@@ -1799,28 +1797,28 @@ DrawCellEditor :: (session: Session, table: Rectangle) {
     if width < Grid.GridColumnWidth { width = Grid.GridColumnWidth }
     limit: float32 = ColumnX(table, scroll_column + visible_columns) - x
     if width > limit { width = limit }
-    box: BoxProps
+    box: Box.Props
     box.key = cast(u64)400500
     box.bounds = Rectangle.{x, y, width, Grid.GridRowHeight}
     box.fill = CellBackground()
     box.border = AccentColor()
-    Box(session, box)
-    label: TextProps
+    Box.Draw(session, box)
+    label: Text.Props
     label.key = cast(u64)400501
     label.text = text
-    label.font = Text14
-    label.wrap = cast(TextWrap)TextWrapNone
+    label.size = Text.Text14
+    label.wrap = cast(Text.Wrap)TextWrapNone
     label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, Grid.GridRowHeight - 4.0}
-    Text(session, label)
+    Text.Draw(session, label)
     cursor: s32 = Min(edit_cursor, cast(s32)text.count)
     caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
     if caret_x < x + width - 2.0 {
-        caret: BoxProps
+        caret: Box.Props
         caret.key = cast(u64)400502
         caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, Grid.GridRowHeight - 10.0}
         caret.fill = AccentColor()
         caret.border = AccentColor()
-        Box(session, caret)
+        Box.Draw(session, caret)
     }
 }
 
@@ -1841,12 +1839,12 @@ CellOutline :: (session: Session, key: s32, table: Rectangle, first_row: s32, fi
     height = MinFloat(height, grid_bottom - y)
     for line: 0..thickness - 1 {
         inset: float32 = cast(float32)line
-        outline: BoxProps
+        outline: Box.Props
         outline.key = cast(u64)(key + line)
         outline.bounds = Rectangle.{x + inset, y + inset, width - inset * 2.0, height - inset * 2.0}
         outline.fill = Color.{0, 0, 0, 0}
         outline.border = color
-        Box(session, outline)
+        Box.Draw(session, outline)
     }
 }
 
@@ -1865,7 +1863,7 @@ ReferenceColor :: (index: s32) -> Color {
 // Every command acts on the row or cell selected by the right-click.
 DrawGridMenu :: (session: Session, escape: bool) {
     if !grid_menu_open { return }
-    items: [10]ContextMenuItem
+    items: [10]ContextMenu.ContextMenuItem
     items[0].id = 1
     items[0].label = "Cut"
     items[1].id = 2
@@ -1894,13 +1892,13 @@ DrawGridMenu :: (session: Session, escape: bool) {
         items[3].id = 11; items[3].label = "Hide rows"
         count = 4
     }
-    props: ContextMenuProps
+    props: ContextMenu.Props
     props.key = cast(u64)1200
     props.open = true
     props.x = grid_menu_x
     props.y = grid_menu_y
     props.escape = escape
-    result: ContextMenuResult = ContextMenu(session, props, items[0:count])
+    result: ContextMenu.ContextMenuResult = ContextMenu.Draw(session, props, items[0:count])
     if !result.open { grid_menu_open = false }
     GridCommand(result.activated_id)
 }
@@ -2150,45 +2148,45 @@ MinFloat :: (a: float32, b: float32) -> float32 { return ifx a < b then a else b
 
 // Menus use the same commands as the keyboard and grid's context menu.
 DrawMenus :: (session: Session, viewport: Rectangle) {
-    file: [4]MenuItem
+    file: [4]Menu.MenuItem
     file_count: s32 = 3
-    file[0] = MenuItem.{.id = 101, .label = "Open…", .accelerator = "Ctrl+O"}
-    file[1] = MenuItem.{.id = 102, .label = "Save", .accelerator = "Ctrl+S"}
-    file[2] = MenuItem.{.id = 103, .label = "Save As…", .accelerator = "Ctrl+Shift+S"}
+    file[0] = Menu.MenuItem.{.id = 101, .label = "Open…", .accelerator = "Ctrl+O"}
+    file[1] = Menu.MenuItem.{.id = 102, .label = "Save", .accelerator = "Ctrl+S"}
+    file[2] = Menu.MenuItem.{.id = 103, .label = "Save As…", .accelerator = "Ctrl+Shift+S"}
     #if #defined(KRYON_HOSTED_UI) {
         if AppSupports("app.bundle.export.v1") {
             file_count = 4
-            file[3] = MenuItem.{.id = 104, .label = "Download Workbook.zx…"}
+            file[3] = Menu.MenuItem.{.id = 104, .label = "Download Workbook.zx…"}
         }
     }
-    edit_items: [9]MenuItem
-    edit_items[0] = MenuItem.{.id = 201, .label = "Undo", .accelerator = "Ctrl+Z", .disabled = undo_count == 0 && edit_undo_count == 0}
-    edit_items[1] = MenuItem.{.id = 202, .label = "Redo", .accelerator = "Ctrl+Y", .disabled = redo_count == 0 && edit_redo_count == 0}
-    edit_items[2].kind = MenuItemKind.MenuSeparator
-    edit_items[3] = MenuItem.{.id = 1, .label = "Cut", .accelerator = "Ctrl+X"}
-    edit_items[4] = MenuItem.{.id = 2, .label = "Copy", .accelerator = "Ctrl+C"}
-    edit_items[5] = MenuItem.{.id = 3, .label = "Paste", .accelerator = "Ctrl+V", .disabled = !EditorClipboardHasText()}
-    edit_items[6] = MenuItem.{.id = 4, .label = "Clear contents", .accelerator = "Delete"}
-    edit_items[7].kind = MenuItemKind.MenuSeparator
-    edit_items[8] = MenuItem.{.id = 203, .label = "Select all", .accelerator = "Ctrl+A"}
-    view: [1]MenuItem
-    view[0] = MenuItem.{.id = 301, .label = "Go to first cell", .accelerator = "Ctrl+Home"}
-    insert: [3]MenuItem
-    insert[0] = MenuItem.{.id = 6, .label = "Row above"}
-    insert[1] = MenuItem.{.id = 10, .label = "Row below"}
-    insert[2] = MenuItem.{.id = 8, .label = "Column before"}
-    sheet: [4]MenuItem
-    sheet[0] = MenuItem.{.id = 401, .label = "Add sheet"}
-    sheet[1] = MenuItem.{.id = 402, .label = "Previous sheet", .disabled = sheet_index == 0}
-    sheet[2] = MenuItem.{.id = 403, .label = "Next sheet", .disabled = sheet_index + 1 >= Engine.WorkbookSheetCount(workbook)}
-    sheet[3] = MenuItem.{.id = 404, .label = "Recalculate"}
-    groups: [5]MenuGroup
-    groups[0] = MenuGroup.{"File", file[:file_count]}
-    groups[1] = MenuGroup.{"Edit", edit_items[:]}
-    groups[2] = MenuGroup.{"View", view[:]}
-    groups[3] = MenuGroup.{"Insert", insert[:]}
-    groups[4] = MenuGroup.{"Sheet", sheet[:]}
-    props: MenuProps
+    edit_items: [9]Menu.MenuItem
+    edit_items[0] = Menu.MenuItem.{.id = 201, .label = "Undo", .accelerator = "Ctrl+Z", .disabled = undo_count == 0 && edit_undo_count == 0}
+    edit_items[1] = Menu.MenuItem.{.id = 202, .label = "Redo", .accelerator = "Ctrl+Y", .disabled = redo_count == 0 && edit_redo_count == 0}
+    edit_items[2].kind = Menu.MenuItemKind.MenuSeparator
+    edit_items[3] = Menu.MenuItem.{.id = 1, .label = "Cut", .accelerator = "Ctrl+X"}
+    edit_items[4] = Menu.MenuItem.{.id = 2, .label = "Copy", .accelerator = "Ctrl+C"}
+    edit_items[5] = Menu.MenuItem.{.id = 3, .label = "Paste", .accelerator = "Ctrl+V", .disabled = !EditorClipboardHasText()}
+    edit_items[6] = Menu.MenuItem.{.id = 4, .label = "Clear contents", .accelerator = "Delete"}
+    edit_items[7].kind = Menu.MenuItemKind.MenuSeparator
+    edit_items[8] = Menu.MenuItem.{.id = 203, .label = "Select all", .accelerator = "Ctrl+A"}
+    view: [1]Menu.MenuItem
+    view[0] = Menu.MenuItem.{.id = 301, .label = "Go to first cell", .accelerator = "Ctrl+Home"}
+    insert: [3]Menu.MenuItem
+    insert[0] = Menu.MenuItem.{.id = 6, .label = "Row above"}
+    insert[1] = Menu.MenuItem.{.id = 10, .label = "Row below"}
+    insert[2] = Menu.MenuItem.{.id = 8, .label = "Column before"}
+    sheet: [4]Menu.MenuItem
+    sheet[0] = Menu.MenuItem.{.id = 401, .label = "Add sheet"}
+    sheet[1] = Menu.MenuItem.{.id = 402, .label = "Previous sheet", .disabled = sheet_index == 0}
+    sheet[2] = Menu.MenuItem.{.id = 403, .label = "Next sheet", .disabled = sheet_index + 1 >= Engine.WorkbookSheetCount(workbook)}
+    sheet[3] = Menu.MenuItem.{.id = 404, .label = "Recalculate"}
+    groups: [5]Menu.MenuGroup
+    groups[0] = Menu.MenuGroup.{"File", file[:file_count]}
+    groups[1] = Menu.MenuGroup.{"Edit", edit_items[:]}
+    groups[2] = Menu.MenuGroup.{"View", view[:]}
+    groups[3] = Menu.MenuGroup.{"Insert", insert[:]}
+    groups[4] = Menu.MenuGroup.{"Sheet", sheet[:]}
+    props: Menu.Props
     props.key = cast(u64)1300
     props.bounds = Rectangle.{viewport.x, viewport.y, viewport.width, 26.0}
     key := menu_key
@@ -2346,7 +2344,7 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
         if mode == APP_IDENTIFY { AppIdentity("workbook", 1); AppDescribe("Workbook", RowAddIcon.Shape); return APP_PROTOCOL }
         if mode == APP_FRAME {
             if !AppSupports("spreadsheet.v1") {
-                Text(AppSession(), TextProps.{.bounds = AppBounds(), .text = "Update Werkzeug to open Workbook.", .font = Text16})
+                Text.Draw(AppSession(), Text.Props.{.bounds = AppBounds(), .text = "Update Werkzeug to open Workbook.", .size = Text.Text16})
                 return 0
             }
             ReadInput()
@@ -2371,42 +2369,42 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
 
 EditorColor :: (name: string) -> Color { return Grid.GridColor(name) }
 
-EditorMenu :: (session: Session, props: MenuProps, groups: []MenuGroup, state: *MenuState) -> MenuResult {
+EditorMenu :: (session: Session, props: Menu.Props, groups: []Menu.MenuGroup, state: *Menu.MenuState) -> Menu.MenuResult {
     #if #defined(KRYON_HOSTED_UI) {
-        if !state.initialized { MenuStateInit(state) }
-        result: MenuResult
+        if !state.initialized { Menu.MenuStateInit(state) }
+        result: Menu.MenuResult
         x := props.bounds.x + 2.0
         for index: 0..groups.count - 1 {
-            button: ButtonProps
+            button: Button.Props
             button.key = cast(u64)(1310 + index)
             button.label = groups[index].label
             button.bounds = Rectangle.{x, props.bounds.y, 58.0, 26.0}
             button.size = ControlSize.ControlSizeSmall
-            if Button(session, button) != 0 { state.open_index = ifx state.open_index == index then -1 else cast(s32)index }
+            if Button.Draw(session, button) != 0 { state.open_index = ifx state.open_index == index then -1 else cast(s32)index }
             if state.open_index == index { grid_menu_x = x }
             x += 58.0
         }
         if state.open_index >= 0 && state.open_index < groups.count {
-            items: [16]ContextMenuItem
+            items: [16]ContextMenu.ContextMenuItem
             commands := groups[state.open_index].items
             for index: 0..commands.count - 1 {
                 items[index].id = commands[index].id
                 items[index].label = commands[index].label
                 items[index].disabled = commands[index].disabled
-                items[index].separator = commands[index].kind == MenuItemKind.MenuSeparator
+                items[index].separator = commands[index].kind == Menu.MenuItemKind.MenuSeparator
             }
-            menu: ContextMenuProps
+            menu: ContextMenu.Props
             menu.key = cast(u64)(1350 + state.open_index)
             menu.open = true; menu.x = grid_menu_x; menu.y = props.bounds.y + 26.0
             menu.escape = props.input.escape
-            drawn := ContextMenu(session, menu, items[:commands.count])
+            drawn := ContextMenu.Draw(session, menu, items[:commands.count])
             if !drawn.open { state.open_index = -1 }
             result.activated_id = drawn.activated_id
         }
         result.open_index = state.open_index
         return result
     } else {
-        return Menu(session, props, groups, state)
+        return Menu.Draw(session, props, groups, state)
     }
 }
 
@@ -2428,7 +2426,7 @@ EditorGlyphWidth :: (text: string) -> s32 {
         BuilderPrint(*bytes, "}")
         return Engine.Number(AppService("input.v1", BuilderFinish(bytes)), "width")
     } else {
-        return GlyphWidth(text, Text14, "")
+        return GlyphWidth(text, Text.Text14, "")
     }
 }
 

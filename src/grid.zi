@@ -2,21 +2,21 @@
 // and cell squares, and a read-only view of a workbook with column letters,
 // row numbers, the cells of one sheet and its sheet tabs. The Workbook editor
 // paints its own grid with the same squares and colors.
+Box :: #import "kryon/box";
+Styles :: #import "kryon/style";
+TabBar :: #import "kryon/tab_bar";
+Text :: #import "kryon/text";
+TextAlign :: #import "kryon/text_align";
+#import "kryon/drawing_props"
+#import "kryon/geometry"
+#import "kryon/session"
+#if !#defined(KRYON_HOSTED_UI) {
+    #import "kryon/tree_input"
+}
 #if #defined(KRYON_HOSTED_UI) {
-    #import "geometry"
-    #import "session"
-    #import "drawing_props"
-    #import "box_props"
-    #import "box_widget"
-    #import "text_props"
-    #import "text_align"
-    #import "text_widget"
-    #import "tab_bar_props"
-    #import "tab_bar_widget"
     Engine :: #import "portable_engine";
     Theme :: #import "kryon/app_theme";
 } else {
-    using UI :: #import "kryon/Widgets";
     Engine :: #import "engine";
     #import "std/c_string"
 }
@@ -88,6 +88,7 @@ GridColor :: (name: string) -> Color {
         }
         return Theme.AppThemeColor(name, Color.{245, 245, 245, 255})
     } else {
+        if name == "border-soft" { return StyleTokenColor("border") }
         return StyleTokenColor(name)
     }
 }
@@ -104,22 +105,22 @@ GridSquare :: (session: Session, key: u64, bounds: Rectangle, right: float32, bo
     if bounds.x + bounds.width > right { bounds.width = right - bounds.x }
     if bounds.y + bounds.height > bottom { bounds.height = bottom - bounds.y }
     if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
-    box: BoxProps
+    box: Box.Props
     box.key = key
     box.bounds = bounds
     box.fill = fill
     box.border = GridLineColor()
-    Box(session, box)
+    Box.Draw(session, box)
     if text.count == 0 { return }
-    label: TextProps
+    label: Text.Props
     label.key = key + 1
     label.text = text
-    label.font = Text14
-    label.wrap = TextWrap.TextWrapNone
-    if align_end { label.align = TextAlign.TextAlignEnd }
+    label.size = Text.Text14
+    label.wrap = Text.Wrap.TextWrapNone
+    if align_end { label.align = TextAlign.TextAlign.TextAlignEnd }
     label.bounds = Rectangle.{bounds.x + 4.0, bounds.y + 3.0,
         bounds.width - 8.0, bounds.height - 4.0}
-    Text(session, label)
+    Text.Draw(session, label)
 }
 
 // Column letters: A to Z, then AA to ZZ.
@@ -409,26 +410,26 @@ GridDraw :: (session: Session, bounds: Rectangle, book: *Engine.Workbook, view: 
 
     if sheets < 2 { return }
     count := ifx sheets > 16 then 16 else sheets
-    tabs: [16]Tab
+    tabs: [16]TabBar.Tab
     for index: 0..count - 1 {
         tabs[index].key = view.key + cast(u64)(90000 + index)
         tabs[index].label = GridSheetName(book, index)
     }
-    strip: BoxProps
+    strip: Box.Props
     strip.key = view.key + 89998
     strip.bounds = Rectangle.{bounds.x, bottom, bounds.width, GridTabsHeight}
     strip.fill = GridHeaderBackground()
     strip.border = GridLineColor()
-    Box(session, strip)
-    bar: TabBarProps
+    Box.Draw(session, strip)
+    bar: TabBar.Props
     bar.key = view.key + 89999
-    bar.placement = TabBarPlacement.TabBarBottom
+    bar.placement = TabBar.TabBarPlacement.TabBarBottom
     bar.selected_index = view.sheet
     width := 140.0 * cast(float32)count
     bar.bounds = Rectangle.{bounds.x, bottom, ifx width < bounds.width then width else bounds.width, GridTabsHeight}
     bar.min_tab_width = 96
     bar.max_tab_width = 160
-    result := TabBar(session, bar, tabs[0:count])
+    result := TabBar.Draw(session, bar, tabs[0:count])
     if result.selected_index != view.sheet && result.selected_index >= 0 {
         view.sheet = result.selected_index
         view.scroll_row = 0

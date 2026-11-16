@@ -19,9 +19,9 @@ RequiredFile :: (index: s32) -> string {
 // A file that names a retired format or code in another language.
 ForbiddenFile :: (name: string) -> bool {
     return EndsWith(name, ".kry") || EndsWith(name, ".krb") || EndsWith(name, ".kir") ||
-        EndsWith(name, ".c") || EndsWith(name, ".h") || EndsWith(name, ".go") ||
-        EndsWith(name, ".py") || EndsWith(name, ".sh") || EndsWith(name, ".bash") ||
-        EndsWith(name, ".js") || EndsWith(name, ".mjs") || EndsWith(name, ".ts")
+    EndsWith(name, ".c") || EndsWith(name, ".h") || EndsWith(name, ".go") ||
+    EndsWith(name, ".py") || EndsWith(name, ".sh") || EndsWith(name, ".bash") ||
+    EndsWith(name, ".js") || EndsWith(name, ".mjs") || EndsWith(name, ".ts")
 }
 
 // Reports every forbidden file under path and returns how many it found.
@@ -76,7 +76,7 @@ CheckPackageUrls :: () -> s32 {
             value: s32 = equals + 1
             while value < cast(s32)rest.count && rest[value] == 32 { value += 1 }
             if equals < cast(s32)rest.count &&
-               !StartsWith(rest[value:cast(s32)rest.count], "\"https://") {
+            !StartsWith(rest[value:cast(s32)rest.count], "\"https://") {
                 WriteText(2, "package URL must be public HTTPS: ")
                 WriteText(2, line)
                 WriteText(2, "\n")

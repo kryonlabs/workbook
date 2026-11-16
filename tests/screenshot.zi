@@ -16,7 +16,7 @@ screenshot_channels: s32 = 0;
 
 BigEndian :: (bytes: []u8, at: s32) -> u32 {
     return (cast(u32)bytes[at] << 24) | (cast(u32)bytes[at + 1] << 16) |
-        (cast(u32)bytes[at + 2] << 8) | cast(u32)bytes[at + 3]
+    (cast(u32)bytes[at + 2] << 8) | cast(u32)bytes[at + 3]
 }
 
 // Loads and decodes a captured frame. Returns false with the reason in
@@ -81,7 +81,7 @@ ReadScreenshot :: (path: string, failure: []u8) -> bool {
     if color == 6 { screenshot_channels = 4 }
     stride: s32 = screenshot_width * screenshot_channels
     if screenshot_width <= 0 || screenshot_height <= 0 ||
-       stride * screenshot_height > ScreenshotPixelLimit {
+    stride * screenshot_height > ScreenshotPixelLimit {
         SetText(failure, "the capture has unsupported dimensions")
         return false
     }
@@ -160,8 +160,8 @@ Distance :: (a: s32, b: s32) -> s32 {
 PixelAt :: (x: s32, y: s32) -> u32 {
     offset: s32 = (y * screenshot_width + x) * screenshot_channels
     return (cast(u32)screenshot_pixels[offset] << 16) |
-        (cast(u32)screenshot_pixels[offset + 1] << 8) |
-        cast(u32)screenshot_pixels[offset + 2]
+    (cast(u32)screenshot_pixels[offset + 1] << 8) |
+    cast(u32)screenshot_pixels[offset + 2]
 }
 
 // How many pixels in a rectangle are dark enough to be text.
@@ -173,8 +173,8 @@ DarkPixels :: (left: s32, top: s32, width: s32, height: s32) -> s32 {
         while x < left + width {
             offset: s32 = (y * screenshot_width + x) * screenshot_channels
             sum: s32 = cast(s32)screenshot_pixels[offset] +
-                cast(s32)screenshot_pixels[offset + 1] +
-                cast(s32)screenshot_pixels[offset + 2]
+            cast(s32)screenshot_pixels[offset + 1] +
+            cast(s32)screenshot_pixels[offset + 2]
             if sum < 330 { count += 1 }
             x += 1
         }

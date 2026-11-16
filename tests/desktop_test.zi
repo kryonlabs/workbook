@@ -32,9 +32,10 @@ TabWidth :: 104;
 
 Background :: 0xF8FAFC;
 // The fixture theme below is #f8fafc with ink #1e2530, base white, and a
-// #3070e0 accent; the app derives its header and selection from those.
-HeaderFill :: 0xEDEFF2;
-SelectedFill :: 0xCCDCF6;
+// #3070e0 accent. Kryon's public system palette uses the base for surfaces
+// and mixes 18% accent into the canvas for the selected cell.
+HeaderFill :: 0xFFFFFF;
+SelectedFill :: 0xD4E1F7;
 White :: 0xFFFFFF;
 
 TwoSheets :: #string END

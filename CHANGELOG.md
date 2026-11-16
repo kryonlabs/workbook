@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Build the editor and embedded grid against Kryon's public widget modules.
 - Other Kryon apps embed Workbook's own grid with `workbook/grid` and
   `workbook/engine`: real cells and formulas, sheet tabs, column widths and
   count or money formats. The editor paints with the same grid squares. It

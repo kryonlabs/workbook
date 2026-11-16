@@ -92,7 +92,7 @@ DropDocument :: (path: string) {
     for byte: path {
         encoded: [3]u8
         if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
-           (byte >= 48 && byte <= 57) || byte == 47 || byte == 45 || byte == 46 || byte == 95 || byte == 126 {
+        (byte >= 48 && byte <= 57) || byte == 47 || byte == 45 || byte == 46 || byte == 95 || byte == 126 {
             encoded[0] = byte
             AppendText(uri[:], TextView(encoded[0:1]))
         } else {

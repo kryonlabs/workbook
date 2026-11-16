@@ -891,20 +891,20 @@ quad_agm_internal :: (res: *Quad, method: s32, x: *Quad) {
     qrp.l = 0
     if method == {
         case AGM_ARCSIN;
-            quad_ihypot(*dpk[0], x)
-            gp = one
-            qnum = x.*
+        quad_ihypot(*dpk[0], x)
+        gp = one
+        qnum = x.*
         case AGM_ARCCOS;
-            dpk[0] = x.*
-            gp = one
-            quad_ihypot(*qnum, x)
+        dpk[0] = x.*
+        gp = one
+        quad_ihypot(*qnum, x)
         case AGM_ARCTAN;
-            dpk[0] = one
-            QuadHypot(*gp, x, *one)
-            qnum = x.*
+        dpk[0] = one
+        QuadHypot(*gp, x, *one)
+        qnum = x.*
         case;
-            QuadInit(res, NotANumber())
-            return
+        QuadInit(res, NotANumber())
+        return
     }
     {
         n = 1
