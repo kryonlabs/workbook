@@ -1168,7 +1168,14 @@ CreateFormulaChart :: () {
     SetText(name[:], "Chart ")
     digits: [16]u8
     AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(workbook) + 1, digits[:]))
-    if Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:]))) == null {
+    // The native engine returns the new sheet; the portable one, 1 or 0.
+    added: bool
+    #if #defined(KRYON_HOSTED_UI) {
+        added = Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:]))) != 0
+    } else {
+        added = Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:]))) != null
+    }
+    if !added {
         SetText(status[:], "Could not add a chart sheet")
         return
     }
