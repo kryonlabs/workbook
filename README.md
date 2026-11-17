@@ -97,6 +97,7 @@ A run that hangs is killed after `FUZZ_TIMEOUT` seconds (20 by default).
     Ctrl+Y            redo (also Ctrl+Shift+Z)
     wheel             scroll rows
     Ctrl+S            save
+    Chart button       create a linked formula chart from a selected label/value range
 
 Formula cells show their calculated value in the grid and their source in the
 formula bar. The toolbar provides save and row/column insertion and deletion,
@@ -119,6 +120,12 @@ Undo and redo cover every change: a finished cell edit, paste, cut, clear,
 fill, and row or column insertion and deletion, each with the formula
 references it moved. Undoing a change selects the cells it touched again and
 shows their sheet. Up to the last 100 changes can be undone.
+
+Select a two-column label/value range, then use **Chart** in the toolbar or
+**Sheet → Create formula chart from selection**. Workbook adds a new sheet whose
+labels and values link to the selected cells, plus a live text bar chart. This
+portable chart works in ordinary `.gnumeric` documents and updates when its
+source values change.
 
 ## profiles
 

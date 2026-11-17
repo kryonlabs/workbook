@@ -1125,6 +1125,13 @@ DrawToolbar :: (session: Session, viewport: Rectangle) {
         Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
         Changed()
     }
+    chart: Button.Props
+    chart.id = 1010
+    chart.label = "Chart"
+    chart.size = cast(ControlSize)ControlSizeSmall
+    chart.bounds = Rectangle.{x, layout_origin.y + 28.0, 58.0, 28.0}
+    x += 60.0
+    if Button.Draw(session, chart) != 0 { CreateFormulaChart() }
     // Touch screens have no arrow keys or wheel. Keep every cell reachable
     // while the grid still supports selecting and filling ranges by dragging.
     if viewport.width < 600.0 {
@@ -1139,6 +1146,61 @@ DrawToolbar :: (session: Session, viewport: Rectangle) {
             EnsureVisible()
         }
     }
+}
+
+// Make a portable visual chart sheet from a selected label/value range. The
+// chart cells retain formulas back to the source sheet, so edits recalculate
+// it without a duplicated data table or a plugin-specific chart object.
+CreateFormulaChart :: () {
+    if edit_focused { CommitCell(); EndEdit() }
+    first_row: s32 = Min(selected_row, range_row)
+    last_row: s32 = Max(selected_row, range_row)
+    first_column: s32 = Min(selected_column, range_column)
+    last_column: s32 = Max(selected_column, range_column)
+    if last_column <= first_column {
+        SetText(status[:], "Select label and value columns to create a chart")
+        return
+    }
+    count: s32 = Min(24, last_row - first_row + 1)
+    if count <= 0 { return }
+    RecordChange()
+    name: [64]u8
+    SetText(name[:], "Chart ")
+    digits: [16]u8
+    AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(workbook) + 1, digits[:]))
+    if Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:]))) == null {
+        SetText(status[:], "Could not add a chart sheet")
+        return
+    }
+    chart_sheet: s32 = Engine.WorkbookSheetCount(workbook) - 1
+    Engine.WorkbookSetCell(workbook, chart_sheet, 0, 0, Engine.CText("Formula chart"))
+    Engine.WorkbookSetCell(workbook, chart_sheet, 1, 0, Engine.CText("Label"))
+    Engine.WorkbookSetCell(workbook, chart_sheet, 1, 1, Engine.CText("Value"))
+    Engine.WorkbookSetCell(workbook, chart_sheet, 1, 2, Engine.CText("Visual bar"))
+    for offset: 0..count - 1 {
+        row: s32 = offset + 2
+        label: [320]u8
+        SetText(label[:], "=")
+        EditorSheetPrefix(sheet_index, label[:])
+        AppendCellName(label[:], first_row + offset, first_column)
+        Engine.WorkbookSetCell(workbook, chart_sheet, row, 0, Engine.CText(TextUntilNul(label[:])))
+        value: [320]u8
+        SetText(value[:], "=")
+        EditorSheetPrefix(sheet_index, value[:])
+        AppendCellName(value[:], first_row + offset, first_column + 1)
+        Engine.WorkbookSetCell(workbook, chart_sheet, row, 1, Engine.CText(TextUntilNul(value[:])))
+        visual: [256]u8
+        SetText(visual[:], "=REPT(\"■\",ROUND(MAX(0,B")
+        AppendText(visual[:], FormatInteger(cast(s64)row + 1, digits[:]))
+        AppendText(visual[:], ")/MAX(1,MAX($B$3:$B$")
+        AppendText(visual[:], FormatInteger(cast(s64)count + 2, digits[:]))
+        AppendText(visual[:], "))*30,0))")
+        Engine.WorkbookSetCell(workbook, chart_sheet, row, 2, Engine.CText(TextUntilNul(visual[:])))
+    }
+    sheet_index = chart_sheet
+    scroll_row = 0
+    scroll_column = 0
+    Changed()
 }
 
 // Saving is automatic, so the window says nothing about it unless it fails.
@@ -2175,11 +2237,12 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
     insert[0] = Menu.MenuItem.{.id = 6, .label = "Row above"}
     insert[1] = Menu.MenuItem.{.id = 10, .label = "Row below"}
     insert[2] = Menu.MenuItem.{.id = 8, .label = "Column before"}
-    sheet: [4]Menu.MenuItem
+    sheet: [5]Menu.MenuItem
     sheet[0] = Menu.MenuItem.{.id = 401, .label = "Add sheet"}
     sheet[1] = Menu.MenuItem.{.id = 402, .label = "Previous sheet", .disabled = sheet_index == 0}
     sheet[2] = Menu.MenuItem.{.id = 403, .label = "Next sheet", .disabled = sheet_index + 1 >= Engine.WorkbookSheetCount(workbook)}
     sheet[3] = Menu.MenuItem.{.id = 404, .label = "Recalculate"}
+    sheet[4] = Menu.MenuItem.{.id = 405, .label = "Create formula chart from selection"}
     groups: [5]Menu.MenuGroup
     groups[0] = Menu.MenuGroup.{"File", file[:file_count]}
     groups[1] = Menu.MenuGroup.{"Edit", edit_items[:]}
@@ -2227,6 +2290,7 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
         SelectCell(0, 0)
     }
     if id == 404 { Changed() }
+    if id == 405 { CreateFormulaChart() }
     if id > 0 && id < 11 { GridCommand(id) }
 }
 
