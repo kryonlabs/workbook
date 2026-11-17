@@ -7,11 +7,11 @@ bridge_modules = ["app"]
 
 [toolchain]
 git = "https://github.com/ziranlang/ziran.git"
-ref = "ebd19223fa18432066f5dfa53124640eea36fa94"
+ref = "e0367fa9c5731dcf9bb84ed7f3d294570d8c0bda"
 
 [dependencies.kryon]
 git = "https://github.com/kryonlabs/kryon.git"
-ref = "9052a642a0de97e160bcdfd952d0766d0f4737fc"
+ref = "3f72441949d4e16094834fa9220e5d7fa77a0ac0"
 
 [dependencies.mingcute]
 git = "https://github.com/kryonlabs/mingcute.git"
@@ -19,7 +19,7 @@ ref = "master"
 
 [dependencies.css]
 git = "https://github.com/kryonlabs/css.git"
-ref = "a5ab2bbef9e6e920edb869b978a87e534eb40a5a"
+ref = "5120868d2c413bee6a3b8430f9026982545ea452"
 
 [install]
 bin = "workbook"
