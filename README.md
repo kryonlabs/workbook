@@ -1,7 +1,7 @@
 # workbook
 
-Native spreadsheet editor written in [Ziran](https://github.com/ziranlang/ziran)
-with [Kryon](https://github.com/kryonlabs/kryon). Open a document from your file
+Native spreadsheet editor written in [Ziran](https://git.waozi.xyz/ziranlang/ziran)
+with [Kryon](https://git.waozi.xyz/kryonlabs/kryon). Open a document from your file
 manager, drop it onto Workbook, or pass its path directly:
 
     workbook /path/to/file.gnumeric
