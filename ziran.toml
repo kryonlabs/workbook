@@ -2,16 +2,16 @@
 tool = "kryon"
 name = "workbook"
 entry = "src/app.zi"
-module_roots = ["src", "tests"]
+module_roots = ["src", "tests", "previews"]
 bridge_modules = ["app"]
 
 [toolchain]
 git = "https://git.waozi.xyz/ziranlang/ziran.git"
-ref = "5db3d3c39425d5dfe4bfe4a84e6f6e2e5a810ad0"
+ref = "9432a110709c4a4f72c4f732fcfc368e15213a54"
 
 [dependencies.kryon]
 git = "https://git.waozi.xyz/kryonlabs/kryon.git"
-ref = "c7286549f7741c48730cc983f14aed233cb47c37"
+ref = "facaace35051336a2a993d90d1bb7d7396543852"
 
 [dependencies.mingcute]
 git = "https://git.waozi.xyz/kryonlabs/mingcute.git"
@@ -19,7 +19,7 @@ ref = "9cc6872f75447c3a24c16764f9829d0f58751cb0"
 
 [dependencies.css]
 git = "https://git.waozi.xyz/kryonlabs/css.git"
-ref = "df8bbbbd665bd0632cd8687a145addc0b745eb87"
+ref = "7dd9fff21bd1721deea91071a2317d106e901208"
 
 [install]
 bin = "workbook"
@@ -40,3 +40,4 @@ categories = "Office;Spreadsheet;"
 service = "src/service.zi"
 grid = "src/grid.zi"
 engine = "src/engine.zi"
+editor = "src/editor.zi"

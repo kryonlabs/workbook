@@ -30,10 +30,11 @@ development packages installed.
     make cell         # build only the headless engine driver
     make check        # type-check the application, the driver, and the tests
     make run          # open the editor
-    make test         # source audit, structure and conversion tests, desktop test on a private display, gnumeric parity
+    make test         # source audit, structure and conversion tests, desktop and host tests on private displays, gnumeric parity
     make test-ci      # the same without parity, which is what CI runs
     make gnumeric-test # native document, edit, undo and round-trip regressions
     make hidden-rows-test # row visibility, totals and undo/redo on a private display
+    make host-test    # the exported editor inside a minimal host, on a private display
     make parity       # evaluation and round-trip tests against Gnumeric
     make fuzz REFERENCE=PATH   # compare this cell with another on generated inputs
     make install      # install workbook, cell, and geld under ~/.local
@@ -193,6 +194,76 @@ GridDraw(session, bounds, book, *view, GridSample(session, bounds))
 ```
 
 `make grid-test` checks it.
+
+
+## Embedded editor
+
+Other Kryon apps embed the complete editor — toolbar, formula bar, cell grid,
+selection, formula reference picking, fill handle, copy/cut/paste, hidden rows,
+undo/redo, sheet tabs and automatic saving — with the `workbook/editor` export.
+Each document is an `Editor` handle with its own workbook, undo history and
+autosave; the host owns the window, menus and other pages.
+
+```jai
+using Editor :: #import "workbook/editor";
+handle := EditorOpen("plan.gnumeric")      // null when it cannot be read
+defer { EditorClose(handle) }
+typed: [128]u8
+HostFrame :: (session: Session, bounds: Rectangle) -> s32 {
+    input := EditorSample(session, bounds, handle, typed[:])
+    unused EditorFrame(session, bounds, handle, input)
+    return 0
+}
+```
+
+`EditorFrame` draws inside the given bounds and handles one frame of input; it
+returns whether the editor consumed it. The editor takes the keyboard only
+while focused: a press inside focuses it, a press outside commits and releases
+it, and Escape on the grid releases it. `EditorSample` follows that rule, and a
+host with its own keyboard UI can call `EditorSetFocused` instead. Give each
+embedded editor its own key base with `EditorSetKeyBase` so widget keys do not
+collide.
+
+Documents:
+
+- `EditorOpen(path) -> *Editor` opens a `.gnumeric` or `.csv`; `EditorNew(path = "")`
+  makes an empty workbook. Both, and `EditorClose(editor)`, exist only in
+  native builds.
+- `EditorInitWithWorkbook(editor, book, path, load_failed = false)` starts a
+  caller-owned, zero-initialized `Editor`; `EditorDestroy` releases its workbook
+  without freeing the handle. The Werkzeug bundle uses this because its host
+  cannot allocate.
+- `EditorSave(editor, finish_edit = true) -> bool` saves to the handle's path
+  (CSV for `.csv`), `EditorSaveAs(editor, path) -> bool` saves a copy and
+  switches to it, and `EditorOpenPath(editor, path) -> bool` replaces the
+  document, saving the current one first.
+- `EditorDirty`, `EditorSaveCount` and `EditorChangeCount` tell a host when to
+  refresh data computed from the document. The counters only grow; autosave and
+  undo belong to the handle. `EditorSetAutosave(editor, false)` leaves saving to
+  the host.
+- `EditorWorkbook(editor) -> *Engine.Workbook` gives a host read access for
+  totals and other derived views. `EditorPath(editor, out)` and
+  `EditorStatus(editor, out)` copy into caller storage, and
+  `EditorSetStatus(editor, message)` puts a host message in the status bar.
+- `EditorFocused`, `EditorEditingCell`, `EditorCanUndo`, `EditorCanRedo`,
+  `EditorSheetIndex`, `EditorSheetCount` and `EditorClipboardAvailable` are
+  queries.
+
+Commands a host can place in its own menus: `EditorUndo`, `EditorRedo`,
+`EditorCut`, `EditorCopy`, `EditorPaste`, `EditorClear`, `EditorSelectAll`,
+`EditorGoToFirstCell`, `EditorInsertRow`, `EditorInsertRowBelow`,
+`EditorDeleteRow`, `EditorInsertColumn`, `EditorDeleteColumn`, `EditorAddSheet`,
+`EditorSelectSheet`, `EditorRecalculate` and `EditorCreateFormulaChart`.
+
+The standalone Workbook app uses this same module; `src/app.zi` adds profile
+selection, documents, the window title, menus and the theme. `make host-test`
+builds `previews/host.zi`, a minimal host with a host-owned sidebar, and drives
+it on a private X display: open a `.gnumeric` and a `.csv`, type a value and a
+formula, undo/redo, save, close, reopen and hand focus between host and editor.
+
+Native Gnumeric charts and drawing objects stay in a saved document but are not
+drawn; the embedded editor has the same limitation as the grid. Showing them
+needs a chart view over the document's chart objects.
 
 
 ## Werkzeug app bundle

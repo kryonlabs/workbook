@@ -11,7 +11,8 @@ DIST_DIR ?= dist
 
 APP := build/workbook-desktop
 CELL := build/cell
-TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test service_test grid_test
+HOST_APP := build/preview/desktop/host/workbook-desktop
+TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test service_test grid_test host_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
 SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 
@@ -20,7 +21,7 @@ SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
 # has the same layout.
 NATIVE_FLAGS := -std=c99 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections
 
-.PHONY: build cell check run test test-ci grid-test structure-test conversion-test gnumeric-test desktop-test hidden-rows-test parity fuzz audit install deb clean
+.PHONY: build cell check run test test-ci grid-test structure-test conversion-test gnumeric-test desktop-test hidden-rows-test host-test parity fuzz audit install deb clean
 
 build: $(APP) $(CELL)
 
@@ -33,7 +34,7 @@ $(APP): $(SOURCES)
 define program
 	@$(ZIRAN) build --project --target=c --entry $(1):main -o $(3)-c $(2)
 	@$(CC) $(NATIVE_FLAGS) -I$(shell $(ZIRAN) pkg path ziran)/include -I$(3)-c \
-		$(3)-c/*.c -lm $(if $(filter desktop_test,$(1)),-lX11) -o $(3)
+		$(3)-c/*.c -lm $(if $(filter desktop_test host_test,$(1)),-lX11) -o $(3)
 endef
 
 # The engine driver, and the test programs, which are Ziran too.
@@ -48,6 +49,7 @@ $(TEST_PROGRAMS): build/%: tests/%.zi $(SOURCES) $(wildcard tests/*.zi)
 check:
 	@$(ZIRAN) check
 	@$(ZIRAN) check --project src/cell.zi
+	@$(ZIRAN) check --project previews/host.zi
 	@for test in $(TESTS); do $(ZIRAN) check --project tests/$$test.zi || exit 1; done
 
 run:
@@ -67,7 +69,15 @@ desktop-test: build build/desktop_test
 hidden-rows-test: build build/desktop_test
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 GSETTINGS_BACKEND=memory build/desktop_test --hidden-only
 
-test-ci: build service-test grid-test audit structure-test conversion-test gnumeric-test desktop-test
+# The host app is a preview fixture that embeds the exported editor beside
+# host-owned UI. It is built with Kryon's test driver so host_test can drive it.
+host-test: $(HOST_APP) build/host_test
+	@build/host_test
+
+$(HOST_APP): $(SOURCES) previews/host.zi
+	@KRYON_TEST_DRIVER=1 $(ZIRAN) tool kryon preview host --output build/host-preview.png --width 960 --height 640 --theme light
+
+test-ci: build service-test grid-test audit structure-test conversion-test gnumeric-test desktop-test host-test
 
 test: test-ci parity
 
@@ -159,7 +169,7 @@ gnumeric-test: build/gnumeric_test
 bundle: build/workbook.zib
 build/workbook.zib: $(SOURCES)
 	@mkdir -p $(@D)
-	@$(ZIRAN) bundle --root . --module-path src --module-path $(shell $(ZIRAN) pkg path ziran)/std --module-path kryon=$(shell $(ZIRAN) pkg path kryon)/src/ui --module-path kryon=$(shell $(ZIRAN) pkg path kryon)/src/backend --module-path $(shell $(ZIRAN) pkg path kryon)/src/ui --module-path $(shell $(ZIRAN) pkg path kryon)/src/backend --module-path $(shell $(ZIRAN) pkg path mingcute)/src --define KRYON_HOSTED_UI --entry app:Main -o $@ src/app.zi
+	@$(ZIRAN) bundle --project --define KRYON_HOSTED_UI --entry app:Main -o $@ src/app.zi
 
 .PHONY: service-test
 service-test: build/service_test

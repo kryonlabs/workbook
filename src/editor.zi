@@ -1,0 +1,2300 @@
+// Embeddable spreadsheet editor for any Kryon desktop app: toolbar, formula
+// bar, cell grid, selection, formula reference picking, fill handle, copy/cut/
+// paste, hidden rows, undo/redo, sheet tabs, and automatic saving.
+//
+// All state lives in an Editor handle; there are no editor globals, menus,
+// window titles, or main loop. Hosts open a document with EditorOpen (or
+// EditorNew), call EditorFrame each frame inside their own bounds, and close
+// it with EditorClose.
+ContextMenu :: #import "kryon/context_menu";
+TabBar :: #import "kryon/tab_bar";
+TextField :: #import "kryon/text_field";
+Box :: #import "kryon/box";
+Text :: #import "kryon/text";
+Button :: #import "kryon/button";
+#import "kryon/system_clipboard"
+#if !#defined(KRYON_HOSTED_UI) {
+    #import "kryon/key_input"
+    #import "kryon/tree_input"
+}
+#import "kryon/geometry"
+#import "kryon/session"
+#import "kryon/drawing_props"
+#import "kryon/control_props"
+#import "kryon/text_input"
+#import "kryon/input_protocol"
+#if #defined(KRYON_HOSTED_UI) {
+    Engine :: #import "portable_engine";
+    #import "kryon/app_context"
+} else {
+    Engine :: #import "engine";
+}
+Grid :: #import "grid";
+#import "std/byte_text_linux"
+#import "kryon/font_metrics"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/number_text"
+
+SaveIcon :: #import "mingcute/mingcute_regular_save_2";
+RowAddIcon :: #import "mingcute/mingcute_extra_table_row_add";
+RowRemoveIcon :: #import "mingcute/mingcute_extra_table_row_remove";
+ColumnAddIcon :: #import "mingcute/mingcute_extra_table_column_add";
+ColumnRemoveIcon :: #import "mingcute/mingcute_extra_table_column_remove";
+LeftIcon :: #import "mingcute/mingcute_regular_arrow_left";
+RightIcon :: #import "mingcute/mingcute_regular_arrow_right";
+UpIcon :: #import "mingcute/mingcute_regular_arrow_up";
+DownIcon :: #import "mingcute/mingcute_regular_arrow_down";
+
+using ButtonEmphasis;
+using ButtonTone;
+using ControlSize;
+using TabBar.TabBarPlacement;
+using Text.Wrap;
+
+#scope_file
+
+#if !#defined(KRYON_HOSTED_UI) {
+    libc :: #system_library "libc";
+    AllocZero :: (count: u64, size: u64) -> *void #foreign libc "calloc";
+    FreeBytes :: (block: *void) #foreign libc "free";
+    PathAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
+    MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
+    CloseFile :: (descriptor: s32) -> s32 #foreign libc "close";
+    MakeTemporaryFile :: (path: *u8) -> s32 #foreign libc "mkstemp";
+    SyncFile :: (descriptor: s32) -> s32 #foreign libc "fsync";
+    RenameFile :: (source: *u8, destination: *u8) -> s32 #foreign libc "rename";
+    RemoveFile :: (path: *u8) -> s32 #foreign libc "unlink";
+    TimeSpec :: struct { seconds: s64; nanoseconds: s64; }
+    ClockTime :: (clock: s32, value: *TimeSpec) -> s32 #foreign libc "clock_gettime";
+}
+
+MaxRows :: 16777216; // GNM_MAX_ROWS
+MaxColumns :: 16384; // GNM_MAX_COLS
+CellTextMax :: 256;
+// Relative to the editor's own bounds: toolbar (2..30), formula bar (32..58),
+// grid (60..height-28), sheet tabs (height-28..height).
+ToolbarTop :: 2.0;
+FormulaTop :: 32.0;
+TableTop :: 60.0;
+Margin :: 0.0;
+TabsBottom :: 28.0;
+GridBottom :: 28.0;
+
+KeyA :: 65;
+KeyC :: 67;
+KeyS :: 83;
+KeyV :: 86;
+KeyX :: 88;
+KeyY :: 89;
+KeyZ :: 90;
+
+DragNone :: 0;
+DragRange :: 1;
+DragPick :: 2;
+DragFill :: 3;
+
+UndoLimit :: 100;
+UndoCellBudget :: 2000000;
+EditUndoLimit :: 64;
+EditTyping :: 1;
+EditDeleting :: 2;
+EditOther :: 3;
+DoubleClickFrames :: 24;
+
+DefaultKeyBase :: 20000000;
+
+#scope_export
+
+// One undo/redo snapshot of the workbook and selection.
+UndoState :: struct {
+    book: *Engine.Workbook;
+    sheet: s32;
+    row: s32;
+    column: s32;
+    range_row: s32;
+    range_column: s32;
+    axis: s32;
+}
+
+// One in-cell text undo/redo snapshot.
+EditTextState :: struct {
+    text: [256]u8;
+    cursor: s32;
+    anchor: s32;
+}
+
+// Per-frame input delivered to EditorFrame. Hosts can build this directly or
+// call EditorSample(session, bounds, editor, *buf).
+EditorInput :: struct {
+    pointer: PointerFrame;
+    secondary: SecondaryPointerFrame;
+    wheel: float32;
+    key: s32;
+    modifiers: s32;
+    typed: string;
+    // Suppresses keyboard, wheel and grid pointer handling (e.g. while a host
+    // menu is open). Host widgets already cover the rest of the frame.
+    blocked: bool;
+}
+
+// Backing storage for typed UTF-8 bytes: pass buffer.typed[:] to EditorSample.
+EditorSampleBuffer :: struct {
+    typed: [128]u8;
+}
+
+// All state for one embedded spreadsheet editor instance.
+Editor :: struct {
+    workbook: *Engine.Workbook;
+    data_path: [4096]u8;
+    data_directory: [4096]u8;
+    status: [256]u8;
+
+    sheet_index: s32;
+    selected_row: s32;
+    selected_column: s32;
+    range_row: s32;
+    range_column: s32;
+    selection_axis: s32; // 0 cell, 1 row, 2 column
+    edit_sheet: s32;
+    scroll_row: s32;
+    scroll_column: s32;
+
+    dirty: bool;
+    load_failed: bool;
+    autosave: bool;
+    save_retry_at: s64;
+    save_count: u64;
+    change_count: u64;
+
+    // Keyboard focus for host cooperation: only focused editors take keys.
+    focused: bool;
+    key_base: u64;
+
+    // Formula bar / in-cell editing state.
+    edit: [256]u8;
+    edit_original: [256]u8;
+    edit_cursor: s32;
+    edit_anchor: s32;
+    edit_scroll: s32;
+    edit_focused: bool;
+    edit_composition: CompositionState;
+    edit_composition_text: [256]u8;
+    edit_composition_length: s32;
+    edit_refocus: bool;
+    edit_claim: bool;
+
+    // Pointer drag, formula reference picking, and fill handle state.
+    drag_mode: s32;
+    drag_frames: s32;
+    shift_held: bool;
+    pick_start: s32;
+    pick_end: s32;
+    pick_sheet: s32;
+    pick_anchor_row: s32;
+    pick_anchor_column: s32;
+    pick_row: s32;
+    pick_column: s32;
+    fill_axis: s32;
+    fill_row: s32;
+    fill_column: s32;
+
+    // Last copied range, for formula reference relocation on paste.
+    copied_sheet: s32;
+    copied_row: s32;
+    copied_column: s32;
+    copied_text: [8192]u8;
+    copied_length: s32;
+
+    // Workbook-level undo/redo.
+    undo_steps: [UndoLimit]UndoState;
+    undo_count: s32;
+    redo_steps: [UndoLimit]UndoState;
+    redo_count: s32;
+    edit_recorded: bool;
+
+    // In-cell text undo/redo.
+    edit_undo: [EditUndoLimit]EditTextState;
+    edit_undo_count: s32;
+    edit_redo: [EditUndoLimit]EditTextState;
+    edit_redo_count: s32;
+    edit_run: s32;
+    edit_run_at: s32;
+
+    // Grid context menu and layout metrics.
+    grid_menu_open: bool;
+    grid_menu_x: float32;
+    grid_menu_y: float32;
+    grid_menu_row: bool;
+    grid_right: float32;
+    grid_bottom: float32;
+    visible_rows: s32;
+    visible_columns: s32;
+    grid_body_height: float32;
+
+    // Double-click tracking.
+    frames_since_click: s32;
+    last_click_row: s32;
+    last_click_column: s32;
+}
+
+// --------------------------------------------------------------- lifecycle
+
+// Initializes a caller-owned, zero-initialized Editor struct with an existing
+// Workbook and path. EditorDestroy releases its workbook without freeing it.
+EditorInitWithWorkbook :: (editor: *Editor, book: *Engine.Workbook, path: string, load_failed: bool = false) {
+    ClearUndoStacks(editor)
+    if editor.workbook != null { Engine.WorkbookFree(editor.workbook) }
+    editor.workbook = book
+    SetEditorPath(editor, path)
+    editor.status[0] = 0
+    editor.sheet_index = 0
+    editor.selected_row = 0
+    editor.selected_column = 0
+    editor.range_row = 0
+    editor.range_column = 0
+    editor.selection_axis = 0
+    editor.edit_sheet = 0
+    editor.scroll_row = 0
+    editor.scroll_column = 0
+    editor.dirty = false
+    editor.load_failed = load_failed
+    editor.autosave = true
+    editor.save_retry_at = 0
+    editor.save_count = 0
+    editor.change_count = 0
+    editor.focused = false
+    if editor.key_base == 0 { editor.key_base = DefaultKeyBase }
+    editor.edit[0] = 0
+    editor.edit_original[0] = 0
+    editor.edit_cursor = 0
+    editor.edit_anchor = 0
+    editor.edit_scroll = 0
+    editor.edit_focused = false
+    editor.edit_composition.active = false
+    editor.edit_composition.text = ""
+    editor.edit_composition.cursor = 0
+    editor.edit_composition.selection_length = 0
+    editor.edit_composition_text[0] = 0
+    editor.edit_composition_length = 0
+    editor.edit_refocus = false
+    editor.edit_claim = false
+    editor.drag_mode = DragNone
+    editor.drag_frames = 0
+    editor.shift_held = false
+    editor.pick_start = -1
+    editor.pick_end = -1
+    editor.fill_axis = 0
+    editor.copied_sheet = -1
+    editor.copied_length = 0
+    editor.edit_recorded = false
+    editor.edit_undo_count = 0
+    editor.edit_redo_count = 0
+    editor.edit_run = 0
+    editor.edit_run_at = 0
+    editor.grid_menu_open = false
+    editor.visible_rows = 16
+    editor.visible_columns = 8
+    editor.grid_body_height = 352.0
+    editor.frames_since_click = 1000
+    editor.last_click_row = -1
+    editor.last_click_column = -1
+    if editor.workbook != null {
+        if Engine.WorkbookSheetCount(editor.workbook) == 0 {
+            unused Engine.WorkbookAddSheet(editor.workbook, Engine.CText("Sheet1"))
+        }
+        SelectCell(editor, 0, 0)
+    }
+}
+
+// Releases all workbooks owned by a caller-owned Editor without freeing editor itself.
+EditorDestroy :: (editor: *Editor) {
+    if editor == null { return }
+    ClearUndoStacks(editor)
+    if editor.workbook != null {
+        Engine.WorkbookFree(editor.workbook)
+        editor.workbook = null
+    }
+}
+
+#if !#defined(KRYON_HOSTED_UI) {
+    // Opens an existing .gnumeric or .csv document for editing. Returns null
+    // if the file cannot be loaded.
+    EditorOpen :: (path: string) -> *Editor {
+        if path.count == 0 || path.count >= 4096 { return null }
+        book: *Engine.Workbook = Engine.WorkbookNew()
+        if book == null { return null }
+        if Engine.WorkbookLoadFile(book, Engine.CText(path)) == 0 {
+            Engine.WorkbookFree(book)
+            return null
+        }
+        editor: *Editor = cast(*Editor)AllocZero(1, cast(u64)size_of(Editor))
+        if editor == null {
+            Engine.WorkbookFree(book)
+            return null
+        }
+        EditorInitWithWorkbook(editor, book, path, false)
+        return editor
+    }
+
+    // Creates a new empty workbook with one sheet ("Sheet1"), optionally bound
+    // to a save path.
+    EditorNew :: (path: string = "") -> *Editor {
+        if path.count >= 4096 { return null }
+        book: *Engine.Workbook = Engine.WorkbookNew()
+        if book == null { return null }
+        unused Engine.WorkbookAddSheet(book, Engine.CText("Sheet1"))
+        editor: *Editor = cast(*Editor)AllocZero(1, cast(u64)size_of(Editor))
+        if editor == null {
+            Engine.WorkbookFree(book)
+            return null
+        }
+        EditorInitWithWorkbook(editor, book, path, false)
+        return editor
+    }
+
+    // Frees the editor, its workbook, and its undo/redo history. Safe on null.
+    // Commit or save a live cell edit first, as EditorSetFocused(false) does.
+    EditorClose :: (editor: *Editor) {
+        if editor == null { return }
+        EditorDestroy(editor)
+        FreeBytes(cast(*void)editor)
+    }
+}
+
+// ----------------------------------------------------------------- queries
+
+EditorDirty :: (editor: *Editor) -> bool {
+    if editor == null { return false }
+    return editor.dirty
+}
+
+// Increments on every successful save (autosave, Ctrl+S, toolbar, EditorSave).
+EditorSaveCount :: (editor: *Editor) -> u64 {
+    if editor == null { return 0 }
+    return editor.save_count
+}
+
+// Increments on every cell or structural change.
+EditorChangeCount :: (editor: *Editor) -> u64 {
+    if editor == null { return 0 }
+    return editor.change_count
+}
+
+EditorWorkbook :: (editor: *Editor) -> *Engine.Workbook {
+    if editor == null { return null }
+    return editor.workbook
+}
+
+// Copies the editor's document path into out and returns it.
+EditorPath :: (editor: *Editor, out: []u8) -> string {
+    if out.count == 0 { return "" }
+    out[0] = 0
+    if editor == null { return "" }
+    SetText(out, TextUntilNul(editor.data_path[:]))
+    return TextUntilNul(out)
+}
+
+// Copies the editor's status message into out and returns it.
+EditorStatus :: (editor: *Editor, out: []u8) -> string {
+    if out.count == 0 { return "" }
+    out[0] = 0
+    if editor == null { return "" }
+    SetText(out, TextUntilNul(editor.status[:]))
+    return TextUntilNul(out)
+}
+
+EditorSetStatus :: (editor: *Editor, message: string) {
+    if editor == null { return }
+    SetText(editor.status[:], message)
+}
+
+EditorFocused :: (editor: *Editor) -> bool {
+    if editor == null { return false }
+    return editor.focused
+}
+
+EditorSetFocused :: (editor: *Editor, focused: bool) {
+    if editor == null { return }
+    if !focused && editor.edit_focused {
+        CommitCell(editor)
+        EndEdit(editor)
+    }
+    editor.focused = focused
+}
+
+EditorEditingCell :: (editor: *Editor) -> bool {
+    if editor == null { return false }
+    return editor.edit_focused
+}
+
+EditorSetAutosave :: (editor: *Editor, enabled: bool) {
+    if editor == null { return }
+    editor.autosave = enabled
+}
+
+EditorSetKeyBase :: (editor: *Editor, key_base: u64) {
+    if editor == null { return }
+    editor.key_base = key_base
+}
+
+EditorCanUndo :: (editor: *Editor) -> bool {
+    if editor == null { return false }
+    return editor.undo_count > 0 || editor.edit_undo_count > 0
+}
+
+EditorCanRedo :: (editor: *Editor) -> bool {
+    if editor == null { return false }
+    return editor.redo_count > 0 || editor.edit_redo_count > 0
+}
+
+EditorSheetIndex :: (editor: *Editor) -> s32 {
+    if editor == null { return 0 }
+    return editor.sheet_index
+}
+
+EditorSheetCount :: (editor: *Editor) -> s32 {
+    if editor == null || editor.workbook == null { return 0 }
+    return Engine.WorkbookSheetCount(editor.workbook)
+}
+
+EditorClipboardAvailable :: () -> bool {
+    return EditorClipboardHasText()
+}
+
+// ------------------------------------------------------------------- input
+
+#if !#defined(KRYON_HOSTED_UI) {
+    // Samples pointer, wheel, and keyboard input for the editor. Keys are only
+    // taken from the session when the editor is focused (or being clicked into
+    // focus) and not blocked, so a host's sidebar and other pages keep their
+    // keyboard input when unfocused. typed_storage receives up to 128 bytes.
+    EditorSample :: (session: Session, bounds: Rectangle, editor: *Editor,
+        typed_storage: []u8, blocked: bool = false) -> EditorInput {
+        input: EditorInput
+        input.blocked = blocked
+        input.pointer = PointerSample(session)
+        input.secondary = SecondaryPointerSample(session)
+        input.wheel = ifx blocked then 0.0 else PointerWheelTake(session, bounds)
+        if editor == null || blocked { return input }
+        clicking_inside: bool = (input.pointer.pressed || input.secondary.pressed) &&
+            PointInBounds(input.pointer.x, input.pointer.y, bounds)
+        if editor.focused || clicking_inside {
+            input.key = KeyboardTake(session)
+            input.modifiers = KeyboardModifiers(session)
+            length: s32 = TakeTypedText(session, typed_storage)
+            if length > 0 { input.typed = TextView(typed_storage[0:length]) }
+        }
+        return input
+    }
+}
+
+// -------------------------------------------------------------------- save
+
+// Saves the editor's document to its current path (or does nothing if no path
+// is set or the initial load failed). Writes CSV for .csv paths and Gnumeric
+// otherwise, using an atomic temp-file rename on native builds.
+EditorSave :: (editor: *Editor, finish_edit: bool = true) -> bool {
+    if editor == null || editor.workbook == null || editor.load_failed { return false }
+    if finish_edit && editor.edit_focused {
+        CommitCell(editor)
+        EndEdit(editor)
+        SelectCell(editor, editor.selected_row, editor.selected_column)
+    }
+    path: string = TextUntilNul(editor.data_path[:])
+    if path.count == 0 { return false }
+    #if #defined(KRYON_HOSTED_UI) {
+        if Engine.WorkbookWriteGnumeric(editor.workbook, Engine.CText(path)) != 0 {
+            editor.dirty = false
+            editor.save_retry_at = 0
+            editor.status[0] = 0
+            editor.save_count += 1
+            return true
+        }
+        editor.dirty = true
+        editor.save_retry_at = MonotonicMilliseconds() + 2000
+        SetText(editor.status[:], "Could not save workbook")
+        return false
+    } else {
+        saved: bool = false
+        temporary: [4160]u8
+        SetText(temporary[:], path)
+        AppendText(temporary[:], ".tmp-XXXXXX")
+        if EnsureDataDirectory(editor) {
+            descriptor: s32 = MakeTemporaryFile(*temporary[0])
+            if descriptor >= 0 {
+                if IsCsvPath(path) {
+                    saved = Engine.WorkbookExportCsv(editor.workbook, cast(*s8)*temporary[0]) != 0
+                } else {
+                    saved = Engine.WorkbookWriteGnumeric(editor.workbook, cast(*s8)*temporary[0]) != 0
+                }
+                if saved { saved = SyncFile(descriptor) == 0 }
+                if CloseFile(descriptor) != 0 { saved = false }
+                if saved { saved = RenameFile(*temporary[0], *editor.data_path[0]) == 0 }
+                if !saved { RemoveFile(*temporary[0]) }
+            }
+        }
+        if saved {
+            editor.status[0] = 0
+            editor.dirty = false
+            editor.save_retry_at = 0
+            editor.save_count += 1
+            return true
+        }
+        SetText(editor.status[:], "Could not save ")
+        AppendText(editor.status[:], FileName(path))
+        editor.dirty = true
+        editor.save_retry_at = MonotonicMilliseconds() + 2000
+        return false
+    }
+}
+
+// Saves a copy to a new path and switches the editor's path on success.
+EditorSaveAs :: (editor: *Editor, path: string) -> bool {
+    if editor == null || path.count == 0 || path.count >= 4096 { return false }
+    old_path: [4096]u8
+    old_directory: [4096]u8
+    SetText(old_path[:], TextUntilNul(editor.data_path[:]))
+    SetText(old_directory[:], TextUntilNul(editor.data_directory[:]))
+    SetEditorPath(editor, path)
+    editor.dirty = true
+    if EditorSave(editor, true) { return true }
+    SetText(editor.data_path[:], TextUntilNul(old_path[:]))
+    SetText(editor.data_directory[:], TextUntilNul(old_directory[:]))
+    return false
+}
+
+// Replaces the document in an existing editor handle (finishing and saving
+// any dirty edit first). Returns false if the new file could not be loaded,
+// leaving the previous document intact.
+EditorOpenPath :: (editor: *Editor, path: string) -> bool {
+    if editor == null || !DocumentPath(path) { return false }
+    if editor.edit_focused { CommitCell(editor) }
+    if editor.dirty && !editor.load_failed {
+        // A new document without a path cannot save its changes; refuse to
+        // replace it rather than discarding them.
+        if editor.data_path[0] == 0 { return false }
+        unused EditorSave(editor, false)
+        if editor.dirty { return false }
+    }
+    next: *Engine.Workbook = Engine.WorkbookNew()
+    if next == null { return false }
+    if Engine.WorkbookLoadFile(next, Engine.CText(path)) == 0 {
+        Engine.WorkbookFree(next)
+        SetText(editor.status[:], "Could not open ")
+        AppendText(editor.status[:], FileName(path))
+        return false
+    }
+    if editor.edit_focused { EndEdit(editor) }
+    FinishEditStep(editor)
+    keep_focused: bool = editor.focused
+    keep_autosave: bool = editor.autosave
+    keep_key_base: u64 = editor.key_base
+    keep_saves: u64 = editor.save_count
+    keep_changes: u64 = editor.change_count
+    EditorInitWithWorkbook(editor, next, path, false)
+    editor.focused = keep_focused
+    editor.autosave = keep_autosave
+    editor.key_base = keep_key_base
+    editor.save_count = keep_saves
+    editor.change_count = keep_changes
+    return true
+}
+
+// ---------------------------------------------------------------- commands
+
+EditorUndo :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    UndoCommand(editor)
+}
+
+EditorRedo :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    RedoCommand(editor)
+}
+
+EditorCut :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    CutCell(editor)
+}
+
+EditorCopy :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    CopyCell(editor)
+}
+
+EditorPaste :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    PasteCells(editor)
+}
+
+EditorClear :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    ClearCell(editor)
+}
+
+EditorSelectAll :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    SelectAllCells(editor)
+}
+
+EditorGoToFirstCell :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    GoToFirstCell(editor)
+}
+
+EditorInsertRow :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    GridCommand(editor, 6)
+}
+
+EditorInsertRowBelow :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    GridCommand(editor, 10)
+}
+
+EditorDeleteRow :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    GridCommand(editor, 7)
+}
+
+EditorInsertColumn :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    GridCommand(editor, 8)
+}
+
+EditorDeleteColumn :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    GridCommand(editor, 9)
+}
+
+EditorAddSheet :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    RecordChange(editor)
+    name: [64]u8
+    SetText(name[:], "Sheet")
+    digits: [16]u8
+    AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(editor.workbook) + 1, digits[:]))
+    unused Engine.WorkbookAddSheet(editor.workbook, Engine.CText(TextUntilNul(name[:])))
+    editor.sheet_index = Engine.WorkbookSheetCount(editor.workbook) - 1
+    editor.scroll_row = 0
+    editor.scroll_column = 0
+    Changed(editor)
+}
+
+EditorSelectSheet :: (editor: *Editor, index: s32) {
+    if editor == null || editor.workbook == null { return }
+    count: s32 = Engine.WorkbookSheetCount(editor.workbook)
+    if index < 0 || index >= count { return }
+    if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
+    editor.sheet_index = index
+    editor.scroll_row = 0
+    editor.scroll_column = 0
+    SelectCell(editor, 0, 0)
+}
+
+EditorRecalculate :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    Changed(editor)
+}
+
+EditorCreateFormulaChart :: (editor: *Editor) {
+    if editor == null || editor.workbook == null { return }
+    CreateFormulaChart(editor)
+}
+
+// ------------------------------------------------------------------- frame
+
+// Draws the editor inside bounds and handles one frame of input. Returns true
+// when the editor handled this frame's pointer, wheel, or keyboard input.
+EditorFrame :: (session: Session, bounds: Rectangle, editor: *Editor, input: EditorInput) -> bool {
+    if editor == null || editor.workbook == null { return false }
+    if editor.key_base == 0 { editor.key_base = DefaultKeyBase }
+    if input.blocked { input.wheel = 0.0 }
+
+    handled: bool = false
+    pointer: PointerFrame = input.pointer
+    secondary: SecondaryPointerFrame = input.secondary
+    in_bounds: bool = PointInBounds(pointer.x, pointer.y, bounds)
+
+    // Focus hand-off with host UI: clicking inside focuses the editor;
+    // clicking outside commits any live edit and returns focus to the host.
+    if !input.blocked {
+        if pointer.pressed || secondary.pressed {
+            if in_bounds {
+                editor.focused = true
+                handled = true
+            } else if !editor.grid_menu_open {
+                if editor.edit_focused {
+                    CommitCell(editor)
+                    EndEdit(editor)
+                }
+                editor.focused = false
+            }
+        }
+        if (pointer.down || pointer.released) && (in_bounds || editor.drag_mode != DragNone) {
+            handled = true
+        }
+        if input.wheel != 0.0 && in_bounds {
+            handled = true
+        }
+    }
+
+    key: s32 = 0
+    control: bool = false
+    typed_buf: [128]u8
+    typed_length: s32 = 0
+    if editor.focused && !input.blocked {
+        key = input.key
+        control = (input.modifiers & KeyModifierControl) != 0
+        editor.shift_held = (input.modifiers & KeyModifierShift) != 0
+        if input.typed.count > 0 {
+            SetText(typed_buf[:], input.typed)
+            typed_length = cast(s32)TextUntilNul(typed_buf[:]).count
+        }
+        if key != 0 || typed_length > 0 { handled = true }
+    } else {
+        editor.shift_held = false
+    }
+
+    // Escape on the grid (not editing a cell and no context menu) releases
+    // keyboard focus back to the host.
+    if editor.focused && !input.blocked && key == KeyEscape && !editor.edit_focused && !editor.grid_menu_open {
+        editor.focused = false
+        key = 0
+    }
+
+    if editor.focused && !input.blocked {
+        if control && key == KeyHome { GoToFirstCell(editor); key = 0 }
+        if control && key == KeyS && !editor.shift_held {
+            unused EditorSave(editor, true)
+            key = 0
+        }
+        if control && key == KeyZ && !editor.shift_held {
+            UndoCommand(editor)
+            key = 0
+        }
+        if control && (key == KeyY || key == KeyZ) {
+            RedoCommand(editor)
+            key = 0
+        }
+    }
+
+    if !input.blocked && pointer.pressed && FormulaEditing(editor) &&
+    PointInBounds(pointer.x, pointer.y, SheetTabsBounds(editor, bounds)) {
+        editor.edit_refocus = true
+    }
+
+    DrawBackground(session, editor, bounds)
+    DrawToolbar(session, editor, bounds)
+    // The formula field consumes this frame's keys while it is being edited;
+    // the grid takes them otherwise, never both.
+    was_editing: bool = editor.edit_focused
+    DrawFormulaBar(session, editor, bounds, key, control, typed_buf[:], typed_length)
+    if !was_editing && editor.focused && !input.blocked {
+        HandleGridKeys(editor, key, control, typed_buf[:], typed_length)
+    }
+    DrawGrid(session, editor, bounds, input)
+    DrawSheetTabs(session, editor, bounds)
+    DrawGridMenu(session, editor, key == KeyEscape)
+    if editor.autosave && editor.dirty && editor.data_path[0] != 0 &&
+    MonotonicMilliseconds() >= editor.save_retry_at {
+        unused EditorSave(editor, false)
+    }
+    DrawStatus(session, editor, bounds)
+    if editor.edit_refocus && !pointer.down && !pointer.pressed { editor.edit_refocus = false }
+    return handled
+}
+
+#scope_file
+
+// ------------------------------------------------------------------- paths
+
+SetEditorPath :: (editor: *Editor, path: string) {
+    SetText(editor.data_path[:], path)
+    editor.data_directory[0] = 0
+    base: s32 = cast(s32)path.count - cast(s32)FileName(path).count
+    if base > 0 { SetText(editor.data_directory[:], path[0:base]) }
+}
+
+DocumentPath :: (name: string) -> bool {
+    if name.count < 4 || name.count >= 4096 { return false }
+    if IsCsvPath(name) { return true }
+    if name.count < 9 { return false }
+    suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
+    return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0
+}
+
+IsCsvPath :: (name: string) -> bool {
+    if name.count < 4 { return false }
+    suffix: string = name[cast(s32)name.count - 4:cast(s32)name.count]
+    return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".csv") == 0
+}
+
+FileName :: (path: string) -> string {
+    at: s32 = cast(s32)path.count
+    while at > 0 && path[at - 1] != #char "/" {
+        at -= 1
+    }
+    return path[at:cast(s32)path.count]
+}
+
+#if !#defined(KRYON_HOSTED_UI) {
+    MonotonicMilliseconds :: () -> s64 {
+        now: TimeSpec
+        ClockTime(1, *now)
+        return now.seconds * 1000 + now.nanoseconds / 1000000
+    }
+
+    EnsureDataDirectory :: (editor: *Editor) -> bool {
+        path: string = TextUntilNul(editor.data_directory[:])
+        prefix: [4096]u8
+        at: s32 = 1
+        while at <= cast(s32)path.count {
+            if at == cast(s32)path.count || path[at] == #char "/" {
+                SetText(prefix[:], path[0:at])
+                if MakeDirectory(*prefix[0], 448) != 0 && PathAccess(*prefix[0], 0) != 0 {
+                    return false
+                }
+            }
+            at += 1
+        }
+        return true
+    }
+} else {
+    MonotonicMilliseconds :: () -> s64 { return cast(s64)(AppNow() * 1000.0) }
+}
+
+// ----------------------------------------------------------------- editing
+
+CellSource :: (editor: *Editor, sheet: s32, row: s32, column: s32) -> string {
+    return EditorString(Engine.WorkbookCellText(editor.workbook, sheet, row, column))
+}
+
+SelectCell :: (editor: *Editor, row: s32, column: s32) {
+    FinishEditStep(editor)
+    editor.selection_axis = 0
+    if row < 0 { row = 0 }
+    if column < 0 { column = 0 }
+    if row >= MaxRows { row = MaxRows - 1 }
+    if column >= MaxColumns { column = MaxColumns - 1 }
+    editor.selected_row = row
+    editor.selected_column = column
+    editor.range_row = row
+    editor.range_column = column
+    editor.edit_sheet = editor.sheet_index
+    editor.pick_start = -1
+    SetText(editor.edit[:], CellSource(editor, editor.sheet_index, row, column))
+    SetText(editor.edit_original[:], TextUntilNul(editor.edit[:]))
+    editor.edit_cursor = cast(s32)TextUntilNul(editor.edit[:]).count
+    editor.edit_anchor = editor.edit_cursor
+    editor.edit_scroll = 0
+}
+
+CommitCell :: (editor: *Editor) {
+    if CellSource(editor, editor.edit_sheet, editor.selected_row, editor.selected_column) == TextUntilNul(editor.edit[:]) {
+        return
+    }
+    if !editor.edit_recorded {
+        PushUndo(editor)
+        editor.edit_recorded = true
+    }
+    Engine.WorkbookSetCell(editor.workbook, editor.edit_sheet, editor.selected_row,
+        editor.selected_column, Engine.CText(TextUntilNul(editor.edit[:])))
+    Engine.WorkbookEvaluate(editor.workbook)
+    editor.dirty = true
+    editor.save_retry_at = 0
+    editor.change_count += 1
+}
+
+EndEdit :: (editor: *Editor) {
+    editor.edit_focused = false
+    editor.pick_start = -1
+    if editor.sheet_index != editor.edit_sheet {
+        editor.sheet_index = editor.edit_sheet
+        editor.scroll_row = 0
+        editor.scroll_column = 0
+    }
+}
+
+SelectionFirstRow :: (editor: *Editor) -> s32 { return ifx editor.selection_axis == 2 then 0 else Min(editor.selected_row, editor.range_row) }
+SelectionLastRow :: (editor: *Editor) -> s32 { return ifx editor.selection_axis == 2 then Engine.WorkbookSheetRows(editor.workbook, editor.sheet_index) - 1 else Max(editor.selected_row, editor.range_row) }
+SelectionFirstColumn :: (editor: *Editor) -> s32 { return ifx editor.selection_axis == 1 then 0 else Min(editor.selected_column, editor.range_column) }
+SelectionLastColumn :: (editor: *Editor) -> s32 { return ifx editor.selection_axis == 1 then Engine.WorkbookSheetColumns(editor.workbook, editor.sheet_index) - 1 else Max(editor.selected_column, editor.range_column) }
+
+Min :: (a: s32, b: s32) -> s32 { return ifx a < b then a else b }
+Max :: (a: s32, b: s32) -> s32 { return ifx a > b then a else b }
+MinFloat :: (a: float32, b: float32) -> float32 { return ifx a < b then a else b }
+
+CopyCell :: (editor: *Editor) {
+    text: Vec(u8); defer { VecFree(text) }
+    first_row := SelectionFirstRow(editor)
+    last_row := SelectionLastRow(editor)
+    first_column := SelectionFirstColumn(editor)
+    last_column := SelectionLastColumn(editor)
+    for row: first_row..last_row {
+        if row > first_row { unused VecPush(text, cast(u8)10) }
+        for column: first_column..last_column {
+            if column > first_column { unused VecPush(text, cast(u8)9) }
+            source := CellSource(editor, editor.sheet_index, row, column)
+            for byte: source { unused VecPush(text, byte) }
+        }
+    }
+    copied := TextFromBytes(VecSlice(text, 0, text.count))
+    EditorClipboardSet(copied)
+    editor.copied_sheet = -1
+    if copied.count > editor.copied_text.count { return }
+    for at: 0..cast(s32)copied.count - 1 { editor.copied_text[at] = copied[at] }
+    editor.copied_length = cast(s32)copied.count
+    editor.copied_sheet = editor.sheet_index
+    editor.copied_row = first_row
+    editor.copied_column = first_column
+}
+
+CutCell :: (editor: *Editor) {
+    CopyCell(editor)
+    editor.copied_sheet = -1
+    ClearCell(editor)
+}
+
+PasteCells :: (editor: *Editor) {
+    clipboard_text: [8192]u8
+    text: string = EditorClipboardText(clipboard_text[:])
+    if text.count == 0 { return }
+    RecordChange(editor)
+    target_row: s32 = SelectionFirstRow(editor)
+    target_column: s32 = SelectionFirstColumn(editor)
+    relocate: bool = editor.copied_sheet >= 0 && text == TextView(editor.copied_text[0:editor.copied_length])
+    row: s32 = 0
+    column: s32 = 0
+    cell: [256]u8
+    length: s32 = 0
+    at: s32 = 0
+    while at <= cast(s32)text.count {
+        byte: u8 = 10
+        if at < cast(s32)text.count { byte = text[at] }
+        if byte == 9 || byte == 10 {
+            cell[length] = 0
+            if !(byte == 10 && length == 0 && at == cast(s32)text.count) {
+                if relocate {
+                    moved := Engine.FormulaRelocate(editor.workbook, Engine.CText(TextUntilNul(cell[:])),
+                        target_row - editor.copied_row, target_column - editor.copied_column)
+                    Engine.WorkbookSetCell(editor.workbook, editor.sheet_index, target_row + row,
+                        target_column + column, moved)
+                    #if !#defined(KRYON_HOSTED_UI) {
+                        FreeBytes(cast(*void)moved)
+                    }
+                } else {
+                    Engine.WorkbookSetCell(editor.workbook, editor.sheet_index, target_row + row,
+                        target_column + column, Engine.CText(TextUntilNul(cell[:])))
+                }
+            }
+            length = 0
+            if byte == 9 { column += 1 } else {
+                row += 1
+                column = 0
+            }
+        } else if byte != 13 && length < CellTextMax - 1 {
+            cell[length] = byte
+            length += 1
+        }
+        at += 1
+    }
+    Changed(editor)
+}
+
+ClearCell :: (editor: *Editor) {
+    if editor.selection_axis != 0 || editor.range_row != editor.selected_row || editor.range_column != editor.selected_column {
+        RecordChange(editor)
+        first_row := SelectionFirstRow(editor)
+        last_row := SelectionLastRow(editor)
+        first_column := SelectionFirstColumn(editor)
+        last_column := SelectionLastColumn(editor)
+        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(editor.workbook, editor.sheet_index, row, column, Engine.CText("")) } }
+        Changed(editor); return
+    }
+    editor.edit[0] = 0
+    CommitCell(editor)
+    SelectCell(editor, editor.selected_row, editor.selected_column)
+}
+
+HandleGridKeys :: (editor: *Editor, key: s32, control: bool, typed: []u8, typed_length: s32) {
+    if control && key == KeyA { SelectAllCells(editor) }
+    if control && key == KeyC { CopyCell(editor) }
+    if control && key == KeyX { CutCell(editor) }
+    if control && key == KeyV { PasteCells(editor) }
+    if key == KeyUp { SelectCell(editor, NextVisibleRow(editor, editor.selected_row, -1), editor.selected_column) }
+    if key == KeyDown { SelectCell(editor, NextVisibleRow(editor, editor.selected_row, 1), editor.selected_column) }
+    if key == KeyLeft { SelectCell(editor, editor.selected_row, editor.selected_column - 1) }
+    if key == KeyRight || key == KeyTab {
+        SelectCell(editor, editor.selected_row, editor.selected_column + 1)
+    }
+    if key == KeyEnter { editor.selection_axis = 0; StartEdit(editor) }
+    if key == KeyDelete || key == KeyBackspace { ClearCell(editor) }
+    if typed_length > 0 {
+        editor.selection_axis = 0
+        editor.range_row = editor.selected_row
+        editor.range_column = editor.selected_column
+        StartEdit(editor)
+        editor.edit_run = 0
+        ChangeEdit(editor, EditTyping, 0, cast(s32)TextUntilNul(editor.edit[:]).count, TextView(typed[0:typed_length]))
+    }
+    EnsureVisible(editor)
+}
+
+StartEdit :: (editor: *Editor) {
+    editor.edit_focused = true
+    editor.edit_claim = true
+}
+
+EditFits :: (editor: *Editor, start: s32, end: s32, replacement: string) -> bool {
+    length: s32 = cast(s32)TextUntilNul(editor.edit[:]).count
+    if start < 0 || end < start || end > length { return false }
+    return length - (end - start) + cast(s32)replacement.count < CellTextMax
+}
+
+ChangeEdit :: (editor: *Editor, kind: s32, start: s32, end: s32, replacement: string) {
+    if !EditFits(editor, start, end, replacement) { return }
+    RememberEditText(editor, kind, start, end, replacement)
+    ApplyEdit(editor, start, end, replacement)
+}
+
+ApplyEdit :: (editor: *Editor, start: s32, end: s32, replacement: string) {
+    if !EditFits(editor, start, end, replacement) { return }
+    length: s32 = cast(s32)TextUntilNul(editor.edit[:]).count
+    inserted: s32 = cast(s32)replacement.count
+    tail: [256]u8
+    tail_length: s32 = length - end
+    index: s32 = 0
+    while index < tail_length {
+        tail[index] = editor.edit[end + index]
+        index += 1
+    }
+    index = 0
+    while index < inserted {
+        editor.edit[start + index] = replacement[index]
+        index += 1
+    }
+    index = 0
+    while index < tail_length {
+        editor.edit[start + inserted + index] = tail[index]
+        index += 1
+    }
+    editor.edit[start + inserted + tail_length] = 0
+    editor.edit_cursor = start + inserted
+    editor.edit_anchor = editor.edit_cursor
+    CommitCell(editor)
+}
+
+#if !#defined(KRYON_HOSTED_UI) {
+    TakeTypedText :: (session: Session, output: []u8) -> s32 {
+        length: s32 = 0
+        codepoint: s32 = TypedCodepointTake(session)
+        while codepoint != 0 {
+            if length + 4 < cast(s32)output.count {
+                length = AppendUtf8(output, length, codepoint)
+            }
+            codepoint = TypedCodepointTake(session)
+        }
+        return length
+    }
+}
+
+AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
+    if codepoint < 0x80 {
+        output[at] = cast(u8)codepoint
+        return at + 1
+    }
+    if codepoint < 0x800 {
+        output[at] = cast(u8)(0xC0 | (codepoint >> 6))
+        output[at + 1] = cast(u8)(0x80 | (codepoint & 0x3F))
+        return at + 2
+    }
+    if codepoint < 0x10000 {
+        output[at] = cast(u8)(0xE0 | (codepoint >> 12))
+        output[at + 1] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
+        output[at + 2] = cast(u8)(0x80 | (codepoint & 0x3F))
+        return at + 3
+    }
+    output[at] = cast(u8)(0xF0 | (codepoint >> 18))
+    output[at + 1] = cast(u8)(0x80 | ((codepoint >> 12) & 0x3F))
+    output[at + 2] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
+    output[at + 3] = cast(u8)(0x80 | (codepoint & 0x3F))
+    return at + 4
+}
+
+// -------------------------------------------------------------------- undo
+
+ClearUndoStacks :: (editor: *Editor) {
+    while editor.undo_count > 0 {
+        editor.undo_count -= 1
+        Engine.WorkbookFree(editor.undo_steps[editor.undo_count].book)
+        editor.undo_steps[editor.undo_count].book = null
+    }
+    while editor.redo_count > 0 {
+        editor.redo_count -= 1
+        Engine.WorkbookFree(editor.redo_steps[editor.redo_count].book)
+        editor.redo_steps[editor.redo_count].book = null
+    }
+    editor.edit_recorded = false
+    editor.edit_undo_count = 0
+    editor.edit_redo_count = 0
+    editor.edit_run = 0
+}
+
+UndoCommand :: (editor: *Editor) {
+    if editor.edit_focused && UndoEditText(editor) { return }
+    if editor.undo_count == 0 { return }
+    if editor.edit_focused { EndEdit(editor) }
+    FinishEditStep(editor)
+    if editor.undo_count == 0 { return }
+    editor.undo_count -= 1
+    editor.redo_steps[editor.redo_count] = PutState(editor, editor.undo_steps[editor.undo_count])
+    editor.redo_count += 1
+}
+
+RedoCommand :: (editor: *Editor) {
+    if editor.edit_focused && RedoEditText(editor) { return }
+    if editor.redo_count == 0 { return }
+    if editor.edit_focused { EndEdit(editor) }
+    FinishEditStep(editor)
+    editor.redo_count -= 1
+    editor.undo_steps[editor.undo_count] = PutState(editor, editor.redo_steps[editor.redo_count])
+    editor.undo_count += 1
+}
+
+RecordChange :: (editor: *Editor) {
+    FinishEditStep(editor)
+    PushUndo(editor)
+}
+
+PushUndo :: (editor: *Editor) {
+    copy: *Engine.Workbook = Engine.WorkbookClone(editor.workbook)
+    if copy == null { return }
+    while editor.redo_count > 0 {
+        editor.redo_count -= 1
+        Engine.WorkbookFree(editor.redo_steps[editor.redo_count].book)
+        editor.redo_steps[editor.redo_count].book = null
+    }
+    if editor.undo_count == UndoLimit { DropOldestUndo(editor) }
+    editor.undo_steps[editor.undo_count] = StateOf(editor, copy)
+    editor.undo_count += 1
+    cells: s32 = 0
+    for at: 0..editor.undo_count - 1 { cells += Engine.WorkbookCellCount(editor.undo_steps[at].book) }
+    while editor.undo_count > 1 && cells > UndoCellBudget {
+        cells -= Engine.WorkbookCellCount(editor.undo_steps[0].book)
+        DropOldestUndo(editor)
+    }
+}
+
+DropOldestUndo :: (editor: *Editor) {
+    Engine.WorkbookFree(editor.undo_steps[0].book)
+    for at: 1..editor.undo_count - 1 { editor.undo_steps[at - 1] = editor.undo_steps[at] }
+    editor.undo_count -= 1
+}
+
+StateOf :: (editor: *Editor, book: *Engine.Workbook) -> UndoState {
+    state: UndoState
+    state.book = book
+    state.sheet = editor.edit_sheet
+    state.row = editor.selected_row
+    state.column = editor.selected_column
+    state.range_row = editor.range_row
+    state.range_column = editor.range_column
+    state.axis = editor.selection_axis
+    return state
+}
+
+PutState :: (editor: *Editor, state: UndoState) -> UndoState {
+    previous: UndoState = StateOf(editor, editor.workbook)
+    editor.workbook = state.book
+    sheet: s32 = Max(0, Min(state.sheet, Engine.WorkbookSheetCount(editor.workbook) - 1))
+    if sheet != editor.sheet_index {
+        editor.sheet_index = sheet
+        editor.scroll_row = 0
+        editor.scroll_column = 0
+    }
+    Engine.WorkbookEvaluate(editor.workbook)
+    SelectCell(editor, state.row, state.column)
+    editor.range_row = state.range_row
+    editor.range_column = state.range_column
+    editor.selection_axis = state.axis
+    editor.dirty = true
+    editor.save_retry_at = 0
+    editor.change_count += 1
+    EnsureVisible(editor)
+    return previous
+}
+
+FinishEditStep :: (editor: *Editor) {
+    editor.edit_undo_count = 0
+    editor.edit_redo_count = 0
+    editor.edit_run = 0
+    if !editor.edit_recorded { return }
+    editor.edit_recorded = false
+    if editor.undo_count > 0 &&
+    CellSource(editor, editor.edit_sheet, editor.selected_row, editor.selected_column) == TextUntilNul(editor.edit_original[:]) {
+        editor.undo_count -= 1
+        Engine.WorkbookFree(editor.undo_steps[editor.undo_count].book)
+        editor.undo_steps[editor.undo_count].book = null
+    }
+}
+
+RememberEditText :: (editor: *Editor, kind: s32, start: s32, end: s32, replacement: string) {
+    extends: bool = false
+    if kind == EditTyping && editor.edit_run == EditTyping && start == end && start == editor.edit_run_at {
+        extends = !(start > 0 && !WordByte(editor.edit[start - 1]) && WordByte(replacement[0]))
+    }
+    if kind == EditDeleting && editor.edit_run == EditDeleting &&
+    replacement.count == 0 && (end == editor.edit_run_at || start == editor.edit_run_at) { extends = true }
+    editor.edit_run = kind
+    editor.edit_run_at = start + cast(s32)replacement.count
+    if extends { return }
+    editor.edit_redo_count = 0
+    if editor.edit_undo_count == EditUndoLimit {
+        for at: 1..EditUndoLimit - 1 { editor.edit_undo[at - 1] = editor.edit_undo[at] }
+        editor.edit_undo_count -= 1
+    }
+    KeepEditText(editor, *editor.edit_undo[editor.edit_undo_count])
+    editor.edit_undo_count += 1
+}
+
+WordByte :: (byte: u8) -> bool {
+    return (byte >= #char "A" && byte <= #char "Z") || (byte >= #char "a" && byte <= #char "z") ||
+    (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "." ||
+    byte == #char "$" || byte >= 128
+}
+
+UndoEditText :: (editor: *Editor) -> bool {
+    if editor.edit_undo_count == 0 { return false }
+    KeepEditText(editor, *editor.edit_redo[editor.edit_redo_count])
+    editor.edit_redo_count += 1
+    editor.edit_undo_count -= 1
+    PutEditText(editor, *editor.edit_undo[editor.edit_undo_count])
+    return true
+}
+
+RedoEditText :: (editor: *Editor) -> bool {
+    if editor.edit_redo_count == 0 { return false }
+    KeepEditText(editor, *editor.edit_undo[editor.edit_undo_count])
+    editor.edit_undo_count += 1
+    editor.edit_redo_count -= 1
+    PutEditText(editor, *editor.edit_redo[editor.edit_redo_count])
+    return true
+}
+
+KeepEditText :: (editor: *Editor, state: *EditTextState) {
+    SetText(state.text[:], TextUntilNul(editor.edit[:]))
+    state.cursor = editor.edit_cursor
+    state.anchor = editor.edit_anchor
+}
+
+PutEditText :: (editor: *Editor, state: *EditTextState) {
+    SetText(editor.edit[:], TextUntilNul(state.text[:]))
+    editor.edit_cursor = state.cursor
+    editor.edit_anchor = state.anchor
+    editor.edit_run = 0
+    editor.pick_start = -1
+    CommitCell(editor)
+}
+
+// -------------------------------------------------------------------- view
+
+DrawBackground :: (session: Session, editor: *Editor, bounds: Rectangle) {
+    background: Box.Props
+    background.key = editor.key_base + 7
+    background.bounds = bounds
+    background.fill = Grid.GridColor("canvas")
+    Box.Draw(session, background)
+}
+
+DrawToolbar :: (session: Session, editor: *Editor, bounds: Rectangle) {
+    x: float32 = bounds.x + 4.0
+    if ToolbarIcon(session, editor, 1001, SaveIcon.Shape, bounds.y + ToolbarTop, *x, editor.dirty) {
+        unused EditorSave(editor, true)
+    }
+    if ToolbarIcon(session, editor, 1002, RowAddIcon.Shape, bounds.y + ToolbarTop, *x, false) {
+        RecordChange(editor)
+        Engine.WorkbookInsertRow(editor.workbook, editor.sheet_index, editor.selected_row)
+        Changed(editor)
+    }
+    if ToolbarIcon(session, editor, 1003, RowRemoveIcon.Shape, bounds.y + ToolbarTop, *x, false) {
+        RecordChange(editor)
+        Engine.WorkbookDeleteRow(editor.workbook, editor.sheet_index, editor.selected_row)
+        Changed(editor)
+    }
+    if ToolbarIcon(session, editor, 1004, ColumnAddIcon.Shape, bounds.y + ToolbarTop, *x, false) {
+        RecordChange(editor)
+        Engine.WorkbookInsertColumn(editor.workbook, editor.sheet_index, editor.selected_column)
+        Changed(editor)
+    }
+    if ToolbarIcon(session, editor, 1005, ColumnRemoveIcon.Shape, bounds.y + ToolbarTop, *x, false) {
+        RecordChange(editor)
+        Engine.WorkbookDeleteColumn(editor.workbook, editor.sheet_index, editor.selected_column)
+        Changed(editor)
+    }
+    chart: Button.Props
+    chart.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + 1010
+    chart.label = "Chart"
+    chart.size = cast(ControlSize)ControlSizeSmall
+    chart.bounds = Rectangle.{x, bounds.y + ToolbarTop, 58.0, 28.0}
+    x += 60.0
+    if Button.Draw(session, chart) != 0 { CreateFormulaChart(editor) }
+    if bounds.width < 600.0 {
+        row := editor.selected_row; column := editor.selected_column
+        if ToolbarIcon(session, editor, 1006, LeftIcon.Shape, bounds.y + ToolbarTop, *x, false) { column = Max(0, column - 1) }
+        if ToolbarIcon(session, editor, 1007, UpIcon.Shape, bounds.y + ToolbarTop, *x, false) { row = NextVisibleRow(editor, row, -1) }
+        if ToolbarIcon(session, editor, 1008, DownIcon.Shape, bounds.y + ToolbarTop, *x, false) { row = NextVisibleRow(editor, row, 1) }
+        if ToolbarIcon(session, editor, 1009, RightIcon.Shape, bounds.y + ToolbarTop, *x, false) { column = Min(MaxColumns - 1, column + 1) }
+        if row != editor.selected_row || column != editor.selected_column {
+            if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
+            SelectCell(editor, row, column)
+            EnsureVisible(editor)
+        }
+    }
+}
+
+CreateFormulaChart :: (editor: *Editor) {
+    if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
+    first_row: s32 = Min(editor.selected_row, editor.range_row)
+    last_row: s32 = Max(editor.selected_row, editor.range_row)
+    first_column: s32 = Min(editor.selected_column, editor.range_column)
+    last_column: s32 = Max(editor.selected_column, editor.range_column)
+    if last_column <= first_column {
+        SetText(editor.status[:], "Select label and value columns to create a chart")
+        return
+    }
+    count: s32 = Min(24, last_row - first_row + 1)
+    if count <= 0 { return }
+    RecordChange(editor)
+    name: [64]u8
+    SetText(name[:], "Chart ")
+    digits: [16]u8
+    AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(editor.workbook) + 1, digits[:]))
+    added: bool
+    #if #defined(KRYON_HOSTED_UI) {
+        added = Engine.WorkbookAddSheet(editor.workbook, Engine.CText(TextUntilNul(name[:]))) != 0
+    } else {
+        added = Engine.WorkbookAddSheet(editor.workbook, Engine.CText(TextUntilNul(name[:]))) != null
+    }
+    if !added {
+        SetText(editor.status[:], "Could not add a chart sheet")
+        return
+    }
+    chart_sheet: s32 = Engine.WorkbookSheetCount(editor.workbook) - 1
+    Engine.WorkbookSetCell(editor.workbook, chart_sheet, 0, 0, Engine.CText("Formula chart"))
+    Engine.WorkbookSetCell(editor.workbook, chart_sheet, 1, 0, Engine.CText("Label"))
+    Engine.WorkbookSetCell(editor.workbook, chart_sheet, 1, 1, Engine.CText("Value"))
+    Engine.WorkbookSetCell(editor.workbook, chart_sheet, 1, 2, Engine.CText("Visual bar"))
+    for offset: 0..count - 1 {
+        row: s32 = offset + 2
+        label: [320]u8
+        SetText(label[:], "=")
+        EditorSheetPrefix(editor, editor.sheet_index, label[:])
+        AppendCellName(label[:], first_row + offset, first_column)
+        Engine.WorkbookSetCell(editor.workbook, chart_sheet, row, 0, Engine.CText(TextUntilNul(label[:])))
+        value: [320]u8
+        SetText(value[:], "=")
+        EditorSheetPrefix(editor, editor.sheet_index, value[:])
+        AppendCellName(value[:], first_row + offset, first_column + 1)
+        Engine.WorkbookSetCell(editor.workbook, chart_sheet, row, 1, Engine.CText(TextUntilNul(value[:])))
+        visual: [256]u8
+        SetText(visual[:], "=REPT(\"■\",ROUND(MAX(0,B")
+        AppendText(visual[:], FormatInteger(cast(s64)row + 1, digits[:]))
+        AppendText(visual[:], ")/MAX(1,MAX($B$3:$B$")
+        AppendText(visual[:], FormatInteger(cast(s64)count + 2, digits[:]))
+        AppendText(visual[:], "))*30,0))")
+        Engine.WorkbookSetCell(editor.workbook, chart_sheet, row, 2, Engine.CText(TextUntilNul(visual[:])))
+    }
+    editor.sheet_index = chart_sheet
+    editor.scroll_row = 0
+    editor.scroll_column = 0
+    Changed(editor)
+}
+
+DrawStatus :: (session: Session, editor: *Editor, bounds: Rectangle) {
+    if editor.status[0] == 0 { return }
+    label: Text.Props
+    label.key = editor.key_base + 5
+    label.text = TextUntilNul(editor.status[:])
+    label.size = Text.Text14
+    label.bounds = Rectangle.{bounds.x + 180.0, bounds.y + bounds.height - 24.0,
+        bounds.width - 184.0, 20.0}
+    Text.Draw(session, label)
+}
+
+ToolbarIcon :: (session: Session, editor: *Editor, id: s32, shape: string, y: float32,
+    x: *float32, primary: bool) -> bool {
+    button: Button.Props
+    button.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + id
+    button.icon_shape = shape
+    button.icon_only = true
+    button.size = cast(ControlSize)ControlSizeSmall
+    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    if primary {
+        button.tone = cast(ButtonTone)ButtonToneAccent
+    }
+    button.bounds = Rectangle.{x.*, y, 28.0, 28.0}
+    x.* = x.* + 30.0
+    return Button.Draw(session, button) != 0
+}
+
+Changed :: (editor: *Editor) {
+    Engine.WorkbookEvaluate(editor.workbook)
+    editor.dirty = true
+    editor.save_retry_at = 0
+    editor.change_count += 1
+    keep_row: s32 = editor.range_row
+    keep_column: s32 = editor.range_column
+    SelectCell(editor, editor.selected_row, editor.selected_column)
+    editor.range_row = Min(keep_row, MaxRows - 1)
+    editor.range_column = Min(keep_column, MaxColumns - 1)
+}
+
+SheetTabsBounds :: (editor: *Editor, bounds: Rectangle) -> Rectangle {
+    count: s32 = Min(Engine.WorkbookSheetCount(editor.workbook), 16)
+    return Rectangle.{bounds.x, bounds.y + bounds.height - TabsBottom, MinFloat(bounds.width, 104.0 * cast(float32)count), 28.0}
+}
+
+DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle) {
+    count: s32 = Engine.WorkbookSheetCount(editor.workbook)
+    if count < 1 { return }
+    if count > 16 { count = 16 }
+    tabs: [16]TabBar.Tab
+    index: s32 = 0
+    while index < count {
+        tabs[index].key = editor.key_base + cast(u64)(1100 + index)
+        tabs[index].label = EditorString(Engine.WorkbookSheetName(editor.workbook, index))
+        index += 1
+    }
+    strip: Box.Props
+    strip.key = editor.key_base + 1098
+    strip.bounds = Rectangle.{bounds.x, bounds.y + bounds.height - TabsBottom, bounds.width, TabsBottom}
+    strip.fill = Grid.GridHeaderBackground()
+    strip.border = Grid.GridLineColor()
+    Box.Draw(session, strip)
+    bar: TabBar.Props
+    bar.key = editor.key_base + 1099
+    bar.placement = cast(TabBar.TabBarPlacement)TabBarBottom
+    bar.selected_index = editor.sheet_index
+    bar.bounds = SheetTabsBounds(editor, bounds)
+    bar.min_tab_width = 72
+    bar.max_tab_width = 104
+    result: TabBar.Result = TabBar.Draw(session, bar, tabs[0:count])
+    if result.selected_index != editor.sheet_index && result.selected_index >= 0 {
+        editor.sheet_index = result.selected_index
+        editor.scroll_row = 0
+        editor.scroll_column = 0
+        if !FormulaEditing(editor) && !editor.edit_refocus { SelectCell(editor, 0, 0) }
+    }
+}
+
+DrawFormulaBar :: (session: Session, editor: *Editor, bounds: Rectangle, key: s32,
+    control: bool, typed: []u8, typed_length: s32) {
+    label: Text.Props
+    label.key = editor.key_base + 3
+    label.text = "fx"
+    label.size = Text.Text16
+    label.disabled = true
+    label.bounds = Rectangle.{bounds.x + 8.0, bounds.y + FormulaTop + 3.0, 24.0, 20.0}
+    Text.Draw(session, label)
+    result: FormulaFieldResult = RunFormulaField(session, editor, bounds, key, control,
+        typed, typed_length)
+    editor.edit_claim = false
+    if result.changed || result.cursor != editor.edit_cursor || result.anchor != editor.edit_anchor {
+        editor.pick_start = -1
+    }
+    if !result.changed && (result.cursor != editor.edit_cursor || result.anchor != editor.edit_anchor) {
+        editor.edit_run = 0
+    }
+    editor.edit_scroll = result.scroll_x
+    editor.edit_composition.active = result.composition_active
+    editor.edit_composition.cursor = result.composition_cursor
+    editor.edit_composition.selection_length = result.composition_selection_length
+    SetText(editor.edit_composition_text[:],
+        TextView(result.composition_text[0:result.composition_text_length]))
+    editor.edit_composition_length = cast(s32)TextUntilNul(editor.edit_composition_text[:]).count
+    editor.edit_composition.text = TextView(editor.edit_composition_text[0:editor.edit_composition_length])
+    editor.edit_focused = editor.focused && result.focused
+    if result.changed {
+        kind: s32 = EditOther
+        if !control { kind = ifx result.replacement_length == 0 then EditDeleting else EditTyping }
+        ChangeEdit(editor, kind, result.start, result.end,
+            TextView(result.replacement[0:result.replacement_length]))
+    }
+    editor.edit_cursor = result.cursor
+    editor.edit_anchor = result.anchor
+    if result.committed {
+        CommitCell(editor)
+        EndEdit(editor)
+        SelectCell(editor, NextVisibleRow(editor, editor.selected_row, 1), editor.selected_column)
+        EnsureVisible(editor)
+    }
+    if result.escaped {
+        SetText(editor.edit[:], TextUntilNul(editor.edit_original[:]))
+        CommitCell(editor)
+        EndEdit(editor)
+        SelectCell(editor, editor.selected_row, editor.selected_column)
+    }
+}
+
+// --------------------------------------------------------- formula picking
+
+FormulaEditing :: (editor: *Editor) -> bool { return editor.edit_focused && editor.edit[0] == #char "=" }
+
+CanPick :: (editor: *Editor) -> bool {
+    if !FormulaEditing(editor) { return false }
+    start: s32 = Min(editor.edit_cursor, editor.edit_anchor)
+    end: s32 = Max(editor.edit_cursor, editor.edit_anchor)
+    if editor.pick_start >= 0 && start == editor.pick_end && end == editor.pick_end { return true }
+    text: string = TextUntilNul(editor.edit[:])
+    if start < 1 || end > cast(s32)text.count { return false }
+    quotes: s32 = 0
+    for at: 0..start - 1 { if text[at] == #char "\"" { quotes += 1 } }
+    if quotes % 2 != 0 { return false }
+    before: s32 = start - 1
+    while before > 0 && text[before] == #char " " { before -= 1 }
+    operand: bool = false
+    marks: string = "=(,;+-*/^&<>:"
+    for mark: marks { if text[before] == mark { operand = true } }
+    if !operand { return false }
+    if end < cast(s32)text.count {
+        next: u8 = text[end]
+        if (next >= #char "A" && next <= #char "Z") || (next >= #char "a" && next <= #char "z") ||
+        (next >= #char "0" && next <= #char "9") || next == #char "$" || next == #char "_" ||
+        next == #char "." || next == #char "'" { return false }
+    }
+    return true
+}
+
+StartPick :: (editor: *Editor, row: s32, column: s32) {
+    replace: bool = editor.pick_start >= 0 && editor.edit_cursor == editor.pick_end && editor.edit_anchor == editor.pick_end
+    start: s32 = Min(editor.edit_cursor, editor.edit_anchor)
+    end: s32 = Max(editor.edit_cursor, editor.edit_anchor)
+    if replace {
+        start = editor.pick_start
+        end = editor.pick_end
+    }
+    if !(replace && editor.shift_held && editor.pick_sheet == editor.sheet_index) {
+        editor.pick_anchor_row = row
+        editor.pick_anchor_column = column
+    }
+    editor.pick_sheet = editor.sheet_index
+    editor.pick_row = row
+    editor.pick_column = column
+    WritePick(editor, start, end, true)
+}
+
+WritePick :: (editor: *Editor, start: s32, end: s32, new_step: bool) {
+    reference: [320]u8
+    reference[0] = 0
+    if editor.pick_sheet != editor.edit_sheet {
+        prefix: [512]u8
+        EditorSheetPrefix(editor, editor.pick_sheet, prefix[:])
+        AppendText(reference[:], TextUntilNul(prefix[:]))
+    }
+    first_row: s32 = Min(editor.pick_anchor_row, editor.pick_row)
+    first_column: s32 = Min(editor.pick_anchor_column, editor.pick_column)
+    last_row: s32 = Max(editor.pick_anchor_row, editor.pick_row)
+    last_column: s32 = Max(editor.pick_anchor_column, editor.pick_column)
+    AppendCellName(reference[:], first_row, first_column)
+    if last_row != first_row || last_column != first_column {
+        AppendText(reference[:], ":")
+        AppendCellName(reference[:], last_row, last_column)
+    }
+    text: string = TextUntilNul(reference[:])
+    if !EditFits(editor, start, end, text) { return }
+    if new_step { RememberEditText(editor, EditOther, start, end, text) }
+    ApplyEdit(editor, start, end, text)
+    editor.pick_start = start
+    editor.pick_end = start + cast(s32)text.count
+}
+
+// The parts of TextField.Result the formula bar uses, with the replacement
+// text copied into owned storage so the value can leave a function holding
+// the editor.
+FormulaFieldResult :: struct {
+    start: s32;
+    end: s32;
+    replacement: [CellTextMax]u8;
+    replacement_length: s32;
+    changed: bool;
+    cursor: s32;
+    anchor: s32;
+    scroll_x: s32;
+    focused: bool;
+    committed: bool;
+    escaped: bool;
+    composition_active: bool;
+    composition_text: [256]u8;
+    composition_text_length: s32;
+    composition_cursor: s32;
+    composition_selection_length: s32;
+}
+
+RunFormulaField :: (session: Session, editor: *Editor, bounds: Rectangle, key: s32,
+    control: bool, typed: []u8, typed_length: s32) -> FormulaFieldResult {
+    field: TextField.Props
+    field.key = editor.key_base + 4
+    field.bounds = Rectangle.{bounds.x + 40.0, bounds.y + FormulaTop, bounds.width - 42.0, 26.0}
+    field.value = TextUntilNul(editor.edit[:])
+    field.label = "Cell value"
+    field.placeholder = "Value or =formula"
+    field.cursor = editor.edit_cursor
+    field.anchor = editor.edit_anchor
+    field.scroll_x = editor.edit_scroll
+    field.focused = editor.focused && editor.edit_focused
+    field.composition.active = editor.edit_composition.active
+    field.composition.cursor = editor.edit_composition.cursor
+    field.composition.selection_length = editor.edit_composition.selection_length
+    field.composition.text = TextView(editor.edit_composition_text[0:editor.edit_composition_length])
+    field.max_bytes = CellTextMax - 1
+    field.input.focus = editor.focused && (editor.edit_refocus || editor.edit_claim)
+    field.input.blur = !editor.focused || (!editor.edit_focused && !editor.edit_refocus)
+    if editor.focused && editor.edit_focused {
+        field.input.text = TextView(typed[0:typed_length])
+        field.input.left = key == KeyLeft
+        field.input.right = key == KeyRight
+        field.input.home = key == KeyHome
+        field.input.end = key == KeyEnd
+        field.input.backspace = key == KeyBackspace
+        field.input.delete_forward = key == KeyDelete
+        field.input.select_all = control && key == KeyA
+        field.input.copy = control && key == KeyC
+        field.input.cut = control && key == KeyX
+        field.input.paste = control && key == KeyV
+        field.input.commit = key == KeyEnter
+        field.input.escape = key == KeyEscape
+    }
+    drawn: TextField.Result = TextField.Draw(session, field)
+    result: FormulaFieldResult
+    result.start = drawn.edit.start
+    result.end = drawn.edit.end
+    result.changed = drawn.edit.changed
+    SetText(result.replacement[:], drawn.edit.replacement)
+    result.replacement_length = cast(s32)TextUntilNul(result.replacement[:]).count
+    result.cursor = drawn.cursor
+    result.anchor = drawn.anchor
+    result.scroll_x = drawn.scroll_x
+    result.focused = drawn.focused
+    result.committed = drawn.committed
+    result.escaped = drawn.escaped
+    result.composition_active = drawn.composition.active
+    result.composition_cursor = drawn.composition.cursor
+    result.composition_selection_length = drawn.composition.selection_length
+    SetText(result.composition_text[:], drawn.composition.text)
+    result.composition_text_length = cast(s32)TextUntilNul(result.composition_text[:]).count
+    return result
+}
+
+// -------------------------------------------------------------------- grid
+
+GridRows :: (editor: *Editor) -> s32 {
+    count: s32 = Engine.WorkbookSheetRows(editor.workbook, editor.sheet_index)
+    if count < 8 { count = 8 }
+    if count < editor.selected_row + 1 { count = editor.selected_row + 1 }
+    if count < editor.range_row + 1 { count = editor.range_row + 1 }
+    if editor.drag_mode == DragFill && editor.fill_axis == 1 && count < editor.fill_row + 1 { count = editor.fill_row + 1 }
+    if PickShown(editor) && count < Max(editor.pick_anchor_row, editor.pick_row) + 1 { count = Max(editor.pick_anchor_row, editor.pick_row) + 1 }
+    if count > MaxRows { count = MaxRows }
+    return count
+}
+
+GridColumns :: (editor: *Editor) -> s32 {
+    count: s32 = Engine.WorkbookSheetColumns(editor.workbook, editor.sheet_index)
+    if count < 8 { count = 8 }
+    if count < editor.selected_column + 1 { count = editor.selected_column + 1 }
+    if count < editor.range_column + 1 { count = editor.range_column + 1 }
+    if editor.drag_mode == DragFill && editor.fill_axis == 2 && count < editor.fill_column + 1 { count = editor.fill_column + 1 }
+    if PickShown(editor) && count < Max(editor.pick_anchor_column, editor.pick_column) + 1 { count = Max(editor.pick_anchor_column, editor.pick_column) + 1 }
+    if count > MaxColumns { count = MaxColumns }
+    return count
+}
+
+PickShown :: (editor: *Editor) -> bool { return FormulaEditing(editor) && editor.pick_start >= 0 && editor.pick_sheet == editor.sheet_index }
+
+RowHidden :: (editor: *Editor, row: s32) -> bool { return Engine.WorkbookRowHidden(editor.workbook, editor.sheet_index, row) != 0 }
+GridRowHeight :: (editor: *Editor, row: s32) -> float32 { return ifx RowHidden(editor, row) then Grid.GridHiddenRowHeight else Grid.GridRowHeight }
+
+NextVisibleRow :: (editor: *Editor, row: s32, step: s32) -> s32 {
+    next: s32 = row + step
+    while next >= 0 && next < MaxRows && RowHidden(editor, next) { next += step }
+    return ifx next >= 0 && next < MaxRows then next else row
+}
+
+GridRowAt :: (editor: *Editor, table: Rectangle, y: float32) -> s32 {
+    row: s32 = editor.scroll_row
+    top: float32 = table.y + Grid.GridHeaderHeight
+    while row < editor.scroll_row + editor.visible_rows - 1 && y >= top + GridRowHeight(editor, row) {
+        top += GridRowHeight(editor, row)
+        row += 1
+    }
+    return row
+}
+
+SetRowsHidden :: (editor: *Editor, first: s32, last: s32, hidden: bool) {
+    RecordChange(editor)
+    if Engine.WorkbookSetRowsHidden(editor.workbook, editor.sheet_index, first, last, ifx hidden then 1 else 0) == 0 { return }
+    Changed(editor)
+    if hidden && RowHidden(editor, editor.selected_row) { SelectCell(editor, NextVisibleRow(editor, last, 1), editor.selected_column) }
+    editor.selection_axis = 0
+    EnsureVisible(editor)
+}
+
+EnsureVisible :: (editor: *Editor) {
+    if editor.selected_row < editor.scroll_row { editor.scroll_row = editor.selected_row }
+    if editor.selected_row >= editor.scroll_row + editor.visible_rows {
+        editor.scroll_row = Max(0, editor.selected_row - Max(1, cast(s32)(editor.grid_body_height / Grid.GridRowHeight)) + 1)
+    }
+    if editor.selected_column < editor.scroll_column { editor.scroll_column = editor.selected_column }
+    if editor.selected_column >= editor.scroll_column + editor.visible_columns {
+        editor.scroll_column = editor.selected_column - editor.visible_columns + 1
+    }
+}
+
+DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: EditorInput) {
+    table: Rectangle = Rectangle.{bounds.x + Margin, bounds.y + TableTop,
+        bounds.width - Margin * 2.0, bounds.height - TableTop - GridBottom}
+    editor.grid_right = table.x + table.width
+    editor.grid_bottom = table.y + table.height
+    editor.grid_body_height = table.height - Grid.GridHeaderHeight
+    editor.visible_rows = cast(s32)((editor.grid_body_height + Grid.GridRowHeight - 1.0) / Grid.GridRowHeight)
+    editor.visible_columns = cast(s32)((table.width - Grid.GridRowHeaderWidth + Grid.GridColumnWidth - 1.0) / Grid.GridColumnWidth)
+    if editor.visible_rows < 1 { editor.visible_rows = 1 }
+    if editor.visible_columns < 1 { editor.visible_columns = 1 }
+    rows: s32 = GridRows(editor)
+    columns: s32 = GridColumns(editor)
+
+    if !input.blocked && input.wheel != 0.0 && PointInBounds(input.pointer.x, input.pointer.y, table) {
+        if input.wheel > 0.0 { editor.scroll_row -= 1 }
+        if input.wheel < 0.0 { editor.scroll_row += 1 }
+    }
+    last_start: s32 = rows
+    tail_height: float32 = 0.0
+    while last_start > 0 && tail_height < editor.grid_body_height {
+        last_start -= 1
+        tail_height += GridRowHeight(editor, last_start)
+    }
+    if editor.scroll_row > last_start { editor.scroll_row = last_start }
+    if editor.scroll_row < 0 { editor.scroll_row = 0 }
+
+    if rows < editor.scroll_row + editor.visible_rows { rows = editor.scroll_row + editor.visible_rows }
+    editor.visible_rows = 0
+    used_height: float32 = 0.0
+    while used_height < editor.grid_body_height && editor.scroll_row + editor.visible_rows < MaxRows {
+        used_height += GridRowHeight(editor, editor.scroll_row + editor.visible_rows)
+        editor.visible_rows += 1
+    }
+    if editor.visible_rows < 1 { editor.visible_rows = 1 }
+    if rows < editor.scroll_row + editor.visible_rows { rows = editor.scroll_row + editor.visible_rows }
+    if columns < editor.scroll_column + editor.visible_columns { columns = editor.scroll_column + editor.visible_columns }
+
+    here: bool = editor.sheet_index == editor.edit_sheet
+    first_row: s32 = SelectionFirstRow(editor)
+    last_row: s32 = SelectionLastRow(editor)
+    first_column: s32 = SelectionFirstColumn(editor)
+    last_column: s32 = SelectionLastColumn(editor)
+    spans: bool = editor.selection_axis == 0 && (first_row != last_row || first_column != last_column)
+
+    GridSquare(session, editor, 10, Rectangle.{table.x, table.y, Grid.GridRowHeaderWidth, Grid.GridHeaderHeight},
+        Grid.GridHeaderBackground(), "")
+    column: s32 = editor.scroll_column
+    while column < editor.scroll_column + editor.visible_columns && column < columns {
+        name: [8]u8
+        AppendCellColumn(name[:], column)
+        GridSquare(session, editor, 20 + column - editor.scroll_column, Rectangle.{ColumnX(editor, table, column), table.y,
+                Grid.GridColumnWidth, Grid.GridHeaderHeight}, ifx here && editor.selection_axis == 2 && column == editor.selected_column then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(name[:]))
+        column += 1
+    }
+    shown: s32 = 0
+    while shown < editor.visible_rows && editor.scroll_row + shown < rows {
+        row: s32 = editor.scroll_row + shown
+        y: float32 = RowY(editor, table, row)
+        if RowHidden(editor, row) {
+            GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, table.width, Grid.GridHiddenRowHeight}, Grid.GridHeaderBackground(), "")
+            strip: Box.Props
+            strip.key = editor.key_base + cast(u64)(500000 + shown)
+            strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
+            strip.fill = Grid.GridLineColor()
+            Box.Draw(session, strip)
+            shown += 1
+            continue
+        }
+        number: [16]u8
+        row_digits: [16]u8
+        SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
+        GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, Grid.GridRowHeaderWidth, Grid.GridRowHeight},
+            ifx here && editor.selection_axis == 1 && row == editor.selected_row then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(number[:]))
+        column = editor.scroll_column
+        while column < editor.scroll_column + editor.visible_columns && column < columns {
+            display: [256]u8
+            EditorCellDisplay(editor, row, column, display[:])
+            #if !#defined(KRYON_HOSTED_UI) {
+                if editor.workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
+            }
+            fill: Color = Grid.GridCellBackground()
+            active: bool = row == editor.selected_row && column == editor.selected_column
+            in_rows: bool = editor.selection_axis == 2 || (row >= first_row && row <= last_row)
+            in_columns: bool = editor.selection_axis == 1 || (column >= first_column && column <= last_column)
+            if here && in_rows && in_columns && !(spans && active) { fill = Grid.GridSelectedBackground() }
+            GridSquare(session, editor, 10000 + shown * editor.visible_columns + column - editor.scroll_column,
+                Rectangle.{ColumnX(editor, table, column), y, Grid.GridColumnWidth, Grid.GridRowHeight},
+                fill, TextUntilNul(display[:]))
+            column += 1
+        }
+        shown += 1
+    }
+
+    if here && editor.selection_axis == 0 && !editor.edit_focused {
+        CellOutline(session, editor, 400000, table, first_row, first_column, last_row, last_column, Grid.GridAccentColor(), 2)
+        handle: Rectangle = FillHandleBounds(editor, table)
+        if handle.width > 0.0 {
+            mark: Box.Props
+            mark.key = editor.key_base + 400008
+            mark.bounds = Rectangle.{handle.x + 2.0, handle.y + 2.0, 7.0, 7.0}
+            mark.fill = Grid.GridAccentColor()
+            mark.border = Grid.GridCellBackground()
+            Box.Draw(session, mark)
+        }
+    }
+    if editor.drag_mode == DragFill && editor.fill_axis != 0 {
+        top: s32 = ifx editor.fill_axis == 1 then Min(first_row, editor.fill_row) else first_row
+        bottom: s32 = ifx editor.fill_axis == 1 then Max(last_row, editor.fill_row) else last_row
+        left: s32 = ifx editor.fill_axis == 2 then Min(first_column, editor.fill_column) else first_column
+        right: s32 = ifx editor.fill_axis == 2 then Max(last_column, editor.fill_column) else last_column
+        CellOutline(session, editor, 400010, table, top, left, bottom, right, Grid.GridAccentColor(), 1)
+    }
+    DrawReferenceOutlines(session, editor, table)
+    DrawCellEditor(session, editor, table)
+
+    if input.blocked { return }
+    pointer: PointerFrame = input.pointer
+    body: Rectangle = Rectangle.{table.x + Grid.GridRowHeaderWidth, table.y + Grid.GridHeaderHeight,
+        table.width - Grid.GridRowHeaderWidth, table.height - Grid.GridHeaderHeight}
+    hit_row: s32 = GridRowAt(editor, table, pointer.y)
+    hit_column: s32 = editor.scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
+    on_cell: bool = PointInBounds(pointer.x, pointer.y, body) && hit_row < rows &&
+    hit_row < editor.scroll_row + editor.visible_rows && hit_column < columns && hit_column < editor.scroll_column + editor.visible_columns
+    if pointer.pressed && !editor.grid_menu_open {
+        handle: Rectangle = FillHandleBounds(editor, table)
+        if PointInBounds(pointer.x, pointer.y, table) && pointer.y >= body.y && RowHidden(editor, hit_row) {
+            SetRowsHidden(editor, hit_row, hit_row, false)
+            SelectCell(editor, hit_row, editor.selected_column)
+            return
+        } else if handle.width > 0.0 && PointInBounds(pointer.x, pointer.y, handle) {
+            editor.drag_mode = DragFill
+            editor.fill_axis = 0
+        } else if on_cell && CanPick(editor) {
+            StartPick(editor, hit_row, hit_column)
+            editor.drag_mode = DragPick
+        } else if on_cell && editor.shift_held && !editor.edit_focused && here {
+            editor.selection_axis = 0
+            editor.range_row = hit_row
+            editor.range_column = hit_column
+            editor.drag_mode = DragRange
+        } else if on_cell {
+            second: bool = editor.frames_since_click < DoubleClickFrames &&
+            hit_row == editor.last_click_row && hit_column == editor.last_click_column
+            editor.edit_focused = false
+            SelectCell(editor, hit_row, hit_column)
+            if second { StartEdit(editor) }
+            editor.frames_since_click = 0
+            editor.last_click_row = hit_row
+            editor.last_click_column = hit_column
+            editor.drag_mode = DragRange
+        } else if PointInBounds(pointer.x, pointer.y, table) && pointer.y < body.y && pointer.x >= body.x {
+            if hit_column < columns && hit_column < editor.scroll_column + editor.visible_columns {
+                editor.edit_focused = false
+                SelectCell(editor, editor.selected_row, hit_column); editor.selection_axis = 2; editor.frames_since_click = 1000
+            }
+        } else if PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
+            if hit_row < rows && hit_row < editor.scroll_row + editor.visible_rows {
+                editor.edit_focused = false
+                if editor.shift_held && editor.selection_axis == 1 { editor.range_row = hit_row }
+                else { SelectCell(editor, hit_row, editor.selected_column); editor.selection_axis = 1 }
+                editor.frames_since_click = 1000
+            }
+        }
+    }
+    if pointer.down && editor.drag_mode != DragNone {
+        editor.drag_frames += 1
+        if editor.drag_frames % 4 == 0 {
+            if pointer.y >= body.y + body.height && editor.scroll_row + editor.visible_rows < MaxRows { editor.scroll_row += 1 }
+            if pointer.y < body.y && editor.scroll_row > 0 { editor.scroll_row -= 1 }
+            if pointer.x >= body.x + body.width && editor.scroll_column + editor.visible_columns < MaxColumns { editor.scroll_column += 1 }
+            if pointer.x < body.x && editor.scroll_column > 0 { editor.scroll_column -= 1 }
+        }
+        row: s32 = editor.scroll_row
+        if pointer.y > body.y { row = GridRowAt(editor, table, pointer.y) }
+        row = Min(row, Min(editor.scroll_row + editor.visible_rows - 1, MaxRows - 1))
+        column = editor.scroll_column
+        if pointer.x > body.x { column = editor.scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth) }
+        column = Min(column, Min(editor.scroll_column + editor.visible_columns - 1, MaxColumns - 1))
+        if editor.drag_mode == DragRange && !editor.edit_focused && here {
+            editor.selection_axis = 0
+            editor.range_row = row
+            editor.range_column = column
+        }
+        if editor.drag_mode == DragPick && editor.pick_start >= 0 && (row != editor.pick_row || column != editor.pick_column) {
+            editor.pick_row = row
+            editor.pick_column = column
+            WritePick(editor, editor.pick_start, editor.pick_end, false)
+        }
+        if editor.drag_mode == DragFill { AimFill(editor, row, column) }
+    }
+    if pointer.released && editor.drag_mode != DragNone {
+        if editor.drag_mode == DragFill { ApplyFill(editor) }
+        editor.drag_mode = DragNone
+        editor.drag_frames = 0
+    } else if !pointer.down {
+        editor.drag_mode = DragNone
+        editor.drag_frames = 0
+    }
+    secondary: SecondaryPointerFrame = input.secondary
+    if secondary.released && !editor.grid_menu_open && PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
+        row := GridRowAt(editor, table, pointer.y)
+        if row < rows && row < editor.scroll_row + editor.visible_rows && !RowHidden(editor, row) {
+            editor.edit_focused = false
+            if editor.selection_axis != 1 || row < first_row || row > last_row { SelectCell(editor, row, editor.selected_column) }
+            editor.selection_axis = 1; editor.frames_since_click = 1000
+            editor.grid_menu_row = true; editor.grid_menu_open = true; editor.grid_menu_x = pointer.x; editor.grid_menu_y = pointer.y
+        }
+    }
+    if secondary.released && !editor.grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
+        row: s32 = GridRowAt(editor, table, pointer.y)
+        clicked: s32 = editor.scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
+        if row < rows && !RowHidden(editor, row) && clicked < columns && clicked < editor.scroll_column + editor.visible_columns {
+            inside: bool = here && editor.selection_axis == 0 && row >= first_row && row <= last_row &&
+            clicked >= first_column && clicked <= last_column
+            editor.edit_focused = false
+            if !inside { SelectCell(editor, row, clicked) }
+            editor.grid_menu_open = true
+            editor.grid_menu_row = false
+            editor.grid_menu_x = pointer.x
+            editor.grid_menu_y = pointer.y
+        }
+    }
+    if editor.frames_since_click < 1000 { editor.frames_since_click += 1 }
+}
+
+FillHandleBounds :: (editor: *Editor, table: Rectangle) -> Rectangle {
+    none: Rectangle = Rectangle.{0.0, 0.0, 0.0, 0.0}
+    if editor.selection_axis != 0 || editor.edit_focused || editor.sheet_index != editor.edit_sheet { return none }
+    row: s32 = SelectionLastRow(editor)
+    column: s32 = SelectionLastColumn(editor)
+    if RowHidden(editor, row) { return none }
+    if row < editor.scroll_row || row >= editor.scroll_row + editor.visible_rows ||
+    column < editor.scroll_column || column >= editor.scroll_column + editor.visible_columns { return none }
+    x: float32 = ColumnX(editor, table, column) + Grid.GridColumnWidth
+    y: float32 = RowY(editor, table, row) + Grid.GridRowHeight
+    return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
+}
+
+AimFill :: (editor: *Editor, row: s32, column: s32) {
+    down: s32 = row - SelectionLastRow(editor)
+    up: s32 = SelectionFirstRow(editor) - row
+    right: s32 = column - SelectionLastColumn(editor)
+    left: s32 = SelectionFirstColumn(editor) - column
+    vertical: s32 = Max(down, up)
+    horizontal: s32 = Max(right, left)
+    editor.fill_axis = 0
+    if vertical <= 0 && horizontal <= 0 { return }
+    if vertical >= horizontal {
+        editor.fill_axis = 1
+        editor.fill_row = row
+    } else {
+        editor.fill_axis = 2
+        editor.fill_column = column
+    }
+}
+
+ApplyFill :: (editor: *Editor) {
+    if editor.fill_axis == 0 { return }
+    RecordChange(editor)
+    first_row: s32 = SelectionFirstRow(editor)
+    last_row: s32 = SelectionLastRow(editor)
+    first_column: s32 = SelectionFirstColumn(editor)
+    last_column: s32 = SelectionLastColumn(editor)
+    top: s32 = ifx editor.fill_axis == 1 then Min(first_row, editor.fill_row) else first_row
+    bottom: s32 = ifx editor.fill_axis == 1 then Max(last_row, editor.fill_row) else last_row
+    left: s32 = ifx editor.fill_axis == 2 then Min(first_column, editor.fill_column) else first_column
+    right: s32 = ifx editor.fill_axis == 2 then Max(last_column, editor.fill_column) else last_column
+    height: s32 = last_row - first_row + 1
+    width: s32 = last_column - first_column + 1
+    for row: top..bottom {
+        for column: left..right {
+            if row >= first_row && row <= last_row && column >= first_column && column <= last_column { continue }
+            Engine.WorkbookCopyCell(editor.workbook, editor.sheet_index,
+                first_row + Wrap(row - first_row, height), first_column + Wrap(column - first_column, width), row, column)
+        }
+    }
+    editor.fill_axis = 0
+    editor.selected_row = top
+    editor.selected_column = left
+    editor.range_row = bottom
+    editor.range_column = right
+    Changed(editor)
+}
+
+Wrap :: (a: s32, n: s32) -> s32 {
+    r: s32 = a % n
+    return ifx r < 0 then r + n else r
+}
+
+DrawReferenceOutlines :: (session: Session, editor: *Editor, table: Rectangle) {
+    if !FormulaEditing(editor) { return }
+    ref: Engine.FormulaRef
+    at: s32 = 0
+    index: s32 = 0
+    while index < 32 && Engine.FormulaFindRef(editor.workbook, Engine.CText(TextUntilNul(editor.edit[:])), at, *ref) != 0 {
+        sheet: s32 = ifx ref.sheet == -1 then editor.edit_sheet else ref.sheet
+        if sheet == editor.sheet_index {
+            CellOutline(session, editor, 400100 + index * 4, table, Min(ref.row1, ref.row2), Min(ref.col1, ref.col2),
+                Max(ref.row1, ref.row2), Max(ref.col1, ref.col2), ReferenceColor(index), 2)
+        }
+        at = ref.end
+        index += 1
+    }
+}
+
+DrawCellEditor :: (session: Session, editor: *Editor, table: Rectangle) {
+    if !editor.edit_focused || editor.sheet_index != editor.edit_sheet { return }
+    if RowHidden(editor, editor.selected_row) { return }
+    if editor.selected_row < editor.scroll_row || editor.selected_row >= editor.scroll_row + editor.visible_rows ||
+    editor.selected_column < editor.scroll_column || editor.selected_column >= editor.scroll_column + editor.visible_columns { return }
+    text: string = TextUntilNul(editor.edit[:])
+    x: float32 = ColumnX(editor, table, editor.selected_column)
+    y: float32 = RowY(editor, table, editor.selected_row)
+    width: float32 = cast(float32)(EditorGlyphWidth(text) + 16)
+    if width < Grid.GridColumnWidth { width = Grid.GridColumnWidth }
+    limit: float32 = ColumnX(editor, table, editor.scroll_column + editor.visible_columns) - x
+    if width > limit { width = limit }
+    box: Box.Props
+    box.key = editor.key_base + 400500
+    box.bounds = Rectangle.{x, y, width, Grid.GridRowHeight}
+    box.fill = Grid.GridCellBackground()
+    box.border = Grid.GridAccentColor()
+    Box.Draw(session, box)
+    label: Text.Props
+    label.key = editor.key_base + 400501
+    label.text = text
+    label.size = Text.Text14
+    label.wrap = cast(Text.Wrap)TextWrapNone
+    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, Grid.GridRowHeight - 4.0}
+    Text.Draw(session, label)
+    cursor: s32 = Min(editor.edit_cursor, cast(s32)text.count)
+    caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
+    if caret_x < x + width - 2.0 {
+        caret: Box.Props
+        caret.key = editor.key_base + 400502
+        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, Grid.GridRowHeight - 10.0}
+        caret.fill = Grid.GridAccentColor()
+        caret.border = Grid.GridAccentColor()
+        Box.Draw(session, caret)
+    }
+}
+
+CellOutline :: (session: Session, editor: *Editor, key: s32, table: Rectangle, first_row: s32, first_column: s32,
+    last_row: s32, last_column: s32, color: Color, thickness: s32) {
+    top: s32 = Max(first_row, editor.scroll_row)
+    bottom: s32 = Min(last_row, editor.scroll_row + editor.visible_rows - 1)
+    left: s32 = Max(first_column, editor.scroll_column)
+    right: s32 = Min(last_column, editor.scroll_column + editor.visible_columns - 1)
+    if top > bottom || left > right { return }
+    x: float32 = ColumnX(editor, table, left)
+    y: float32 = RowY(editor, table, top)
+    width: float32 = cast(float32)(right - left + 1) * Grid.GridColumnWidth
+    height: float32 = RowY(editor, table, bottom) + GridRowHeight(editor, bottom) - y
+    width = MinFloat(width, editor.grid_right - x)
+    height = MinFloat(height, editor.grid_bottom - y)
+    for line: 0..thickness - 1 {
+        inset: float32 = cast(float32)line
+        outline: Box.Props
+        outline.key = editor.key_base + cast(u64)(key + line)
+        outline.bounds = Rectangle.{x + inset, y + inset, width - inset * 2.0, height - inset * 2.0}
+        outline.fill = Color.{0, 0, 0, 0}
+        outline.border = color
+        Box.Draw(session, outline)
+    }
+}
+
+ReferenceColor :: (index: s32) -> Color {
+    which: s32 = index % 6
+    if which == 0 { return Color.{47, 111, 224, 255} }
+    if which == 1 { return Color.{224, 60, 49, 255} }
+    if which == 2 { return Color.{46, 160, 79, 255} }
+    if which == 3 { return Color.{142, 68, 173, 255} }
+    if which == 4 { return Color.{230, 126, 34, 255} }
+    return Color.{22, 160, 133, 255}
+}
+
+DrawGridMenu :: (session: Session, editor: *Editor, escape: bool) {
+    if !editor.grid_menu_open { return }
+    items: [10]ContextMenu.ContextMenuItem
+    items[0].id = 1
+    items[0].label = "Cut"
+    items[1].id = 2
+    items[1].label = "Copy"
+    items[2].id = 3
+    items[2].label = "Paste"
+    items[2].disabled = !EditorClipboardHasText()
+    items[3].id = 4
+    items[3].label = "Clear"
+    items[4].separator = true
+    items[5].id = 6
+    items[5].label = "Insert above"
+    items[6].id = 10
+    items[6].label = "Insert below"
+    items[7].id = 7
+    items[7].label = "Delete row"
+    items[8].id = 8
+    items[8].label = "Insert column"
+    items[9].id = 9
+    items[9].label = "Delete column"
+    count: s32 = 10
+    if editor.grid_menu_row {
+        items[0].id = 6; items[0].label = "Insert above"
+        items[1].id = 10; items[1].label = "Insert below"
+        items[2].id = 7; items[2].label = "Delete row"; items[2].disabled = false
+        items[3].id = 11; items[3].label = "Hide rows"
+        count = 4
+    }
+    props: ContextMenu.Props
+    props.key = editor.key_base + 1200
+    props.open = true
+    props.x = editor.grid_menu_x
+    props.y = editor.grid_menu_y
+    props.escape = escape
+    result: ContextMenu.ContextMenuResult = ContextMenu.Draw(session, props, items[0:count])
+    if !result.open { editor.grid_menu_open = false }
+    GridCommand(editor, result.activated_id)
+}
+
+GridCommand :: (editor: *Editor, id: s32) {
+    if id == 1 { CutCell(editor) }
+    if id == 2 { CopyCell(editor) }
+    if id == 3 { PasteCells(editor) }
+    if id == 4 { ClearCell(editor) }
+    if id == 11 { SetRowsHidden(editor, SelectionFirstRow(editor), SelectionLastRow(editor), true) }
+    if id == 6 {
+        RecordChange(editor)
+        Engine.WorkbookInsertRow(editor.workbook, editor.sheet_index, editor.selected_row)
+        Changed(editor)
+    }
+    if id == 10 {
+        RecordChange(editor)
+        Engine.WorkbookInsertRow(editor.workbook, editor.sheet_index, editor.selected_row + 1)
+        editor.selected_row += 1
+        Changed(editor)
+    }
+    if id == 7 {
+        RecordChange(editor)
+        Engine.WorkbookDeleteRow(editor.workbook, editor.sheet_index, editor.selected_row)
+        Changed(editor)
+    }
+    if id == 8 {
+        RecordChange(editor)
+        Engine.WorkbookInsertColumn(editor.workbook, editor.sheet_index, editor.selected_column)
+        Changed(editor)
+    }
+    if id == 9 {
+        RecordChange(editor)
+        Engine.WorkbookDeleteColumn(editor.workbook, editor.sheet_index, editor.selected_column)
+        Changed(editor)
+    }
+}
+
+ColumnX :: (editor: *Editor, table: Rectangle, column: s32) -> float32 {
+    return table.x + Grid.GridRowHeaderWidth + cast(float32)(column - editor.scroll_column) * Grid.GridColumnWidth
+}
+
+RowY :: (editor: *Editor, table: Rectangle, row: s32) -> float32 {
+    y: float32 = table.y + Grid.GridHeaderHeight
+    at: s32 = editor.scroll_row
+    while at < row { y += GridRowHeight(editor, at); at += 1 }
+    return y
+}
+
+GridSquare :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, text: string) {
+    Grid.GridSquare(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom, fill, text)
+}
+
+// -------------------------------------------------------------------- text
+
+SetText :: (output: []u8, value: string) {
+    output[0] = 0
+    AppendText(output, value)
+}
+
+AppendText :: (output: []u8, value: string) {
+    at: s32 = cast(s32)TextUntilNul(output).count
+    index: s32 = 0
+    while index < cast(s32)value.count && at + 1 < cast(s32)output.count {
+        output[at] = value[index]
+        at += 1
+        index += 1
+    }
+    output[at] = 0
+}
+
+AppendCellColumn :: (output: []u8, column: s32) {
+    letters: [3]u8
+    if column < 26 {
+        letters[0] = cast(u8)(65 + column)
+        AppendText(output, TextView(letters[0:1]))
+        return
+    }
+    letters[0] = cast(u8)(65 + column / 26 - 1)
+    letters[1] = cast(u8)(65 + column % 26)
+    AppendText(output, TextView(letters[0:2]))
+}
+
+AppendCellName :: (output: []u8, row: s32, column: s32) {
+    AppendCellColumn(output, column)
+    number: [16]u8
+    row_digits: [16]u8
+    SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
+    AppendText(output, TextUntilNul(number[:]))
+}
+
+GoToFirstCell :: (editor: *Editor) {
+    if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
+    SelectCell(editor, 0, 0); editor.scroll_row = 0; editor.scroll_column = 0
+}
+
+SelectAllCells :: (editor: *Editor) {
+    if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
+    SelectCell(editor, 0, 0)
+    editor.range_row = Max(0, Engine.WorkbookSheetRows(editor.workbook, editor.sheet_index) - 1)
+    editor.range_column = Max(0, Engine.WorkbookSheetColumns(editor.workbook, editor.sheet_index) - 1)
+}
+
+// ---------------------------------------------------------------- adapters
+
+#if #defined(KRYON_HOSTED_UI) {
+    EditorClipboardSet :: (value: string) { unused ClipboardCopy(value, 0) }
+    EditorClipboardText :: (out: []u8) -> string {
+        value := AppService("input.v1", "clipboard")
+        SetText(out, value)
+        return TextUntilNul(out)
+    }
+    EditorClipboardHasText :: () -> bool { return AppService("input.v1", "clipboard-has-text") == "true" }
+    EditorString :: (value: string) -> string { return value }
+    EditorSheetPrefix :: (editor: *Editor, sheet: s32, out: []u8) { unused Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(editor.workbook, sheet), out) }
+    EditorCellDisplay :: (editor: *Editor, row: s32, col: s32, out: []u8) { Engine.WorkbookCellDisplay(editor.workbook, editor.sheet_index, row, col, out, cast(s32)out.count) }
+    EditorGlyphWidth :: (text: string) -> s32 {
+        bytes: Vec(u8)
+        BuilderPrint(*bytes, "{\"op\":\"measure\",\"text\":")
+        Engine.Quoted(*bytes, text)
+        BuilderPrint(*bytes, "}")
+        return Engine.Number(AppService("input.v1", BuilderFinish(bytes)), "width")
+    }
+} else {
+    EditorClipboardSet :: (value: string) { SystemClipboardSet(value) }
+    EditorClipboardText :: (out: []u8) -> string { return SystemClipboardText(out) }
+    EditorClipboardHasText :: () -> bool { return SystemClipboardHasText() }
+    EditorString :: (value: *s8) -> string { return TextFromCString(cast(*u8)value) }
+    EditorSheetPrefix :: (editor: *Editor, sheet: s32, out: []u8) { unused Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(editor.workbook, sheet), cast(*s8)*out[0]) }
+    EditorCellDisplay :: (editor: *Editor, row: s32, col: s32, out: []u8) { Engine.WorkbookCellDisplay(editor.workbook, editor.sheet_index, row, col, cast(*s8)*out[0], cast(s32)out.count) }
+    EditorGlyphWidth :: (text: string) -> s32 { return GlyphWidth(text, Text.Text14, "") }
+}

@@ -1,19 +1,10 @@
+// Workbook desktop application: profile selection, documents, window title,
+// menus and theme around the embeddable editor in src/editor.zi.
 Menu :: #import "kryon/menu";
 ContextMenu :: #import "kryon/context_menu";
-TabBar :: #import "kryon/tab_bar";
-TextField :: #import "kryon/text_field";
 Box :: #import "kryon/box";
 Text :: #import "kryon/text";
 Button :: #import "kryon/button";
-#import "kryon/system_clipboard"
-#if !#defined(KRYON_HOSTED_UI) {
-    #import "kryon/key_input"
-}
-#if !#defined(KRYON_HOSTED_UI) {
-    #import "kryon/tree_input"
-}
-// Workbook desktop editor: a toolbar, sheet tabs, a formula bar, and the
-// cell grid of the spreadsheet engine.
 #import "kryon/geometry"
 #import "kryon/session"
 #import "kryon/drawing_props"
@@ -21,43 +12,26 @@ Button :: #import "kryon/button";
 #import "kryon/text_input"
 #import "kryon/input_protocol"
 #import "kryon/app_protocol"
+Grid :: #import "grid";
+using Editor :: #import "editor";
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+
+RowAddIcon :: #import "mingcute/mingcute_extra_table_row_add";
+
 #if #defined(KRYON_HOSTED_UI) {
     Engine :: #import "portable_engine";
     #import "kryon/app_context"
-    Theme :: #import "kryon/app_theme";
 } else {
     Engine :: #import "engine";
     Desktop :: #import "kryon/desktop_runtime";
     Picker :: #import "kryon/file_picker";
-}
-Json :: #import "std/json_scan";
-// The grid's metrics, colors and cell squares, shared with embedded grids.
-Grid :: #import "grid";
-#if !#defined(KRYON_HOSTED_UI) {
+    Json :: #import "std/json_scan";
     SystemStyle :: #import "kryon/SystemTheme";
     SystemThemeLinux :: #import "kryon/SystemThemeLinux";
+    #import "kryon/key_input"
+    #import "kryon/tree_input"
 }
-#import "std/byte_text_linux"
-#import "kryon/font_metrics"
-#import "std/text_buffer"
-#import "std/vec"
-#import "std/number_text"
-
-SaveIcon :: #import "mingcute/mingcute_regular_save_2";
-RowAddIcon :: #import "mingcute/mingcute_extra_table_row_add";
-RowRemoveIcon :: #import "mingcute/mingcute_extra_table_row_remove";
-ColumnAddIcon :: #import "mingcute/mingcute_extra_table_column_add";
-ColumnRemoveIcon :: #import "mingcute/mingcute_extra_table_column_remove";
-LeftIcon :: #import "mingcute/mingcute_regular_arrow_left";
-RightIcon :: #import "mingcute/mingcute_regular_arrow_right";
-UpIcon :: #import "mingcute/mingcute_regular_arrow_up";
-DownIcon :: #import "mingcute/mingcute_regular_arrow_down";
-
-using ButtonEmphasis;
-using ButtonTone;
-using ControlSize;
-using TabBar.TabBarPlacement;
-using Text.Wrap;
 
 #scope_file
 
@@ -65,185 +39,103 @@ using Text.Wrap;
     libc :: #system_library "libc";
     EnvironmentValue :: (name: *u8) -> *u8 #foreign libc "getenv";
     PathAccess :: (path: *u8, mode: s32) -> s32 #foreign libc "access";
-    MakeDirectory :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
     OpenFile :: (path: *u8, flags: s32, mode: ..any) -> s32 #foreign libc "open";
     ReadFileBytes :: (descriptor: s32, output: *u8, count: u64) -> s64 #foreign libc "read";
     CloseFile :: (descriptor: s32) -> s32 #foreign libc "close";
-    MakeTemporaryFile :: (path: *u8) -> s32 #foreign libc "mkstemp";
-    SyncFile :: (descriptor: s32) -> s32 #foreign libc "fsync";
-    RenameFile :: (source: *u8, destination: *u8) -> s32 #foreign libc "rename";
-    RemoveFile :: (path: *u8) -> s32 #foreign libc "unlink";
     FormatBytes :: (output: *u8, capacity: u64, format: *u8, args: ..any) -> s32 #foreign libc "snprintf";
-    FreeBytes :: (block: *void) #foreign libc "free";
-    TimeSpec :: struct { seconds: s64; nanoseconds: s64; }
-    ClockTime :: (clock: s32, value: *TimeSpec) -> s32 #foreign libc "clock_gettime";
-
 }
 
-MaxRows :: 16777216; // GNM_MAX_ROWS
-MaxColumns :: 16384; // GNM_MAX_COLS
-CellTextMax :: 256;
-TableTop :: 86.0;
-Margin :: 0.0;
-// Distances from the window's bottom edge to the sheet tabs and the grid.
-TabsBottom :: 28.0;
-GridBottom :: 28.0;
-
-// Kryon names the other keys; letters are their uppercase ASCII codes.
-KeyA :: 65;
-KeyC :: 67;
+MenuBarHeight :: 26.0;
+KeyO :: 79;
 KeyS :: 83;
-KeyV :: 86;
-KeyX :: 88;
-KeyY :: 89;
-KeyZ :: 90;
+KeyF :: 70;
+KeyF10 :: 299;
 
-// The cell menu: open, and where the secondary button was released.
-grid_menu_open: bool = false;
-grid_menu_x: float32 = 0.0;
-grid_menu_y: float32 = 0.0;
-grid_menu_row: bool = false;
-clipboard_text: [8192]u8;
+editor_storage: Editor;
+editor: *Editor;
+app_started: bool;
 menu_state: Menu.MenuState;
-menus_block_input: bool;
 menu_key: s32;
 menu_modifiers: s32;
-layout_origin: Vector2;
-grid_right: float32;
-grid_bottom: float32;
-
-
-workbook: *Engine.Workbook;
-sheet_index: s32 = 0;
-selected_row: s32 = 0;
-selected_column: s32 = 0;
-// The selection's other corner: dragging or shift-clicking spans a range from
-// the selected cell to it.
-range_row: s32 = 0;
-range_column: s32 = 0;
-// A header selection covers every cell along that axis, including offscreen cells.
-selection_axis: s32 = 0; // 0 cell, 1 row, 2 column
-// The edited cell's sheet. While a formula is written the tabs may show another
-// sheet to pick references from; the edit stays on this one.
-edit_sheet: s32 = 0;
-scroll_row: s32 = 0;
-scroll_column: s32 = 0;
-dirty: bool = false;
-load_failed: bool = false;
-// A failed save is tried again at this monotonic time, in milliseconds. It is
-// a time, not a frame count: an idle window draws fewer frames.
-save_retry_at: s64 = 0;
-
-// The formula bar edits a NUL-terminated copy of the selected cell's source.
-edit: [256]u8;
-// Live edits are saved too; Escape restores the value from before editing.
-edit_original: [256]u8;
-edit_cursor: s32 = 0;
-edit_anchor: s32 = 0;
-edit_scroll: s32 = 0;
-edit_focused: bool = false;
-edit_composition: CompositionState;
-// A sheet tab pressed while a formula is written would take the field's focus;
-// the field takes it back so the formula can point at the other sheet.
-edit_refocus: bool = false;
-// The grid started an edit: the field takes the keyboard from a toolbar button
-// or sheet tab pressed before, or it would drop every key but the last.
-edit_claim: bool = false;
-
-// What a held pointer does on the grid.
-DragNone :: 0;
-DragRange :: 1;  // selects a range of cells
-DragPick :: 2;   // points a formula reference at cells, as in Gnumeric
-DragFill :: 3;   // the fill handle copies the selection down or across
-drag_mode: s32 = DragNone;
-drag_frames: s32 = 0;
-shift_held: bool = false;
-// The reference the last pick wrote into the formula, as edit bytes
-// [pick_start, pick_end). Another pick replaces it while the cursor still
-// sits right after it; any other edit or cursor move ends that.
-pick_start: s32 = -1;
-pick_end: s32 = -1;
-pick_sheet: s32 = 0;
-pick_anchor_row: s32 = 0;
-pick_anchor_column: s32 = 0;
-pick_row: s32 = 0;
-pick_column: s32 = 0;
-// The fill handle's target while it is dragged: the selection grows along
-// one axis (1 rows, 2 columns) to fill_row or fill_column.
-fill_axis: s32 = 0;
-fill_row: s32 = 0;
-fill_column: s32 = 0;
-// The cells Copy put on the clipboard, so pasting them moves their formulas'
-// relative references as a spreadsheet does. Cut text pastes unchanged.
-copied_sheet: s32 = -1;
-copied_row: s32 = 0;
-copied_column: s32 = 0;
-copied_text: [8192]u8;
-copied_length: s32 = 0;
-
-// Undo and redo return the workbook to earlier states. Each step keeps a whole
-// copy of the workbook, so a deleted row comes back with every reference that
-// moved, and the selection where the change was made.
-UndoState :: struct {
-    book: *Engine.Workbook
-    sheet: s32
-    row: s32
-    column: s32
-    range_row: s32
-    range_column: s32
-    axis: s32
+menus_block_input: bool;
+menu_x: float32;
+typed_storage: [128]u8;
+dropped_path: [4096]u8;
+#if !#defined(KRYON_HOSTED_UI) {
+    theme_name: [128]u8;
+    theme_frames: s32;
+    theme_installed: bool;
 }
-UndoLimit :: 100;
-// The oldest steps go once the copies hold more cells than this.
-UndoCellBudget :: 2000000;
-undo_steps: [UndoLimit]UndoState;
-undo_count: s32 = 0;
-redo_steps: [UndoLimit]UndoState;
-redo_count: s32 = 0;
-// A cell edit is one step, opened by its first change.
-edit_recorded: bool = false;
-
-// While a cell is edited its text undoes in smaller steps: typing up to the
-// next word, a run of deletions, one picked reference however far it was
-// dragged, or any other single change.
-EditTextState :: struct {
-    text: [256]u8
-    cursor: s32
-    anchor: s32
+#if #defined(KRYON_HOSTED_UI) {
+    input_pointer: PointerFrame;
+    input_secondary: SecondaryPointerFrame;
+    input_wheel: float32;
+    document_pending: bool;
+    document_export: bool;
 }
-EditUndoLimit :: 64;
-edit_undo: [EditUndoLimit]EditTextState;
-edit_undo_count: s32 = 0;
-edit_redo: [EditUndoLimit]EditTextState;
-edit_redo_count: s32 = 0;
-EditTyping :: 1;
-EditDeleting :: 2;
-EditOther :: 3;
-// The newest text step's kind, which the next change of that kind may extend,
-// and where that change left the cursor.
-edit_run: s32 = 0;
-edit_run_at: s32 = 0;
-
-// The desktop theme the style was last built from.
-theme_name: [128]u8;
-theme_frames: s32 = 0;
-theme_installed: bool = false;
-
-data_path: [4096]u8;
-data_directory: [4096]u8;
-status: [256]u8;
 
 #scope_export
 
-#program_export
-Frame :: (session: Session, viewport: Rectangle) -> s32 {
-    layout_origin = Vector2.{viewport.x, viewport.y}
-    FollowSystemTheme()
-    if workbook == null {
-        LoadWorkbook()
-        SelectCell(0, 0)
-        UpdateDocumentTitle()
+#if #defined(KRYON_HOSTED_UI) {
+    #program_export
+    Main :: () -> s32 {
+        mode := AppMode()
+        if mode == APP_IDENTIFY { AppIdentity("workbook", 1); AppDescribe("Workbook", RowAddIcon.Shape); return APP_PROTOCOL }
+        if mode == APP_FRAME {
+            if !AppSupports("spreadsheet.v1") {
+                Text.Draw(AppSession(), Text.Props.{.bounds = AppBounds(), .text = "Update Werkzeug to open Workbook.", .size = Text.Text16})
+                return 0
+            }
+            if !app_started { StartHostedWorkbook(); app_started = true }
+            ReadInput()
+            input: EditorInput
+            input.pointer = input_pointer
+            input.secondary = input_secondary
+            input.wheel = input_wheel
+            input.key = AppKey()
+            input.modifiers = AppModifiers()
+            input.typed = AppFieldInput().text
+            RunHostFrame(AppSession(), AppBounds(), input)
+            AppKeyboard(EditorEditingCell(editor))
+            input_wheel = 0.0
+        }
+        if mode == APP_SAVE {
+            if !app_started { StartHostedWorkbook(); app_started = true }
+            unused EditorSave(editor, true)
+        }
+        return 0
     }
+} else {
+    #program_export
+    Frame :: (session: Session, viewport: Rectangle) -> s32 {
+        FollowSystemTheme()
+        if !app_started { LoadWorkbook(); app_started = true }
+        while Desktop.DesktopTakeDroppedFile(dropped_path[:]) { OpenDocument(TextUntilNul(dropped_path[:])) }
+        menus_block_input = menu_state.initialized && (menu_state.open_index >= 0 || menu_state.focused)
+        if !menus_block_input && !EditorFocused(editor) { EditorSetFocused(editor, true) }
+        input := EditorSample(session, EditorBounds(viewport), editor, typed_storage[:], false)
+        RunHostFrame(session, viewport, input)
+        return 0
+    }
+}
+
+#scope_file
+
+// ---------------------------------------------------------------- host frame
+
+EditorBounds :: (viewport: Rectangle) -> Rectangle {
+    return Rectangle.{viewport.x, viewport.y + MenuBarHeight, viewport.width, viewport.height - MenuBarHeight}
+}
+
+DrawHostBackground :: (session: Session, viewport: Rectangle) {
+    bar: Box.Props
+    bar.key = cast(u64)990000
+    bar.bounds = Rectangle.{viewport.x, viewport.y, viewport.width, MenuBarHeight}
+    bar.fill = Grid.GridColor("canvas")
+    Box.Draw(session, bar)
+}
+
+RunHostFrame :: (session: Session, viewport: Rectangle, input: EditorInput) {
     #if #defined(KRYON_HOSTED_UI) {
         if document_pending {
             response := AppService("document.pick.v1", "{\"op\":\"poll\"}")
@@ -253,67 +145,225 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
             }
         }
     }
-    #if !#defined(KRYON_HOSTED_UI) {
-        dropped: [4096]u8
-        while Desktop.DesktopTakeDroppedFile(dropped[:]) { OpenDocument(TextUntilNul(dropped[:])) }
-    }
-    key: s32 = EditorKey(session)
-    control: bool = (EditorModifiers(session) & KeyModifierControl) != 0
-    shift_held = (EditorModifiers(session) & KeyModifierShift) != 0
-    typed: [128]u8
-    typed_length: s32 = EditorTypedText(session, typed[:])
-    if control && key == KeyHome { GoToFirstCell(); key = 0 }
-    if control && key == 79 { PickDocument(false); key = 0 }
-    if control && key == KeyS {
-        if shift_held { PickDocument(true) } else { SaveWorkbook(true) }
-        key = 0
-    }
-    // Ctrl+Z undoes; Ctrl+Y and Ctrl+Shift+Z redo, in the cell being edited
-    // first and then in the workbook.
-    if control && key == KeyZ && !shift_held {
-        UndoCommand()
-        key = 0
-    }
-    if control && (key == KeyY || key == KeyZ) {
-        RedoCommand()
-        key = 0
-    }
-
-    pointer: PointerFrame = EditorPointer(session)
-    if pointer.pressed && FormulaEditing() &&
-    PointInBounds(pointer.x, pointer.y, SheetTabsBounds(viewport)) { edit_refocus = true }
-
-    menu_key = key
-    menu_modifiers = EditorModifiers(session)
     menus_block_input = menu_state.initialized && (menu_state.open_index >= 0 || menu_state.focused)
-    if key == 299 || ((menu_modifiers & KeyModifierAlt) != 0 && key == 70) { menus_block_input = true }
-    if menus_block_input { key = 0; typed_length = 0 }
-    DrawBackground(session, viewport)
-    DrawToolbar(session, viewport)
-    // The field consumes this frame's keys while it is being edited; the
-    // grid takes them otherwise, never both.
-    was_editing: bool = edit_focused
-    DrawFormulaBar(session, viewport, key, control, typed[:], typed_length)
-    if !was_editing {
-        HandleGridKeys(key, control, typed[:], typed_length)
+    if !menus_block_input && !EditorFocused(editor) { EditorSetFocused(editor, true) }
+    control := (input.modifiers & KeyModifierControl) != 0
+    if !menus_block_input && control {
+        if input.key == KeyO {
+            input.key = 0
+            input.typed = ""
+            PickDocument(false)
+        } else if input.key == KeyS && (input.modifiers & KeyModifierShift) != 0 {
+            input.key = 0
+            input.typed = ""
+            PickDocument(true)
+        }
     }
-    DrawGrid(session, viewport)
-    DrawSheetTabs(session, viewport)
-    DrawGridMenu(session, key == KeyEscape)
+    menu_key = input.key
+    menu_modifiers = input.modifiers
+    if menus_block_input {
+        menu_key, menu_modifiers = HostKey(session, input)
+        input.key = 0
+        input.typed = ""
+        input.blocked = true
+        #if !#defined(KRYON_HOSTED_UI) {
+            DiscardTyped(session)
+        }
+    } else if menu_key == KeyF10 || ((menu_modifiers & KeyModifierAlt) != 0 && menu_key == KeyF) {
+        input.key = 0
+        input.typed = ""
+        input.blocked = true
+    } else if input.pointer.pressed &&
+    PointInBounds(input.pointer.x, input.pointer.y, Rectangle.{viewport.x, viewport.y, viewport.width, MenuBarHeight}) {
+        input.blocked = true
+    }
+    DrawHostBackground(session, viewport)
+    unused EditorFrame(session, EditorBounds(viewport), editor, input)
     DrawMenus(session, viewport)
-    if dirty && MonotonicMilliseconds() >= save_retry_at {
-        SaveWorkbook(false)
-    }
-    DrawStatus(session, viewport)
-    if edit_refocus && !pointer.down && !pointer.pressed { edit_refocus = false }
-    return 0
 }
 
-#scope_file
+#if #defined(KRYON_HOSTED_UI) {
+    HostKey :: (session: Session, input: EditorInput) -> (key: s32, modifiers: s32) {
+        unused session
+        return input.key, input.modifiers
+    }
+} else {
+    HostKey :: (session: Session, input: EditorInput) -> (key: s32, modifiers: s32) {
+        if input.key != 0 || input.typed.count > 0 { return input.key, input.modifiers }
+        return KeyboardTake(session), KeyboardModifiers(session)
+    }
 
-// Styles the app in the desktop's GTK theme and follows it when it changes:
-// the configured theme is looked at again every couple of seconds.
+    DiscardTyped :: (session: Session) {
+        while TypedCodepointTake(session) != 0 {}
+    }
+}
+
+// -------------------------------------------------------------------- menus
+
+DrawMenus :: (session: Session, viewport: Rectangle) {
+    file: [4]Menu.MenuItem
+    file_count: s32 = 3
+    file[0] = Menu.MenuItem.{.id = 101, .label = "Open…", .accelerator = "Ctrl+O"}
+    file[1] = Menu.MenuItem.{.id = 102, .label = "Save", .accelerator = "Ctrl+S"}
+    file[2] = Menu.MenuItem.{.id = 103, .label = "Save As…", .accelerator = "Ctrl+Shift+S"}
+    #if #defined(KRYON_HOSTED_UI) {
+        if AppSupports("app.bundle.export.v1") {
+            file_count = 4
+            file[3] = Menu.MenuItem.{.id = 104, .label = "Download Workbook.zx…"}
+        }
+    }
+    edit_items: [9]Menu.MenuItem
+    edit_items[0] = Menu.MenuItem.{.id = 201, .label = "Undo", .accelerator = "Ctrl+Z", .disabled = !EditorCanUndo(editor)}
+    edit_items[1] = Menu.MenuItem.{.id = 202, .label = "Redo", .accelerator = "Ctrl+Y", .disabled = !EditorCanRedo(editor)}
+    edit_items[2].kind = Menu.MenuItemKind.MenuSeparator
+    edit_items[3] = Menu.MenuItem.{.id = 1, .label = "Cut", .accelerator = "Ctrl+X"}
+    edit_items[4] = Menu.MenuItem.{.id = 2, .label = "Copy", .accelerator = "Ctrl+C"}
+    edit_items[5] = Menu.MenuItem.{.id = 3, .label = "Paste", .accelerator = "Ctrl+V", .disabled = !EditorClipboardAvailable()}
+    edit_items[6] = Menu.MenuItem.{.id = 4, .label = "Clear contents", .accelerator = "Delete"}
+    edit_items[7].kind = Menu.MenuItemKind.MenuSeparator
+    edit_items[8] = Menu.MenuItem.{.id = 203, .label = "Select all", .accelerator = "Ctrl+A"}
+    view: [1]Menu.MenuItem
+    view[0] = Menu.MenuItem.{.id = 301, .label = "Go to first cell", .accelerator = "Ctrl+Home"}
+    insert: [3]Menu.MenuItem
+    insert[0] = Menu.MenuItem.{.id = 6, .label = "Row above"}
+    insert[1] = Menu.MenuItem.{.id = 10, .label = "Row below"}
+    insert[2] = Menu.MenuItem.{.id = 8, .label = "Column before"}
+    sheet: [5]Menu.MenuItem
+    sheet[0] = Menu.MenuItem.{.id = 401, .label = "Add sheet"}
+    sheet[1] = Menu.MenuItem.{.id = 402, .label = "Previous sheet", .disabled = EditorSheetIndex(editor) == 0}
+    sheet[2] = Menu.MenuItem.{.id = 403, .label = "Next sheet", .disabled = EditorSheetIndex(editor) + 1 >= EditorSheetCount(editor)}
+    sheet[3] = Menu.MenuItem.{.id = 404, .label = "Recalculate"}
+    sheet[4] = Menu.MenuItem.{.id = 405, .label = "Create formula chart from selection"}
+    groups: [5]Menu.MenuGroup
+    groups[0] = Menu.MenuGroup.{"File", file[:file_count]}
+    groups[1] = Menu.MenuGroup.{"Edit", edit_items[:]}
+    groups[2] = Menu.MenuGroup.{"View", view[:]}
+    groups[3] = Menu.MenuGroup.{"Insert", insert[:]}
+    groups[4] = Menu.MenuGroup.{"Sheet", sheet[:]}
+    props: Menu.Props
+    props.key = cast(u64)1300
+    props.bounds = Rectangle.{viewport.x, viewport.y, viewport.width, MenuBarHeight}
+    props.focus_requested = menu_key == KeyF10 || ((menu_modifiers & KeyModifierAlt) != 0 && menu_key == KeyF)
+    props.input.up = menu_key == KeyUp
+    props.input.down = menu_key == KeyDown
+    props.input.left = menu_key == KeyLeft
+    props.input.right = menu_key == KeyRight
+    props.input.enter = menu_key == KeyEnter
+    props.input.escape = menu_key == KeyEscape
+    result := EditorMenu(session, props, groups[:], *menu_state)
+    id := result.activated_id
+    if id == 101 { PickDocument(false) }
+    if id == 102 { unused EditorSave(editor, true) }
+    if id == 103 { PickDocument(true) }
+    #if #defined(KRYON_HOSTED_UI) {
+        if id == 104 { unused AppService("app.bundle.export.v1", "") }
+    }
+    if id == 1 { EditorCut(editor) }
+    if id == 2 { EditorCopy(editor) }
+    if id == 3 { EditorPaste(editor) }
+    if id == 4 { EditorClear(editor) }
+    if id == 201 { EditorUndo(editor) }
+    if id == 202 { EditorRedo(editor) }
+    if id == 203 { EditorSelectAll(editor) }
+    if id == 301 { EditorGoToFirstCell(editor) }
+    if id == 401 { EditorAddSheet(editor) }
+    if id == 402 { EditorSelectSheet(editor, EditorSheetIndex(editor) - 1) }
+    if id == 403 { EditorSelectSheet(editor, EditorSheetIndex(editor) + 1) }
+    if id == 404 { EditorRecalculate(editor) }
+    if id == 405 { EditorCreateFormulaChart(editor) }
+    if id == 6 { EditorInsertRow(editor) }
+    if id == 10 { EditorInsertRowBelow(editor) }
+    if id == 7 { EditorDeleteRow(editor) }
+    if id == 8 { EditorInsertColumn(editor) }
+    if id == 9 { EditorDeleteColumn(editor) }
+}
+
+EditorMenu :: (session: Session, props: Menu.Props, groups: []Menu.MenuGroup, state: *Menu.MenuState) -> Menu.MenuResult {
+    #if #defined(KRYON_HOSTED_UI) {
+        if !state.initialized { Menu.MenuStateInit(state) }
+        result: Menu.MenuResult
+        x := props.bounds.x + 2.0
+        for index: 0..groups.count - 1 {
+            button: Button.Props
+            button.key = cast(u64)(1310 + index)
+            button.label = groups[index].label
+            button.bounds = Rectangle.{x, props.bounds.y, 58.0, 26.0}
+            button.size = ControlSize.ControlSizeSmall
+            if Button.Draw(session, button) != 0 { state.open_index = ifx state.open_index == index then -1 else cast(s32)index }
+            if state.open_index == index { menu_x = x }
+            x += 58.0
+        }
+        if state.open_index >= 0 && state.open_index < groups.count {
+            items: [16]ContextMenu.ContextMenuItem
+            commands := groups[state.open_index].items
+            for index: 0..commands.count - 1 {
+                items[index].id = commands[index].id
+                items[index].label = commands[index].label
+                items[index].disabled = commands[index].disabled
+                items[index].separator = commands[index].kind == Menu.MenuItemKind.MenuSeparator
+            }
+            menu: ContextMenu.Props
+            menu.key = cast(u64)(1350 + state.open_index)
+            menu.open = true
+            menu.x = menu_x
+            menu.y = props.bounds.y + 26.0
+            menu.escape = props.input.escape
+            drawn := ContextMenu.Draw(session, menu, items[:commands.count])
+            if !drawn.open { state.open_index = -1 }
+            result.activated_id = drawn.activated_id
+        }
+        result.open_index = state.open_index
+        return result
+    } else {
+        return Menu.Draw(session, props, groups, state)
+    }
+}
+
+// --------------------------------------------------------------------- text
+
+SetText :: (output: []u8, value: string) {
+    output[0] = 0
+    AppendText(output, value)
+}
+
+AppendText :: (output: []u8, value: string) {
+    at: s32 = cast(s32)TextUntilNul(output).count
+    index: s32 = 0
+    while index < cast(s32)value.count && at + 1 < cast(s32)output.count {
+        output[at] = value[index]
+        at += 1
+        index += 1
+    }
+    output[at] = 0
+}
+
+FileName :: (path: string) -> string {
+    at: s32 = cast(s32)path.count
+    while at > 0 && path[at - 1] != #char "/" {
+        at -= 1
+    }
+    return path[at:cast(s32)path.count]
+}
+
+EndsWith :: (text: string, suffix: string) -> bool {
+    if text.count < suffix.count { return false }
+    start: s32 = cast(s32)(text.count - suffix.count)
+    return text[start:cast(s32)text.count] == suffix
+}
+
+UpdateDocumentTitle :: () {
+    #if !#defined(KRYON_HOSTED_UI) {
+        path_buffer: [4096]u8
+        path := EditorPath(editor, path_buffer[:])
+        unused Desktop.DesktopSetTitle(FileName(path))
+    }
+}
+
+// ------------------------------------------------------------------- native
+
 #if !#defined(KRYON_HOSTED_UI) {
+    // Styles the app in the desktop's GTK theme and follows it when it changes:
+    // the configured theme is looked at again every couple of seconds.
     FollowSystemTheme :: () {
         if theme_installed {
             theme_frames += 1
@@ -327,10 +377,14 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
         theme_installed = true
     }
 
-    // -------------------------------------------------------------------- data
-
     LoadWorkbook :: () {
-        workbook = Engine.WorkbookNew()
+        book: *Engine.Workbook = Engine.WorkbookNew()
+        if book == null {
+            EditorInitWithWorkbook(*editor_storage, null, "", true)
+            editor = *editor_storage
+            EditorSetStatus(editor, "Could not create a workbook")
+            return
+        }
         application: string = "workbook"
         override: *u8 = EnvironmentValue(CPath("WORKBOOK_DIR"))
         profile: *u8 = EnvironmentValue(CPath("WORKBOOK_PROFILE"))
@@ -344,186 +398,165 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
             if profile_name == "geld" { override = EnvironmentValue(CPath("GELD_DIR")) }
         }
         legacy_profile: bool = application != "workbook"
+        path_buffer: [4096]u8
+        directory_buffer: [4096]u8
         explicit: [4096]u8
         if OpenFileArgument(explicit[:]) {
-            SetText(data_path[:], TextUntilNul(explicit[:]))
-            name: string = TextUntilNul(explicit[:])
-            base: s32 = cast(s32)name.count - cast(s32)FileName(name).count
-            if base > 0 { SetText(data_directory[:], name[0:base]) }
+            SetText(path_buffer[:], TextUntilNul(explicit[:]))
         } else if override != null && override[0] != 0 {
             legacy_profile = true
-            SetText(data_directory[:], TextFromCString(override))
-            SetText(data_path[:], TextFromCString(override))
-            AppendText(data_path[:], "/workbook.gnumeric")
-        } else if application == "workbook" &&
-        FileExists("workbook.gnumeric") {
-            SetText(data_path[:], "workbook.gnumeric")
+            SetText(path_buffer[:], TextFromCString(override))
+            AppendText(path_buffer[:], "/workbook.gnumeric")
+        } else if application == "workbook" && FileExists("workbook.gnumeric") {
+            SetText(path_buffer[:], "workbook.gnumeric")
         } else {
             base: *u8 = EnvironmentValue(CPath("XDG_DATA_HOME"))
             if base != null && base[0] != 0 {
-                SetText(data_directory[:], TextFromCString(base))
+                SetText(directory_buffer[:], TextFromCString(base))
             } else {
                 home: *u8 = EnvironmentValue(CPath("HOME"))
                 if home != null && home[0] != 0 {
-                    SetText(data_directory[:], TextFromCString(home))
+                    SetText(directory_buffer[:], TextFromCString(home))
                 } else {
-                    SetText(data_directory[:], ".")
+                    SetText(directory_buffer[:], ".")
                 }
-                AppendText(data_directory[:], "/.local/share")
+                AppendText(directory_buffer[:], "/.local/share")
             }
-            AppendText(data_directory[:], "/")
-            AppendText(data_directory[:], application)
-            SetText(data_path[:], TextUntilNul(data_directory[:]))
-            AppendText(data_path[:], "/workbook.gnumeric")
+            AppendText(directory_buffer[:], "/")
+            AppendText(directory_buffer[:], application)
+            SetText(path_buffer[:], TextUntilNul(directory_buffer[:]))
+            AppendText(path_buffer[:], "/workbook.gnumeric")
         }
-        path: string = TextUntilNul(data_path[:])
+        path: string = TextUntilNul(path_buffer[:])
         imported: bool = false
         legacy: [4096]u8
-        if legacy_profile && PathAccess(*data_path[0], 0) != 0 && EndsWith(path, ".gnumeric") {
+        if legacy_profile && PathAccess(*path_buffer[0], 0) != 0 && EndsWith(path, ".gnumeric") {
             // Named or explicitly selected profiles may import their old JSON.
             // Ordinary Workbook launches must not load the former finance seed.
             // The original JSON is only read and remains available.
             SetText(legacy[:], path[0:cast(s32)path.count - 8])
             AppendText(legacy[:], "json")
             if PathAccess(*legacy[0], 0) == 0 {
-                Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
-                imported = LoadLegacyJson(*legacy[0])
+                unused Engine.WorkbookAddSheet(book, Engine.CText("Sheet1"))
+                imported = LoadLegacyJson(book, *legacy[0])
             }
         }
-        if !imported && PathAccess(*data_path[0], 0) == 0 {
-            load_failed = Engine.WorkbookLoadFile(workbook, cast(*s8)*data_path[0]) == 0
-            if load_failed {
-                SetText(status[:], "Could not open ")
-                AppendText(status[:], FileName(path))
-            }
+        failed: bool = false
+        if !imported && PathAccess(*path_buffer[0], 0) == 0 {
+            failed = Engine.WorkbookLoadFile(book, Engine.CText(path)) == 0
         }
         // A file supplies its own sheets; a new workbook starts with one.
-        if Engine.WorkbookSheetCount(workbook) == 0 {
-            Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1"))
+        if Engine.WorkbookSheetCount(book) == 0 {
+            unused Engine.WorkbookAddSheet(book, Engine.CText("Sheet1"))
         }
-        dirty = false
+        EditorInitWithWorkbook(*editor_storage, book, path, failed)
+        editor = *editor_storage
+        EditorSetFocused(editor, true)
+        if failed {
+            message: [256]u8
+            SetText(message[:], "Could not open ")
+            AppendText(message[:], FileName(path))
+            EditorSetStatus(editor, TextUntilNul(message[:]))
+        }
+        UpdateDocumentTitle()
+    }
+
+    // Finish and save the current document before replacing it. A failed
+    // import leaves the current workbook, its path, selection and undo history
+    // intact.
+    OpenDocument :: (path: string) {
+        if !EditorOpenPath(editor, path) { return }
+        EditorSetFocused(editor, true)
+        UpdateDocumentTitle()
+    }
+
+    PickDocument :: (save: bool) {
+        path_buffer: [4096]u8
+        props: Picker.FilePickerProps
+        props.title = ifx save then "Save Workbook As" else "Open Workbook"
+        props.filter = ifx save then "Spreadsheet | *.gnumeric" else "Spreadsheets | *.gnumeric *.csv"
+        props.save = save
+        current_buffer: [4096]u8
+        current := EditorPath(editor, current_buffer[:])
+        suggestion: [4096]u8
+        SetText(suggestion[:], FileName(current))
+        props.suggested_name = TextUntilNul(suggestion[:])
+        result := Picker.PickFile(props, path_buffer[:])
+        if result < 0 { EditorSetStatus(editor, "Could not open the file chooser") }
+        if result != 1 { return }
+        if !save { OpenDocument(TextUntilNul(path_buffer[:])); return }
+        if !EndsWith(TextUntilNul(path_buffer[:]), ".gnumeric") {
+            AppendText(path_buffer[:], ".gnumeric")
+        }
+        if EditorSaveAs(editor, TextUntilNul(path_buffer[:])) {
+            EditorSetFocused(editor, true)
+            UpdateDocumentTitle()
+        }
     }
 
 }
 
-UpdateDocumentTitle :: () {
-    #if !#defined(KRYON_HOSTED_UI) {
-        unused Desktop.DesktopSetTitle(FileName(TextUntilNul(data_path[:])))
-    }
-}
+// ------------------------------------------------------------------- hosted
 
-// Finish and save the current document before replacing it. A failed import
-// leaves the current workbook, its path, selection, and undo history intact.
-OpenDocument :: (path: string) {
-    if !DocumentPath(path) { return }
-    if edit_focused { CommitCell() }
-    if dirty && !load_failed {
-        SaveWorkbook(false)
-        if dirty { return }
-    }
-    next: *Engine.Workbook = Engine.WorkbookNew()
-    if Engine.WorkbookLoadFile(next, Engine.CText(path)) == 0 {
-        Engine.WorkbookFree(next)
-        SetText(status[:], "Could not open ")
-        AppendText(status[:], FileName(path))
-        return
-    }
-    if edit_focused { EndEdit() }
-    FinishEditStep()
-    while undo_count > 0 {
-        undo_count -= 1
-        Engine.WorkbookFree(undo_steps[undo_count].book)
-    }
-    while redo_count > 0 {
-        redo_count -= 1
-        Engine.WorkbookFree(redo_steps[redo_count].book)
-    }
-    Engine.WorkbookFree(workbook)
-    workbook = next
-    SetText(data_path[:], path)
-    data_directory[0] = 0
-    base := cast(s32)path.count - cast(s32)FileName(path).count
-    if base > 0 { SetText(data_directory[:], path[0:base]) }
-    sheet_index = 0
-    edit_sheet = 0
-    scroll_row = 0
-    scroll_column = 0
-    grid_menu_open = false
-    drag_mode = DragNone
-    edit_refocus = false
-    edit_claim = false
-    copied_sheet = -1
-    copied_length = 0
-    dirty = false
-    load_failed = false
-    save_retry_at = 0
-    status[0] = 0
-    SelectCell(0, 0)
-    UpdateDocumentTitle()
-}
+#if #defined(KRYON_HOSTED_UI) {
+    FollowSystemTheme :: () {}
 
-#if !#defined(KRYON_HOSTED_UI) {
-    MonotonicMilliseconds :: () -> s64 {
-        now: TimeSpec
-        ClockTime(1, *now)
-        return now.seconds * 1000 + now.nanoseconds / 1000000
-    }
-
-    // Creates every missing parent, including a fresh XDG data directory.
-    EnsureDataDirectory :: () -> bool {
-        path: string = TextUntilNul(data_directory[:])
-        prefix: [4096]u8
-        at: s32 = 1
-        while at <= cast(s32)path.count {
-            if at == cast(s32)path.count || path[at] == #char "/" {
-                SetText(prefix[:], path[0:at])
-                if MakeDirectory(*prefix[0], 448) != 0 && PathAccess(*prefix[0], 0) != 0 {
-                    return false
-                }
-            }
-            at += 1
-        }
-        return true
-    }
-
-    SaveWorkbook :: (finish_edit: bool) {
-        // A failed import must never autosave an empty grid over its source.
-        if load_failed { return }
-        if finish_edit && edit_focused {
-            CommitCell()
-            EndEdit()
-            SelectCell(selected_row, selected_column)
-        }
-        path: string = TextUntilNul(data_path[:])
-        saved: bool = false
-        // Replace the previous file only after its replacement has been written
-        // and synced. A failed write leaves the last saved workbook intact.
-        temporary: [4160]u8
-        SetText(temporary[:], path)
-        AppendText(temporary[:], ".tmp-XXXXXX")
-        if EnsureDataDirectory() {
-            descriptor: s32 = MakeTemporaryFile(*temporary[0])
-            if descriptor >= 0 {
-                saved = Engine.WorkbookWriteGnumeric(workbook, cast(*s8)*temporary[0]) != 0
-                if saved { saved = SyncFile(descriptor) == 0 }
-                if CloseFile(descriptor) != 0 { saved = false }
-                if saved { saved = RenameFile(*temporary[0], *data_path[0]) == 0 }
-                if !saved { RemoveFile(*temporary[0]) }
+    StartHostedWorkbook :: () {
+        book: *Engine.Workbook = Engine.WorkbookNew()
+        path: string = "workbook.gnumeric"
+        failed: bool = false
+        if book != null {
+            loaded := Engine.WorkbookLoadFile(book, Engine.CText(path)) != 0
+            failed = !loaded && Engine.DocumentStatus != DOCUMENT_MISSING
+            if Engine.WorkbookSheetCount(book) == 0 {
+                unused Engine.WorkbookAddSheet(book, Engine.CText("Sheet1"))
             }
         }
-        if saved {
-            status[0] = 0
-            dirty = false
-            save_retry_at = 0
+        EditorInitWithWorkbook(*editor_storage, book, path, failed)
+        editor = *editor_storage
+        EditorSetFocused(editor, true)
+        if failed { EditorSetStatus(editor, "Could not open workbook.gnumeric") }
+    }
+
+    PickDocument :: (save: bool) {
+        if document_pending { return }
+        if save {
+            unused EditorSave(editor, true)
+            if EditorDirty(editor) { return }
+        }
+        response := AppService("document.pick.v1", ifx save then "{\"op\":\"export\",\"name\":\"workbook.gnumeric\",\"filter\":\"Spreadsheet | *.gnumeric\",\"suggested_name\":\"workbook.gnumeric\"}" else "{\"op\":\"import\",\"name\":\"incoming.gnumeric\",\"filter\":\"Spreadsheet | *.gnumeric\"}")
+        if response == "pending" {
+            document_pending = true
+            document_export = save
         } else {
-            SetText(status[:], "Could not save ")
-            AppendText(status[:], FileName(path))
-            dirty = true
-            save_retry_at = MonotonicMilliseconds() + 2000
+            DocumentTransferred(response, save)
         }
     }
 
+    DocumentTransferred :: (response: string, save: bool) {
+        if response == "ready" && !save {
+            if EditorOpenPath(editor, "incoming.gnumeric") {
+                unused EditorSaveAs(editor, "workbook.gnumeric")
+            }
+        }
+        if response == "error" { EditorSetStatus(editor, "Could not transfer the document") }
+    }
+
+    ReadInput :: () {
+        value := AppService("input.v1", "frame")
+        input_pointer.x = cast(float32)Engine.Number(value, "x")
+        input_pointer.y = cast(float32)Engine.Number(value, "y")
+        input_pointer.down = Engine.Number(value, "down") != 0
+        input_pointer.pressed = Engine.Number(value, "pressed") != 0
+        input_pointer.released = Engine.Number(value, "released") != 0
+        input_secondary.down = Engine.Number(value, "secondary_down") != 0
+        input_secondary.pressed = Engine.Number(value, "secondary_pressed") != 0
+        input_secondary.released = Engine.Number(value, "secondary_released") != 0
+        input_wheel = cast(float32)Engine.Number(value, "wheel")
+    }
 }
+
+// ---------------------------------------------------------------- legacy JSON
 
 #if !#defined(KRYON_HOSTED_UI) {
     // The legacy JSON layout stores one object per row with eight named columns.
@@ -601,7 +634,7 @@ OpenDocument :: (path: string) {
 
     // Imports a legacy workbook.json: the rows, then the pending and final total
     // rows. The file is only read.
-    LoadLegacyJson :: (path: *u8) -> bool {
+    LoadLegacyJson :: (book: *Engine.Workbook, path: *u8) -> bool {
         size: s32 = 0
         bytes: *u8 = Engine.ReadFileBytes(cast(*s8)path, *size)
         if bytes == null { return false }
@@ -626,7 +659,7 @@ OpenDocument :: (path: string) {
                 }
                 if column == 2 { LegacyTicker(cell[:]) }
                 if cell[0] != 0 {
-                    Engine.WorkbookSetCell(workbook, 0, row, column, Engine.CText(TextUntilNul(cell[:])))
+                    Engine.WorkbookSetCell(book, 0, row, column, Engine.CText(TextUntilNul(cell[:])))
                 }
                 column += 1
             }
@@ -641,7 +674,7 @@ OpenDocument :: (path: string) {
                     cell: [256]u8
                     LegacyCell(text, Json.ElementAt(text, totals, column), false, cell[:])
                     if cell[0] != 0 {
-                        Engine.WorkbookSetCell(workbook, 0, row, column, Engine.CText(TextUntilNul(cell[:])))
+                        Engine.WorkbookSetCell(book, 0, row, column, Engine.CText(TextUntilNul(cell[:])))
                     }
                     column += 1
                 }
@@ -650,1492 +683,106 @@ OpenDocument :: (path: string) {
             pass += 1
         }
         Engine.FreeFileBytes(bytes)
-        Engine.WorkbookEvaluate(workbook)
+        Engine.WorkbookEvaluate(book)
         return true
     }
 
-}
-
-// ------------------------------------------------------------------ editing
-
-CellSource :: (sheet: s32, row: s32, column: s32) -> string {
-    return EditorString(Engine.WorkbookCellText(workbook, sheet, row, column))
-}
-
-SelectCell :: (row: s32, column: s32) {
-    FinishEditStep()
-    selection_axis = 0
-    if row < 0 { row = 0 }
-    if column < 0 { column = 0 }
-    if row >= MaxRows { row = MaxRows - 1 }
-    if column >= MaxColumns { column = MaxColumns - 1 }
-    selected_row = row
-    selected_column = column
-    range_row = row
-    range_column = column
-    edit_sheet = sheet_index
-    pick_start = -1
-    SetText(edit[:], CellSource(sheet_index, row, column))
-    SetText(edit_original[:], TextUntilNul(edit[:]))
-    edit_cursor = cast(s32)TextUntilNul(edit[:]).count
-    edit_anchor = edit_cursor
-    edit_scroll = 0
-}
-
-CommitCell :: () {
-    if CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit[:]) {
-        return
-    }
-    if !edit_recorded {
-        PushUndo()
-        edit_recorded = true
-    }
-    Engine.WorkbookSetCell(workbook, edit_sheet, selected_row,
-        selected_column, Engine.CText(TextUntilNul(edit[:])))
-    Engine.WorkbookEvaluate(workbook)
-    dirty = true
-    save_retry_at = 0
-}
-
-// Leaves the edit; a formula picked on another sheet returns to its own sheet.
-EndEdit :: () {
-    edit_focused = false
-    pick_start = -1
-    if sheet_index != edit_sheet {
-        sheet_index = edit_sheet
-        scroll_row = 0
-        scroll_column = 0
-    }
-}
-
-// The selection's bounds. Header commands cover the sheet's used extent,
-// beyond the viewport limits.
-SelectionFirstRow :: () -> s32 { return ifx selection_axis == 2 then 0 else Min(selected_row, range_row) }
-SelectionLastRow :: () -> s32 { return ifx selection_axis == 2 then Engine.WorkbookSheetRows(workbook, sheet_index) - 1 else Max(selected_row, range_row) }
-SelectionFirstColumn :: () -> s32 { return ifx selection_axis == 1 then 0 else Min(selected_column, range_column) }
-SelectionLastColumn :: () -> s32 { return ifx selection_axis == 1 then Engine.WorkbookSheetColumns(workbook, sheet_index) - 1 else Max(selected_column, range_column) }
-
-Min :: (a: s32, b: s32) -> s32 { return ifx a < b then a else b }
-Max :: (a: s32, b: s32) -> s32 { return ifx a > b then a else b }
-
-// The selection's source goes to the system clipboard as tab-separated cells.
-CopyCell :: () {
-    text: Vec(u8); defer { VecFree(text) }
-    first_row := SelectionFirstRow()
-    last_row := SelectionLastRow()
-    first_column := SelectionFirstColumn()
-    last_column := SelectionLastColumn()
-    for row: first_row..last_row {
-        if row > first_row { unused VecPush(text, cast(u8)10) }
-        for column: first_column..last_column {
-            if column > first_column { unused VecPush(text, cast(u8)9) }
-            source := CellSource(sheet_index, row, column)
-            for byte: source { unused VecPush(text, byte) }
-        }
-    }
-    copied := TextFromBytes(VecSlice(text, 0, text.count))
-    EditorClipboardSet(copied)
-    copied_sheet = -1
-    if copied.count > copied_text.count { return }
-    for at: 0..cast(s32)copied.count - 1 { copied_text[at] = copied[at] }
-    copied_length = cast(s32)copied.count
-    copied_sheet = sheet_index
-    copied_row = first_row
-    copied_column = first_column
-}
-
-CutCell :: () {
-    CopyCell()
-    copied_sheet = -1
-    ClearCell()
-}
-
-// Pastes the clipboard's text from the selection's first cell: tabs separate
-// columns and lines separate rows, so cells copied from another spreadsheet
-// keep their layout. Formulas this app copied move with the paste.
-PasteCells :: () {
-    text: string = EditorClipboardText(clipboard_text[:])
-    if text.count == 0 { return }
-    RecordChange()
-    target_row: s32 = SelectionFirstRow()
-    target_column: s32 = SelectionFirstColumn()
-    relocate: bool = copied_sheet >= 0 && text == TextView(copied_text[0:copied_length])
-    row: s32 = 0
-    column: s32 = 0
-    cell: [256]u8
-    length: s32 = 0
-    at: s32 = 0
-    while at <= cast(s32)text.count {
-        byte: u8 = 10
-        if at < cast(s32)text.count { byte = text[at] }
-        if byte == 9 || byte == 10 {
-            cell[length] = 0
-            if !(byte == 10 && length == 0 && at == cast(s32)text.count) {
-                if relocate {
-                    moved := Engine.FormulaRelocate(workbook, Engine.CText(TextUntilNul(cell[:])),
-                        target_row - copied_row, target_column - copied_column)
-                    Engine.WorkbookSetCell(workbook, sheet_index, target_row + row,
-                        target_column + column, moved)
-                    #if !#defined(KRYON_HOSTED_UI) {
-                        FreeBytes(cast(*void)moved)
-                    }
-                } else {
-                    Engine.WorkbookSetCell(workbook, sheet_index, target_row + row,
-                        target_column + column, Engine.CText(TextUntilNul(cell[:])))
-                }
+    // Copies a JSON string's contents, decoding its escapes.
+    DecodeJsonString :: (text: string, span: Json.JsonSpan, output: []u8) {
+        at: s32 = 0
+        index: s32 = span.start
+        while index < span.end && at + 4 < cast(s32)output.count {
+            byte: u8 = text[index]
+            if byte != #char "\\" || index + 1 >= span.end {
+                output[at] = byte
+                at += 1
+                index += 1
+                continue
             }
-            length = 0
-            if byte == 9 { column += 1 } else {
-                row += 1
-                column = 0
-            }
-        } else if byte != 13 && length < CellTextMax - 1 {
-            cell[length] = byte
-            length += 1
-        }
-        at += 1
-    }
-    Changed()
-}
-
-ClearCell :: () {
-    if selection_axis != 0 || range_row != selected_row || range_column != selected_column {
-        RecordChange()
-        first_row := SelectionFirstRow()
-        last_row := SelectionLastRow()
-        first_column := SelectionFirstColumn()
-        last_column := SelectionLastColumn()
-        for row: first_row..last_row { for column: first_column..last_column { Engine.WorkbookSetCell(workbook, sheet_index, row, column, Engine.CText("")) } }
-        Changed(); return
-    }
-    edit[0] = 0
-    CommitCell()
-    SelectCell(selected_row, selected_column)
-}
-
-HandleGridKeys :: (key: s32, control: bool, typed: []u8, typed_length: s32) {
-    if control && key == KeyA { SelectAllCells() }
-    if control && key == KeyC { CopyCell() }
-    if control && key == KeyX { CutCell() }
-    if control && key == KeyV { PasteCells() }
-    if key == KeyUp { SelectCell(NextVisibleRow(selected_row, -1), selected_column) }
-    if key == KeyDown { SelectCell(NextVisibleRow(selected_row, 1), selected_column) }
-    if key == KeyLeft { SelectCell(selected_row, selected_column - 1) }
-    if key == KeyRight || key == KeyTab {
-        SelectCell(selected_row, selected_column + 1)
-    }
-    if key == KeyEnter { selection_axis = 0; StartEdit() }
-    if key == KeyDelete || key == KeyBackspace { ClearCell() }
-    if typed_length > 0 {
-        // Typing over a selected cell starts a new value, as in Gnumeric.
-        selection_axis = 0
-        range_row = selected_row
-        range_column = selected_column
-        StartEdit()
-        edit_run = 0
-        ChangeEdit(EditTyping, 0, cast(s32)TextUntilNul(edit[:]).count, TextView(typed[0:typed_length]))
-    }
-    EnsureVisible()
-}
-
-StartEdit :: () {
-    edit_focused = true
-    edit_claim = true
-}
-
-// Whether edit bytes [start, end) can be replaced with replacement.
-EditFits :: (start: s32, end: s32, replacement: string) -> bool {
-    length: s32 = cast(s32)TextUntilNul(edit[:]).count
-    if start < 0 || end < start || end > length { return false }
-    return length - (end - start) + cast(s32)replacement.count < CellTextMax
-}
-
-// Replaces edit bytes [start, end) as a text step of the given kind.
-ChangeEdit :: (kind: s32, start: s32, end: s32, replacement: string) {
-    if !EditFits(start, end, replacement) { return }
-    RememberEditText(kind, start, end, replacement)
-    ApplyEdit(start, end, replacement)
-}
-
-// Replaces edit bytes [start, end) with replacement, keeping the terminator.
-ApplyEdit :: (start: s32, end: s32, replacement: string) {
-    if !EditFits(start, end, replacement) { return }
-    length: s32 = cast(s32)TextUntilNul(edit[:]).count
-    inserted: s32 = cast(s32)replacement.count
-    tail: [256]u8
-    tail_length: s32 = length - end
-    index: s32 = 0
-    while index < tail_length {
-        tail[index] = edit[end + index]
-        index += 1
-    }
-    index = 0
-    while index < inserted {
-        edit[start + index] = replacement[index]
-        index += 1
-    }
-    index = 0
-    while index < tail_length {
-        edit[start + inserted + index] = tail[index]
-        index += 1
-    }
-    edit[start + inserted + tail_length] = 0
-    edit_cursor = start + inserted
-    edit_anchor = edit_cursor
-    CommitCell()
-}
-
-// Collects this frame's typed codepoints as UTF-8.
-#if !#defined(KRYON_HOSTED_UI) {
-    TakeTypedText :: (session: Session, output: []u8) -> s32 {
-        length: s32 = 0
-        codepoint: s32 = TypedCodepointTake(session)
-        while codepoint != 0 {
-            if length + 4 < cast(s32)output.count {
-                length = AppendUtf8(output, length, codepoint)
-            }
-            codepoint = TypedCodepointTake(session)
-        }
-        return length
-    }
-
-}
-
-AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
-    if codepoint < 0x80 {
-        output[at] = cast(u8)codepoint
-        return at + 1
-    }
-    if codepoint < 0x800 {
-        output[at] = cast(u8)(0xC0 | (codepoint >> 6))
-        output[at + 1] = cast(u8)(0x80 | (codepoint & 0x3F))
-        return at + 2
-    }
-    if codepoint < 0x10000 {
-        output[at] = cast(u8)(0xE0 | (codepoint >> 12))
-        output[at + 1] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
-        output[at + 2] = cast(u8)(0x80 | (codepoint & 0x3F))
-        return at + 3
-    }
-    output[at] = cast(u8)(0xF0 | (codepoint >> 18))
-    output[at + 1] = cast(u8)(0x80 | ((codepoint >> 12) & 0x3F))
-    output[at + 2] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
-    output[at + 3] = cast(u8)(0x80 | (codepoint & 0x3F))
-    return at + 4
-}
-
-// --------------------------------------------------------------------- undo
-
-UndoCommand :: () {
-    if edit_focused && UndoEditText() { return }
-    if undo_count == 0 { return }
-    if edit_focused { EndEdit() }
-    FinishEditStep()
-    if undo_count == 0 { return }
-    undo_count -= 1
-    redo_steps[redo_count] = PutState(undo_steps[undo_count])
-    redo_count += 1
-}
-
-RedoCommand :: () {
-    if edit_focused && RedoEditText() { return }
-    if redo_count == 0 { return }
-    if edit_focused { EndEdit() }
-    FinishEditStep()
-    redo_count -= 1
-    undo_steps[undo_count] = PutState(redo_steps[redo_count])
-    undo_count += 1
-}
-
-// A grid command is one step of its own, after any cell edit before it.
-RecordChange :: () {
-    FinishEditStep()
-    PushUndo()
-}
-
-// Keeps a copy of the workbook as it is now as the newest undo step. A new
-// change leaves nothing to redo.
-PushUndo :: () {
-    copy: *Engine.Workbook = Engine.WorkbookClone(workbook)
-    if copy == null { return }
-    while redo_count > 0 {
-        redo_count -= 1
-        Engine.WorkbookFree(redo_steps[redo_count].book)
-    }
-    if undo_count == UndoLimit { DropOldestUndo() }
-    undo_steps[undo_count] = StateOf(copy)
-    undo_count += 1
-    cells: s32 = 0
-    for at: 0..undo_count - 1 { cells += Engine.WorkbookCellCount(undo_steps[at].book) }
-    while undo_count > 1 && cells > UndoCellBudget {
-        cells -= Engine.WorkbookCellCount(undo_steps[0].book)
-        DropOldestUndo()
-    }
-}
-
-DropOldestUndo :: () {
-    Engine.WorkbookFree(undo_steps[0].book)
-    for at: 1..undo_count - 1 { undo_steps[at - 1] = undo_steps[at] }
-    undo_count -= 1
-}
-
-// The book with the selection as it is now.
-StateOf :: (book: *Engine.Workbook) -> UndoState {
-    state: UndoState
-    state.book = book
-    state.sheet = edit_sheet
-    state.row = selected_row
-    state.column = selected_column
-    state.range_row = range_row
-    state.range_column = range_column
-    state.axis = selection_axis
-    return state
-}
-
-// Makes a kept state the current workbook and selection, and returns the
-// state it replaces for the other stack.
-PutState :: (state: UndoState) -> UndoState {
-    previous: UndoState = StateOf(workbook)
-    workbook = state.book
-    sheet: s32 = Max(0, Min(state.sheet, Engine.WorkbookSheetCount(workbook) - 1))
-    if sheet != sheet_index {
-        sheet_index = sheet
-        scroll_row = 0
-        scroll_column = 0
-    }
-    Engine.WorkbookEvaluate(workbook)
-    SelectCell(state.row, state.column)
-    range_row = state.range_row
-    range_column = state.range_column
-    selection_axis = state.axis
-    dirty = true
-    save_retry_at = 0
-    EnsureVisible()
-    return previous
-}
-
-// Ends the cell edit's step. An edit that left the cell as it found it has
-// nothing to undo, so its step goes; its text steps end with it.
-FinishEditStep :: () {
-    edit_undo_count = 0
-    edit_redo_count = 0
-    edit_run = 0
-    if !edit_recorded { return }
-    edit_recorded = false
-    if undo_count > 0 &&
-    CellSource(edit_sheet, selected_row, selected_column) == TextUntilNul(edit_original[:]) {
-        undo_count -= 1
-        Engine.WorkbookFree(undo_steps[undo_count].book)
-    }
-}
-
-// Keeps the edit text as it is now as the newest text step, unless the change
-// about to replace bytes [start, end) continues the newest step's run.
-RememberEditText :: (kind: s32, start: s32, end: s32, replacement: string) {
-    extends: bool = false
-    if kind == EditTyping && edit_run == EditTyping && start == end && start == edit_run_at {
-        // Typing joins the run until a word starts after a space or a symbol.
-        extends = !(start > 0 && !WordByte(edit[start - 1]) && WordByte(replacement[0]))
-    }
-    if kind == EditDeleting && edit_run == EditDeleting &&
-    replacement.count == 0 && (end == edit_run_at || start == edit_run_at) { extends = true }
-    edit_run = kind
-    edit_run_at = start + cast(s32)replacement.count
-    if extends { return }
-    edit_redo_count = 0
-    if edit_undo_count == EditUndoLimit {
-        for at: 1..EditUndoLimit - 1 { edit_undo[at - 1] = edit_undo[at] }
-        edit_undo_count -= 1
-    }
-    KeepEditText(*edit_undo[edit_undo_count])
-    edit_undo_count += 1
-}
-
-WordByte :: (byte: u8) -> bool {
-    return (byte >= #char "A" && byte <= #char "Z") || (byte >= #char "a" && byte <= #char "z") ||
-    (byte >= #char "0" && byte <= #char "9") || byte == #char "_" || byte == #char "." ||
-    byte == #char "$" || byte >= 128
-}
-
-UndoEditText :: () -> bool {
-    if edit_undo_count == 0 { return false }
-    KeepEditText(*edit_redo[edit_redo_count])
-    edit_redo_count += 1
-    edit_undo_count -= 1
-    PutEditText(*edit_undo[edit_undo_count])
-    return true
-}
-
-RedoEditText :: () -> bool {
-    if edit_redo_count == 0 { return false }
-    KeepEditText(*edit_undo[edit_undo_count])
-    edit_undo_count += 1
-    edit_redo_count -= 1
-    PutEditText(*edit_redo[edit_redo_count])
-    return true
-}
-
-KeepEditText :: (state: *EditTextState) {
-    SetText(state.text[:], TextUntilNul(edit[:]))
-    state.cursor = edit_cursor
-    state.anchor = edit_anchor
-}
-
-// Puts kept text back in the edited cell, which takes it at once.
-PutEditText :: (state: *EditTextState) {
-    SetText(edit[:], TextUntilNul(state.text[:]))
-    edit_cursor = state.cursor
-    edit_anchor = state.anchor
-    edit_run = 0
-    pick_start = -1
-    CommitCell()
-}
-
-// --------------------------------------------------------------------- view
-
-// The window's own color: the theme's canvas behind every widget.
-DrawBackground :: (session: Session, viewport: Rectangle) {
-    background: Box.Props
-    background.key = cast(u64)7
-    background.bounds = viewport
-    background.fill = EditorColor("canvas")
-    Box.Draw(session, background)
-}
-
-DrawToolbar :: (session: Session, viewport: Rectangle) {
-    x: float32 = viewport.x + 4.0
-    if ToolbarIcon(session, 1001, SaveIcon.Shape, *x, dirty) { SaveWorkbook(true) }
-    if ToolbarIcon(session, 1002, RowAddIcon.Shape, *x, false) {
-        RecordChange()
-        Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
-        Changed()
-    }
-    if ToolbarIcon(session, 1003, RowRemoveIcon.Shape, *x, false) {
-        RecordChange()
-        Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
-        Changed()
-    }
-    if ToolbarIcon(session, 1004, ColumnAddIcon.Shape, *x, false) {
-        RecordChange()
-        Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
-        Changed()
-    }
-    if ToolbarIcon(session, 1005, ColumnRemoveIcon.Shape, *x, false) {
-        RecordChange()
-        Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
-        Changed()
-    }
-    chart: Button.Props
-    chart.id = 1010
-    chart.label = "Chart"
-    chart.size = cast(ControlSize)ControlSizeSmall
-    chart.bounds = Rectangle.{x, layout_origin.y + 28.0, 58.0, 28.0}
-    x += 60.0
-    if Button.Draw(session, chart) != 0 { CreateFormulaChart() }
-    // Touch screens have no arrow keys or wheel. Keep every cell reachable
-    // while the grid still supports selecting and filling ranges by dragging.
-    if viewport.width < 600.0 {
-        row := selected_row; column := selected_column
-        if ToolbarIcon(session, 1006, LeftIcon.Shape, *x, false) { column = Max(0, column - 1) }
-        if ToolbarIcon(session, 1007, UpIcon.Shape, *x, false) { row = NextVisibleRow(row, -1) }
-        if ToolbarIcon(session, 1008, DownIcon.Shape, *x, false) { row = NextVisibleRow(row, 1) }
-        if ToolbarIcon(session, 1009, RightIcon.Shape, *x, false) { column = Min(MaxColumns - 1, column + 1) }
-        if row != selected_row || column != selected_column {
-            if edit_focused { CommitCell(); EndEdit() }
-            SelectCell(row, column)
-            EnsureVisible()
-        }
-    }
-}
-
-// Make a portable visual chart sheet from a selected label/value range. The
-// chart cells retain formulas back to the source sheet, so edits recalculate
-// it without a duplicated data table or a plugin-specific chart object.
-CreateFormulaChart :: () {
-    if edit_focused { CommitCell(); EndEdit() }
-    first_row: s32 = Min(selected_row, range_row)
-    last_row: s32 = Max(selected_row, range_row)
-    first_column: s32 = Min(selected_column, range_column)
-    last_column: s32 = Max(selected_column, range_column)
-    if last_column <= first_column {
-        SetText(status[:], "Select label and value columns to create a chart")
-        return
-    }
-    count: s32 = Min(24, last_row - first_row + 1)
-    if count <= 0 { return }
-    RecordChange()
-    name: [64]u8
-    SetText(name[:], "Chart ")
-    digits: [16]u8
-    AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(workbook) + 1, digits[:]))
-    // The native engine returns the new sheet; the portable one, 1 or 0.
-    added: bool
-    #if #defined(KRYON_HOSTED_UI) {
-        added = Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:]))) != 0
-    } else {
-        added = Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:]))) != null
-    }
-    if !added {
-        SetText(status[:], "Could not add a chart sheet")
-        return
-    }
-    chart_sheet: s32 = Engine.WorkbookSheetCount(workbook) - 1
-    Engine.WorkbookSetCell(workbook, chart_sheet, 0, 0, Engine.CText("Formula chart"))
-    Engine.WorkbookSetCell(workbook, chart_sheet, 1, 0, Engine.CText("Label"))
-    Engine.WorkbookSetCell(workbook, chart_sheet, 1, 1, Engine.CText("Value"))
-    Engine.WorkbookSetCell(workbook, chart_sheet, 1, 2, Engine.CText("Visual bar"))
-    for offset: 0..count - 1 {
-        row: s32 = offset + 2
-        label: [320]u8
-        SetText(label[:], "=")
-        EditorSheetPrefix(sheet_index, label[:])
-        AppendCellName(label[:], first_row + offset, first_column)
-        Engine.WorkbookSetCell(workbook, chart_sheet, row, 0, Engine.CText(TextUntilNul(label[:])))
-        value: [320]u8
-        SetText(value[:], "=")
-        EditorSheetPrefix(sheet_index, value[:])
-        AppendCellName(value[:], first_row + offset, first_column + 1)
-        Engine.WorkbookSetCell(workbook, chart_sheet, row, 1, Engine.CText(TextUntilNul(value[:])))
-        visual: [256]u8
-        SetText(visual[:], "=REPT(\"■\",ROUND(MAX(0,B")
-        AppendText(visual[:], FormatInteger(cast(s64)row + 1, digits[:]))
-        AppendText(visual[:], ")/MAX(1,MAX($B$3:$B$")
-        AppendText(visual[:], FormatInteger(cast(s64)count + 2, digits[:]))
-        AppendText(visual[:], "))*30,0))")
-        Engine.WorkbookSetCell(workbook, chart_sheet, row, 2, Engine.CText(TextUntilNul(visual[:])))
-    }
-    sheet_index = chart_sheet
-    scroll_row = 0
-    scroll_column = 0
-    Changed()
-}
-
-// Saving is automatic, so the window says nothing about it unless it fails.
-DrawStatus :: (session: Session, viewport: Rectangle) {
-    if status[0] == 0 { return }
-    label: Text.Props
-    label.key = cast(u64)5
-    label.text = TextUntilNul(status[:])
-    label.size = Text.Text14
-    label.bounds = Rectangle.{viewport.x + 180.0, viewport.y + viewport.height - 24.0,
-        viewport.width - 184.0, 20.0}
-    Text.Draw(session, label)
-}
-
-
-ToolbarIcon :: (session: Session, id: s32, shape: string, x: *float32,
-    primary: bool) -> bool {
-    button: Button.Props
-    button.id = id
-    button.icon_shape = shape
-    button.icon_only = true
-    button.size = cast(ControlSize)ControlSizeSmall
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    if primary {
-        button.tone = cast(ButtonTone)ButtonToneAccent
-    }
-    button.bounds = Rectangle.{x.*, layout_origin.y + 28.0, 28.0, 28.0}
-    x.* = x.* + 30.0
-    return Button.Draw(session, button) != 0
-}
-
-Changed :: () {
-    Engine.WorkbookEvaluate(workbook)
-    dirty = true
-    save_retry_at = 0
-    // A changed range stays selected, as after a paste, fill or clear.
-    keep_row: s32 = range_row
-    keep_column: s32 = range_column
-    SelectCell(selected_row, selected_column)
-    range_row = Min(keep_row, MaxRows - 1)
-    range_column = Min(keep_column, MaxColumns - 1)
-}
-
-SheetTabsBounds :: (viewport: Rectangle) -> Rectangle {
-    count: s32 = Min(Engine.WorkbookSheetCount(workbook), 16)
-    return Rectangle.{viewport.x, viewport.y + viewport.height - TabsBottom, MinFloat(viewport.width, 104.0 * cast(float32)count), 28.0}
-}
-
-DrawSheetTabs :: (session: Session, viewport: Rectangle) {
-    count: s32 = Engine.WorkbookSheetCount(workbook)
-    if count < 1 { return }
-    // Sixteen tabs fill the bar; a workbook can hold more sheets than that.
-    if count > 16 { count = 16 }
-    tabs: [16]TabBar.Tab
-    index: s32 = 0
-    while index < count {
-        tabs[index].key = cast(u64)(1100 + index)
-        tabs[index].label = EditorString(Engine.WorkbookSheetName(workbook, index))
-        index += 1
-    }
-    strip: Box.Props
-    strip.key = cast(u64)1098
-    strip.bounds = Rectangle.{viewport.x, viewport.y + viewport.height - TabsBottom, viewport.width, TabsBottom}
-    strip.fill = HeaderBackground()
-    strip.border = GridLineColor()
-    Box.Draw(session, strip)
-    bar: TabBar.Props
-    bar.key = cast(u64)1099
-    bar.placement = cast(TabBar.TabBarPlacement)TabBarBottom
-    bar.selected_index = sheet_index
-    bar.bounds = SheetTabsBounds(viewport)
-    bar.min_tab_width = 72
-    bar.max_tab_width = 104
-    result: TabBar.Result = TabBar.Draw(session, bar, tabs[0:count])
-    if result.selected_index != sheet_index && result.selected_index >= 0 {
-        sheet_index = result.selected_index
-        scroll_row = 0
-        scroll_column = 0
-        // A formula being written stays open, so it can point at this sheet.
-        if !FormulaEditing() && !edit_refocus { SelectCell(0, 0) }
-    }
-}
-
-DrawFormulaBar :: (session: Session, viewport: Rectangle, key: s32,
-    control: bool, typed: []u8, typed_length: s32) {
-    label: Text.Props
-    label.key = cast(u64)3
-    label.text = "fx"
-    label.size = Text.Text16
-    label.disabled = true
-    label.bounds = Rectangle.{viewport.x + 8.0, viewport.y + 61.0, 24.0, 20.0}
-    Text.Draw(session, label)
-    result: TextField.Result = RunFormulaField(session, viewport, key, control,
-        typed, typed_length)
-    edit_claim = false
-    // Typing or moving the cursor ends a pick: the next one inserts anew.
-    if result.edit.changed || result.cursor != edit_cursor || result.anchor != edit_anchor {
-        pick_start = -1
-    }
-    // Moving the cursor ends a run of typing or deleting, for undo.
-    if !result.edit.changed && (result.cursor != edit_cursor || result.anchor != edit_anchor) {
-        edit_run = 0
-    }
-    edit_scroll = result.scroll_x
-    edit_composition = result.composition
-    edit_focused = result.focused
-    // The text step keeps the cursor from before the change, so undo puts it back.
-    if result.edit.changed {
-        // Cut and paste are steps of their own; typing and deleting run on.
-        kind: s32 = EditOther
-        if !control { kind = ifx result.edit.replacement.count == 0 then EditDeleting else EditTyping }
-        ChangeEdit(kind, result.edit.start, result.edit.end, result.edit.replacement)
-    }
-    edit_cursor = result.cursor
-    edit_anchor = result.anchor
-    if result.committed {
-        CommitCell()
-        EndEdit()
-        SelectCell(NextVisibleRow(selected_row, 1), selected_column)
-        EnsureVisible()
-    }
-    if result.escaped {
-        SetText(edit[:], TextUntilNul(edit_original[:]))
-        CommitCell()
-        EndEdit()
-        SelectCell(selected_row, selected_column)
-    }
-}
-
-// --------------------------------------------------------- formula picking
-
-FormulaEditing :: () -> bool { return edit_focused && edit[0] == #char "=" }
-
-// Whether a grid click now points the formula at cells: right after the last
-// pick, or where an operand belongs (after =, an operator, "(" or a separator),
-// outside a string, and not glued to a name.
-CanPick :: () -> bool {
-    if !FormulaEditing() { return false }
-    start: s32 = Min(edit_cursor, edit_anchor)
-    end: s32 = Max(edit_cursor, edit_anchor)
-    if pick_start >= 0 && start == pick_end && end == pick_end { return true }
-    text: string = TextUntilNul(edit[:])
-    if start < 1 || end > cast(s32)text.count { return false }
-    quotes: s32 = 0
-    for at: 0..start - 1 { if text[at] == #char "\"" { quotes += 1 } }
-    if quotes % 2 != 0 { return false }
-    before: s32 = start - 1
-    while before > 0 && text[before] == #char " " { before -= 1 }
-    operand: bool = false
-    marks: string = "=(,;+-*/^&<>:"
-    for mark: marks { if text[before] == mark { operand = true } }
-    if !operand { return false }
-    if end < cast(s32)text.count {
-        next: u8 = text[end]
-        if (next >= #char "A" && next <= #char "Z") || (next >= #char "a" && next <= #char "z") ||
-        (next >= #char "0" && next <= #char "9") || next == #char "$" || next == #char "_" ||
-        next == #char "." || next == #char "'" { return false }
-    }
-    return true
-}
-
-// Starts pointing the formula at a cell: it replaces the last pick, or inserts
-// at the cursor. Shift extends the last pick from its first cell instead.
-StartPick :: (row: s32, column: s32) {
-    replace: bool = pick_start >= 0 && edit_cursor == pick_end && edit_anchor == pick_end
-    start: s32 = Min(edit_cursor, edit_anchor)
-    end: s32 = Max(edit_cursor, edit_anchor)
-    if replace {
-        start = pick_start
-        end = pick_end
-    }
-    if !(replace && shift_held && pick_sheet == sheet_index) {
-        pick_anchor_row = row
-        pick_anchor_column = column
-    }
-    pick_sheet = sheet_index
-    pick_row = row
-    pick_column = column
-    WritePick(start, end, true)
-}
-
-// Writes the picked cell or range over edit bytes [start, end): "B3", or
-// "B3:C7" from its top-left to bottom-right, with its sheet when that differs
-// from the edited cell's. A new pick is a text step; dragging it extends it.
-WritePick :: (start: s32, end: s32, new_step: bool) {
-    reference: [320]u8
-    reference[0] = 0
-    if pick_sheet != edit_sheet {
-        prefix: [512]u8
-        EditorSheetPrefix(pick_sheet, prefix[:])
-        AppendText(reference[:], TextUntilNul(prefix[:]))
-    }
-    first_row: s32 = Min(pick_anchor_row, pick_row)
-    first_column: s32 = Min(pick_anchor_column, pick_column)
-    last_row: s32 = Max(pick_anchor_row, pick_row)
-    last_column: s32 = Max(pick_anchor_column, pick_column)
-    AppendCellName(reference[:], first_row, first_column)
-    if last_row != first_row || last_column != first_column {
-        AppendText(reference[:], ":")
-        AppendCellName(reference[:], last_row, last_column)
-    }
-    text: string = TextUntilNul(reference[:])
-    if !EditFits(start, end, text) { return }
-    if new_step { RememberEditText(EditOther, start, end, text) }
-    ApplyEdit(start, end, text)
-    pick_start = start
-    pick_end = start + cast(s32)text.count
-}
-
-// The field's props view the edit buffer and composition state, so they
-// live only for the widget call; the caller then updates that storage.
-RunFormulaField :: (session: Session, viewport: Rectangle, key: s32,
-    control: bool, typed: []u8, typed_length: s32) -> TextField.Result {
-    field: TextField.Props
-    field.key = cast(u64)4
-    field.bounds = Rectangle.{viewport.x + 40.0, viewport.y + 58.0, viewport.width - 42.0, 26.0}
-    field.value = TextUntilNul(edit[:])
-    field.label = "Cell value"
-    field.placeholder = "Value or =formula"
-    field.cursor = edit_cursor
-    field.anchor = edit_anchor
-    field.scroll_x = edit_scroll
-    field.focused = edit_focused
-    field.composition = edit_composition
-    field.max_bytes = CellTextMax - 1
-    // The app decides when the cell is being edited.
-    field.input.focus = edit_refocus || edit_claim
-    field.input.blur = !edit_focused && !edit_refocus
-    if edit_focused {
-        field.input.text = TextView(typed[0:typed_length])
-        field.input.left = key == KeyLeft
-        field.input.right = key == KeyRight
-        field.input.home = key == KeyHome
-        field.input.end = key == KeyEnd
-        field.input.backspace = key == KeyBackspace
-        field.input.delete_forward = key == KeyDelete
-        field.input.select_all = control && key == KeyA
-        field.input.copy = control && key == KeyC
-        field.input.cut = control && key == KeyX
-        field.input.paste = control && key == KeyV
-        field.input.commit = key == KeyEnter
-        field.input.escape = key == KeyEscape
-    }
-    return TextField.Draw(session, field)
-}
-
-// The grid shows the used cells and reaches the selection, a fill being
-// dragged, and the cells a formula being written points at. A held button
-// alone never changes it, or every click would draw the empty cells out to the
-// window's edge and take them away again on release.
-GridRows :: () -> s32 {
-    count: s32 = Engine.WorkbookSheetRows(workbook, sheet_index)
-    if count < 8 { count = 8 }
-    if count < selected_row + 1 { count = selected_row + 1 }
-    if count < range_row + 1 { count = range_row + 1 }
-    if drag_mode == DragFill && fill_axis == 1 && count < fill_row + 1 { count = fill_row + 1 }
-    if PickShown() && count < Max(pick_anchor_row, pick_row) + 1 { count = Max(pick_anchor_row, pick_row) + 1 }
-    if count > MaxRows { count = MaxRows }
-    return count
-}
-
-GridColumns :: () -> s32 {
-    count: s32 = Engine.WorkbookSheetColumns(workbook, sheet_index)
-    if count < 8 { count = 8 }
-    if count < selected_column + 1 { count = selected_column + 1 }
-    if count < range_column + 1 { count = range_column + 1 }
-    if drag_mode == DragFill && fill_axis == 2 && count < fill_column + 1 { count = fill_column + 1 }
-    if PickShown() && count < Max(pick_anchor_column, pick_column) + 1 { count = Max(pick_anchor_column, pick_column) + 1 }
-    if count > MaxColumns { count = MaxColumns }
-    return count
-}
-
-// Whether the formula being written points at cells picked on the shown sheet.
-PickShown :: () -> bool { return FormulaEditing() && pick_start >= 0 && pick_sheet == sheet_index }
-
-visible_rows: s32 = 16;
-visible_columns: s32 = 8;
-grid_body_height: float32 = 352.0;
-
-RowHidden :: (row: s32) -> bool { return Engine.WorkbookRowHidden(workbook, sheet_index, row) != 0 }
-GridRowHeight :: (row: s32) -> float32 { return ifx RowHidden(row) then Grid.GridHiddenRowHeight else Grid.GridRowHeight }
-
-NextVisibleRow :: (row: s32, step: s32) -> s32 {
-    next: s32 = row + step
-    while next >= 0 && next < MaxRows && RowHidden(next) { next += step }
-    return ifx next >= 0 && next < MaxRows then next else row
-}
-
-GridRowAt :: (table: Rectangle, y: float32) -> s32 {
-    row: s32 = scroll_row
-    top: float32 = table.y + Grid.GridHeaderHeight
-    while row < scroll_row + visible_rows - 1 && y >= top + GridRowHeight(row) {
-        top += GridRowHeight(row)
-        row += 1
-    }
-    return row
-}
-
-SetRowsHidden :: (first: s32, last: s32, hidden: bool) {
-    RecordChange()
-    if Engine.WorkbookSetRowsHidden(workbook, sheet_index, first, last, ifx hidden then 1 else 0) == 0 { return }
-    Changed()
-    if hidden && RowHidden(selected_row) { SelectCell(NextVisibleRow(last, 1), selected_column) }
-    selection_axis = 0
-    EnsureVisible()
-}
-
-// Frames since the last click, and the cell it landed on. The host paces
-// frames at roughly 60 per second, so 24 frames is a little under half a second.
-DoubleClickFrames :: 24;
-frames_since_click: s32 = 1000;
-last_click_row: s32 = -1;
-last_click_column: s32 = -1;
-
-EnsureVisible :: () {
-    if selected_row < scroll_row { scroll_row = selected_row }
-    if selected_row >= scroll_row + visible_rows {
-        scroll_row = Max(0, selected_row - Max(1, cast(s32)(grid_body_height / Grid.GridRowHeight)) + 1)
-    }
-    if selected_column < scroll_column { scroll_column = selected_column }
-    if selected_column >= scroll_column + visible_columns {
-        scroll_column = selected_column - visible_columns + 1
-    }
-}
-
-DrawGrid :: (session: Session, viewport: Rectangle) {
-    table: Rectangle = Rectangle.{viewport.x + Margin, viewport.y + TableTop,
-        viewport.width - Margin * 2.0, viewport.height - TableTop - GridBottom}
-    grid_right = table.x + table.width
-    grid_bottom = table.y + table.height
-    grid_body_height = table.height - Grid.GridHeaderHeight
-    visible_rows = cast(s32)((grid_body_height + Grid.GridRowHeight - 1.0) / Grid.GridRowHeight)
-    visible_columns = cast(s32)((table.width - Grid.GridRowHeaderWidth + Grid.GridColumnWidth - 1.0) / Grid.GridColumnWidth)
-    rows: s32 = GridRows()
-    columns: s32 = GridColumns()
-
-    wheel: float32 = EditorWheel(session, table)
-    if wheel > 0.0 { scroll_row -= 1 }
-    if wheel < 0.0 { scroll_row += 1 }
-    last_start: s32 = rows
-    tail_height: float32 = 0.0
-    while last_start > 0 && tail_height < grid_body_height {
-        last_start -= 1
-        tail_height += GridRowHeight(last_start)
-    }
-    if scroll_row > last_start { scroll_row = last_start }
-    if scroll_row < 0 { scroll_row = 0 }
-
-    if rows < scroll_row + visible_rows { rows = scroll_row + visible_rows }
-    // Count actual rows, including the narrow reveal strips, to the bottom edge.
-    visible_rows = 0
-    used_height: float32 = 0.0
-    while used_height < grid_body_height && scroll_row + visible_rows < MaxRows {
-        used_height += GridRowHeight(scroll_row + visible_rows)
-        visible_rows += 1
-    }
-    if rows < scroll_row + visible_rows { rows = scroll_row + visible_rows }
-    if columns < scroll_column + visible_columns { columns = scroll_column + visible_columns }
-
-    // The selection belongs to the edited cell's sheet; another sheet shown
-    // to pick references from has none.
-    here: bool = sheet_index == edit_sheet
-    first_row: s32 = SelectionFirstRow()
-    last_row: s32 = SelectionLastRow()
-    first_column: s32 = SelectionFirstColumn()
-    last_column: s32 = SelectionLastColumn()
-    spans: bool = selection_axis == 0 && (first_row != last_row || first_column != last_column)
-
-    GridSquare(session, 10, Rectangle.{table.x, table.y, Grid.GridRowHeaderWidth, Grid.GridHeaderHeight},
-        HeaderBackground(), "")
-    column: s32 = scroll_column
-    while column < scroll_column + visible_columns && column < columns {
-        name: [8]u8
-        AppendCellColumn(name[:], column)
-        GridSquare(session, 20 + column - scroll_column, Rectangle.{ColumnX(table, column), table.y,
-                Grid.GridColumnWidth, Grid.GridHeaderHeight}, ifx here && selection_axis == 2 && column == selected_column then SelectedBackground() else HeaderBackground(), TextUntilNul(name[:]))
-        column += 1
-    }
-    shown: s32 = 0
-    while shown < visible_rows && scroll_row + shown < rows {
-        row: s32 = scroll_row + shown
-        y: float32 = RowY(table, row)
-        if RowHidden(row) {
-            GridSquare(session, 1000 + shown, Rectangle.{table.x, y, table.width, Grid.GridHiddenRowHeight}, HeaderBackground(), "")
-            strip: Box.Props
-            strip.key = cast(u64)(500000 + shown)
-            strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
-            strip.fill = GridLineColor()
-            Box.Draw(session, strip)
-            shown += 1
-            continue
-        }
-        number: [16]u8
-        row_digits: [16]u8
-        SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
-        GridSquare(session, 1000 + shown, Rectangle.{table.x, y, Grid.GridRowHeaderWidth, Grid.GridRowHeight},
-            ifx here && selection_axis == 1 && row == selected_row then SelectedBackground() else HeaderBackground(), TextUntilNul(number[:]))
-        column = scroll_column
-        while column < scroll_column + visible_columns && column < columns {
-            display: [256]u8
-            EditorCellDisplay(row, column, display[:])
-            // Imported cells already apply the grid rule or their own number format.
-            #if !#defined(KRYON_HOSTED_UI) {
-                if workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
-            }
-            fill: Color = CellBackground()
-            // A range is shaded around its active cell, as in Gnumeric.
-            active: bool = row == selected_row && column == selected_column
-            // A header selection shades its whole row or column on screen.
-            in_rows: bool = selection_axis == 2 || (row >= first_row && row <= last_row)
-            in_columns: bool = selection_axis == 1 || (column >= first_column && column <= last_column)
-            if here && in_rows && in_columns && !(spans && active) { fill = SelectedBackground() }
-            GridSquare(session, 10000 + shown * visible_columns + column - scroll_column,
-                Rectangle.{ColumnX(table, column), y, Grid.GridColumnWidth, Grid.GridRowHeight},
-                fill, TextUntilNul(display[:]))
-            column += 1
-        }
-        shown += 1
-    }
-
-    if here && selection_axis == 0 && !edit_focused {
-        CellOutline(session, 400000, table, first_row, first_column, last_row, last_column, AccentColor(), 2)
-        handle: Rectangle = FillHandleBounds(table)
-        if handle.width > 0.0 {
-            mark: Box.Props
-            mark.key = cast(u64)400008
-            mark.bounds = Rectangle.{handle.x + 2.0, handle.y + 2.0, 7.0, 7.0}
-            mark.fill = AccentColor()
-            mark.border = CellBackground()
-            Box.Draw(session, mark)
-        }
-    }
-    if drag_mode == DragFill && fill_axis != 0 {
-        top: s32 = ifx fill_axis == 1 then Min(first_row, fill_row) else first_row
-        bottom: s32 = ifx fill_axis == 1 then Max(last_row, fill_row) else last_row
-        left: s32 = ifx fill_axis == 2 then Min(first_column, fill_column) else first_column
-        right: s32 = ifx fill_axis == 2 then Max(last_column, fill_column) else last_column
-        CellOutline(session, 400010, table, top, left, bottom, right, AccentColor(), 1)
-    }
-    DrawReferenceOutlines(session, table)
-    DrawCellEditor(session, table)
-
-    if menus_block_input { return }
-    pointer: PointerFrame = EditorPointer(session)
-    body: Rectangle = Rectangle.{table.x + Grid.GridRowHeaderWidth, table.y + Grid.GridHeaderHeight,
-        table.width - Grid.GridRowHeaderWidth, table.height - Grid.GridHeaderHeight}
-    hit_row: s32 = GridRowAt(table, pointer.y)
-    hit_column: s32 = scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
-    on_cell: bool = PointInBounds(pointer.x, pointer.y, body) && hit_row < rows &&
-    hit_row < scroll_row + visible_rows && hit_column < columns && hit_column < scroll_column + visible_columns
-    if pointer.pressed && !grid_menu_open {
-        handle: Rectangle = FillHandleBounds(table)
-        if PointInBounds(pointer.x, pointer.y, table) && pointer.y >= body.y && RowHidden(hit_row) {
-            SetRowsHidden(hit_row, hit_row, false)
-            SelectCell(hit_row, selected_column)
-            return
-        } else if handle.width > 0.0 && PointInBounds(pointer.x, pointer.y, handle) {
-            drag_mode = DragFill
-            fill_axis = 0
-        } else if on_cell && CanPick() {
-            // Writing a formula: the click points it at the cell, a drag at a range.
-            StartPick(hit_row, hit_column)
-            drag_mode = DragPick
-        } else if on_cell && shift_held && !edit_focused && here {
-            selection_axis = 0
-            range_row = hit_row
-            range_column = hit_column
-            drag_mode = DragRange
-        } else if on_cell {
-            second: bool = frames_since_click < DoubleClickFrames &&
-            hit_row == last_click_row && hit_column == last_click_column
-            edit_focused = false
-            SelectCell(hit_row, hit_column)
-            if second { StartEdit() }
-            frames_since_click = 0
-            last_click_row = hit_row
-            last_click_column = hit_column
-            drag_mode = DragRange
-        } else if PointInBounds(pointer.x, pointer.y, table) && pointer.y < body.y && pointer.x >= body.x {
-            if hit_column < columns && hit_column < scroll_column + visible_columns {
-                edit_focused = false
-                SelectCell(selected_row, hit_column); selection_axis = 2; frames_since_click = 1000
-            }
-        } else if PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
-            if hit_row < rows && hit_row < scroll_row + visible_rows {
-                edit_focused = false
-                if shift_held && selection_axis == 1 { range_row = hit_row }
-                else { SelectCell(hit_row, selected_column); selection_axis = 1 }
-                frames_since_click = 1000
+            escape: u8 = text[index + 1]
+            index += 2
+            if escape == #char "n" {
+                output[at] = 10
+                at += 1
+            } else if escape == #char "t" {
+                output[at] = 9
+                at += 1
+            } else if escape == #char "r" {
+                output[at] = 13
+                at += 1
+            } else if escape == #char "b" {
+                output[at] = 8
+                at += 1
+            } else if escape == #char "f" {
+                output[at] = 12
+                at += 1
+            } else if escape == #char "u" && index + 4 <= span.end {
+                at = AppendUtf8(output, at, HexValue(text, index))
+                index += 4
+            } else {
+                output[at] = escape
+                at += 1
             }
         }
+        output[at] = 0
     }
-    if pointer.down && drag_mode != DragNone {
-        // Dragging past the grid's edge scrolls it, a step every few frames.
-        drag_frames += 1
-        if drag_frames % 4 == 0 {
-            if pointer.y >= body.y + body.height && scroll_row + visible_rows < MaxRows { scroll_row += 1 }
-            if pointer.y < body.y && scroll_row > 0 { scroll_row -= 1 }
-            if pointer.x >= body.x + body.width && scroll_column + visible_columns < MaxColumns { scroll_column += 1 }
-            if pointer.x < body.x && scroll_column > 0 { scroll_column -= 1 }
-        }
-        row: s32 = scroll_row
-        if pointer.y > body.y { row = GridRowAt(table, pointer.y) }
-        row = Min(row, Min(scroll_row + visible_rows - 1, MaxRows - 1))
-        column = scroll_column
-        if pointer.x > body.x { column = scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth) }
-        column = Min(column, Min(scroll_column + visible_columns - 1, MaxColumns - 1))
-        if drag_mode == DragRange && !edit_focused && here {
-            selection_axis = 0
-            range_row = row
-            range_column = column
-        }
-        if drag_mode == DragPick && pick_start >= 0 && (row != pick_row || column != pick_column) {
-            pick_row = row
-            pick_column = column
-            WritePick(pick_start, pick_end, false)
-        }
-        if drag_mode == DragFill { AimFill(row, column) }
-    }
-    if pointer.released && drag_mode != DragNone {
-        if drag_mode == DragFill { ApplyFill() }
-        drag_mode = DragNone
-        drag_frames = 0
-    } else if !pointer.down {
-        drag_mode = DragNone
-        drag_frames = 0
-    }
-    secondary: SecondaryPointerFrame = EditorSecondaryPointer(session)
-    if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, table) && pointer.x < body.x && pointer.y >= body.y {
-        row := GridRowAt(table, pointer.y)
-        if row < rows && row < scroll_row + visible_rows && !RowHidden(row) {
-            edit_focused = false
-            if selection_axis != 1 || row < first_row || row > last_row { SelectCell(row, selected_column) }
-            selection_axis = 1; frames_since_click = 1000
-            grid_menu_row = true; grid_menu_open = true; grid_menu_x = pointer.x; grid_menu_y = pointer.y
-        }
-    }
-    if secondary.released && !grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
-        // The secondary button opens the menu; outside the selection it first
-        // selects the cell under it.
-        row: s32 = GridRowAt(table, pointer.y)
-        clicked: s32 = scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
-        if row < rows && !RowHidden(row) && clicked < columns && clicked < scroll_column + visible_columns {
-            inside: bool = here && selection_axis == 0 && row >= first_row && row <= last_row &&
-            clicked >= first_column && clicked <= last_column
-            edit_focused = false
-            if !inside { SelectCell(row, clicked) }
-            grid_menu_open = true
-            grid_menu_row = false
-            grid_menu_x = pointer.x
-            grid_menu_y = pointer.y
-        }
-    }
-    if frames_since_click < 1000 { frames_since_click += 1 }
-}
 
-// The fill handle: the small square on the selection's bottom-right corner.
-FillHandleBounds :: (table: Rectangle) -> Rectangle {
-    none: Rectangle = Rectangle.{0.0, 0.0, 0.0, 0.0}
-    if selection_axis != 0 || edit_focused || sheet_index != edit_sheet { return none }
-    row: s32 = SelectionLastRow()
-    column: s32 = SelectionLastColumn()
-    if RowHidden(row) { return none }
-    if row < scroll_row || row >= scroll_row + visible_rows ||
-    column < scroll_column || column >= scroll_column + visible_columns { return none }
-    x: float32 = ColumnX(table, column) + Grid.GridColumnWidth
-    y: float32 = RowY(table, row) + Grid.GridRowHeight
-    return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
-}
-
-// Dragging the fill handle grows the selection along the axis the pointer
-// moved furthest past it.
-AimFill :: (row: s32, column: s32) {
-    down: s32 = row - SelectionLastRow()
-    up: s32 = SelectionFirstRow() - row
-    right: s32 = column - SelectionLastColumn()
-    left: s32 = SelectionFirstColumn() - column
-    vertical: s32 = Max(down, up)
-    horizontal: s32 = Max(right, left)
-    fill_axis = 0
-    if vertical <= 0 && horizontal <= 0 { return }
-    if vertical >= horizontal {
-        fill_axis = 1
-        fill_row = row
-    } else {
-        fill_axis = 2
-        fill_column = column
-    }
-}
-
-// Fills the dragged-over cells with the selection repeated: each copy's
-// formulas move their relative references with it, as in Gnumeric.
-ApplyFill :: () {
-    if fill_axis == 0 { return }
-    RecordChange()
-    first_row: s32 = SelectionFirstRow()
-    last_row: s32 = SelectionLastRow()
-    first_column: s32 = SelectionFirstColumn()
-    last_column: s32 = SelectionLastColumn()
-    top: s32 = ifx fill_axis == 1 then Min(first_row, fill_row) else first_row
-    bottom: s32 = ifx fill_axis == 1 then Max(last_row, fill_row) else last_row
-    left: s32 = ifx fill_axis == 2 then Min(first_column, fill_column) else first_column
-    right: s32 = ifx fill_axis == 2 then Max(last_column, fill_column) else last_column
-    height: s32 = last_row - first_row + 1
-    width: s32 = last_column - first_column + 1
-    for row: top..bottom {
-        for column: left..right {
-            if row >= first_row && row <= last_row && column >= first_column && column <= last_column { continue }
-            Engine.WorkbookCopyCell(workbook, sheet_index,
-                first_row + Wrap(row - first_row, height), first_column + Wrap(column - first_column, width), row, column)
-        }
-    }
-    fill_axis = 0
-    selected_row = top
-    selected_column = left
-    range_row = bottom
-    range_column = right
-    Changed()
-}
-
-// a modulo n, never negative.
-Wrap :: (a: s32, n: s32) -> s32 {
-    r: s32 = a % n
-    return ifx r < 0 then r + n else r
-}
-
-// While a formula is written, each reference it names on the shown sheet is
-// outlined in its own color, as Gnumeric does.
-DrawReferenceOutlines :: (session: Session, table: Rectangle) {
-    if !FormulaEditing() { return }
-    ref: Engine.FormulaRef
-    at: s32 = 0
-    index: s32 = 0
-    while index < 32 && Engine.FormulaFindRef(workbook, Engine.CText(TextUntilNul(edit[:])), at, *ref) != 0 {
-        sheet: s32 = ifx ref.sheet == -1 then edit_sheet else ref.sheet
-        if sheet == sheet_index {
-            CellOutline(session, 400100 + index * 4, table, Min(ref.row1, ref.row2), Min(ref.col1, ref.col2),
-                Max(ref.row1, ref.row2), Max(ref.col1, ref.col2), ReferenceColor(index), 2)
-        }
-        at = ref.end
-        index += 1
-    }
-}
-
-// The edited cell shows the text being written, formula and all, over its
-// neighbors when it is wider than the cell, with the cursor in it.
-DrawCellEditor :: (session: Session, table: Rectangle) {
-    if !edit_focused || sheet_index != edit_sheet { return }
-    if RowHidden(selected_row) { return }
-    if selected_row < scroll_row || selected_row >= scroll_row + visible_rows ||
-    selected_column < scroll_column || selected_column >= scroll_column + visible_columns { return }
-    text: string = TextUntilNul(edit[:])
-    x: float32 = ColumnX(table, selected_column)
-    y: float32 = RowY(table, selected_row)
-    width: float32 = cast(float32)(EditorGlyphWidth(text) + 16)
-    if width < Grid.GridColumnWidth { width = Grid.GridColumnWidth }
-    limit: float32 = ColumnX(table, scroll_column + visible_columns) - x
-    if width > limit { width = limit }
-    box: Box.Props
-    box.key = cast(u64)400500
-    box.bounds = Rectangle.{x, y, width, Grid.GridRowHeight}
-    box.fill = CellBackground()
-    box.border = AccentColor()
-    Box.Draw(session, box)
-    label: Text.Props
-    label.key = cast(u64)400501
-    label.text = text
-    label.size = Text.Text14
-    label.wrap = cast(Text.Wrap)TextWrapNone
-    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, Grid.GridRowHeight - 4.0}
-    Text.Draw(session, label)
-    cursor: s32 = Min(edit_cursor, cast(s32)text.count)
-    caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
-    if caret_x < x + width - 2.0 {
-        caret: Box.Props
-        caret.key = cast(u64)400502
-        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, Grid.GridRowHeight - 10.0}
-        caret.fill = AccentColor()
-        caret.border = AccentColor()
-        Box.Draw(session, caret)
-    }
-}
-
-// An outline around cells [first_row..last_row] x [first_column..last_column],
-// clipped to the visible grid and `thickness` pixels wide.
-CellOutline :: (session: Session, key: s32, table: Rectangle, first_row: s32, first_column: s32,
-    last_row: s32, last_column: s32, color: Color, thickness: s32) {
-    top: s32 = Max(first_row, scroll_row)
-    bottom: s32 = Min(last_row, scroll_row + visible_rows - 1)
-    left: s32 = Max(first_column, scroll_column)
-    right: s32 = Min(last_column, scroll_column + visible_columns - 1)
-    if top > bottom || left > right { return }
-    x: float32 = ColumnX(table, left)
-    y: float32 = RowY(table, top)
-    width: float32 = cast(float32)(right - left + 1) * Grid.GridColumnWidth
-    height: float32 = RowY(table, bottom) + GridRowHeight(bottom) - y
-    width = MinFloat(width, grid_right - x)
-    height = MinFloat(height, grid_bottom - y)
-    for line: 0..thickness - 1 {
-        inset: float32 = cast(float32)line
-        outline: Box.Props
-        outline.key = cast(u64)(key + line)
-        outline.bounds = Rectangle.{x + inset, y + inset, width - inset * 2.0, height - inset * 2.0}
-        outline.fill = Color.{0, 0, 0, 0}
-        outline.border = color
-        Box.Draw(session, outline)
-    }
-}
-
-// Reference outlines take these colors in turn.
-ReferenceColor :: (index: s32) -> Color {
-    which: s32 = index % 6
-    if which == 0 { return Color.{47, 111, 224, 255} }
-    if which == 1 { return Color.{224, 60, 49, 255} }
-    if which == 2 { return Color.{46, 160, 79, 255} }
-    if which == 3 { return Color.{142, 68, 173, 255} }
-    if which == 4 { return Color.{230, 126, 34, 255} }
-    return Color.{22, 160, 133, 255}
-}
-
-// A row number has a short row menu; cells keep the existing editing commands.
-// Every command acts on the row or cell selected by the right-click.
-DrawGridMenu :: (session: Session, escape: bool) {
-    if !grid_menu_open { return }
-    items: [10]ContextMenu.ContextMenuItem
-    items[0].id = 1
-    items[0].label = "Cut"
-    items[1].id = 2
-    items[1].label = "Copy"
-    items[2].id = 3
-    items[2].label = "Paste"
-    items[2].disabled = !EditorClipboardHasText()
-    items[3].id = 4
-    items[3].label = "Clear"
-    items[4].separator = true
-    items[5].id = 6
-    items[5].label = "Insert above"
-    items[6].id = 10
-    items[6].label = "Insert below"
-    items[7].id = 7
-    items[7].label = "Delete row"
-    items[8].id = 8
-    items[8].label = "Insert column"
-    items[9].id = 9
-    items[9].label = "Delete column"
-    count: s32 = 10
-    if grid_menu_row {
-        items[0].id = 6; items[0].label = "Insert above"
-        items[1].id = 10; items[1].label = "Insert below"
-        items[2].id = 7; items[2].label = "Delete row"; items[2].disabled = false
-        items[3].id = 11; items[3].label = "Hide rows"
-        count = 4
-    }
-    props: ContextMenu.Props
-    props.key = cast(u64)1200
-    props.open = true
-    props.x = grid_menu_x
-    props.y = grid_menu_y
-    props.escape = escape
-    result: ContextMenu.ContextMenuResult = ContextMenu.Draw(session, props, items[0:count])
-    if !result.open { grid_menu_open = false }
-    GridCommand(result.activated_id)
-}
-
-GridCommand :: (id: s32) {
-    if id == 1 { CutCell() }
-    if id == 2 { CopyCell() }
-    if id == 3 { PasteCells() }
-    if id == 4 { ClearCell() }
-    if id == 11 { SetRowsHidden(SelectionFirstRow(), SelectionLastRow(), true) }
-    if id == 6 {
-        RecordChange()
-        Engine.WorkbookInsertRow(workbook, sheet_index, selected_row)
-        Changed()
-    }
-    if id == 10 {
-        RecordChange()
-        Engine.WorkbookInsertRow(workbook, sheet_index, selected_row + 1)
-        selected_row += 1
-        Changed()
-    }
-    if id == 7 {
-        RecordChange()
-        Engine.WorkbookDeleteRow(workbook, sheet_index, selected_row)
-        Changed()
-    }
-    if id == 8 {
-        RecordChange()
-        Engine.WorkbookInsertColumn(workbook, sheet_index, selected_column)
-        Changed()
-    }
-    if id == 9 {
-        RecordChange()
-        Engine.WorkbookDeleteColumn(workbook, sheet_index, selected_column)
-        Changed()
-    }
-}
-
-// The grid takes its colors from the installed style, so it follows the theme.
-HeaderBackground :: () -> Color { return Grid.GridHeaderBackground() }
-CellBackground :: () -> Color { return Grid.GridCellBackground() }
-SelectedBackground :: () -> Color { return Grid.GridSelectedBackground() }
-AccentColor :: () -> Color { return Grid.GridAccentColor() }
-GridLineColor :: () -> Color { return Grid.GridLineColor() }
-
-ColumnX :: (table: Rectangle, column: s32) -> float32 {
-    return table.x + Grid.GridRowHeaderWidth + cast(float32)(column - scroll_column) * Grid.GridColumnWidth
-}
-
-RowY :: (table: Rectangle, row: s32) -> float32 {
-    y: float32 = table.y + Grid.GridHeaderHeight
-    at: s32 = scroll_row
-    while at < row { y += GridRowHeight(at); at += 1 }
-    return y
-}
-
-// One grid square: a bordered box and its clipped text.
-GridSquare :: (session: Session, key: s32, bounds: Rectangle, fill: Color, text: string) {
-    Grid.GridSquare(session, 1000000 + cast(u64)key * 2, bounds, grid_right, grid_bottom, fill, text)
-}
-
-
-// ----------------------------------------------------------------- text
-
-SetText :: (output: []u8, value: string) {
-    output[0] = 0
-    AppendText(output, value)
-}
-
-AppendText :: (output: []u8, value: string) {
-    at: s32 = cast(s32)TextUntilNul(output).count
-    index: s32 = 0
-    while index < cast(s32)value.count && at + 1 < cast(s32)output.count {
-        output[at] = value[index]
-        at += 1
-        index += 1
-    }
-    output[at] = 0
-}
-
-AppendCellColumn :: (output: []u8, column: s32) {
-    letters: [3]u8
-    if column < 26 {
-        letters[0] = cast(u8)(65 + column)
-        AppendText(output, TextView(letters[0:1]))
-        return
-    }
-    letters[0] = cast(u8)(65 + column / 26 - 1)
-    letters[1] = cast(u8)(65 + column % 26)
-    AppendText(output, TextView(letters[0:2]))
-}
-
-AppendCellName :: (output: []u8, row: s32, column: s32) {
-    AppendCellColumn(output, column)
-    number: [16]u8
-    row_digits: [16]u8
-    SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
-    AppendText(output, TextUntilNul(number[:]))
-}
-
-// Copies a JSON string's contents, decoding its escapes.
-DecodeJsonString :: (text: string, span: Json.JsonSpan, output: []u8) {
-    at: s32 = 0
-    index: s32 = span.start
-    while index < span.end && at + 4 < cast(s32)output.count {
-        byte: u8 = text[index]
-        if byte != #char "\\" || index + 1 >= span.end {
-            output[at] = byte
-            at += 1
+    HexValue :: (text: string, at: s32) -> s32 {
+        value: s32 = 0
+        index: s32 = 0
+        while index < 4 {
+            byte: s32 = text[at + index]
+            digit: s32 = 0
+            if byte >= 48 && byte <= 57 { digit = byte - 48 }
+            if byte >= 65 && byte <= 70 { digit = byte - 55 }
+            if byte >= 97 && byte <= 102 { digit = byte - 87 }
+            value = value * 16 + digit
             index += 1
-            continue
         }
-        escape: u8 = text[index + 1]
-        index += 2
-        if escape == #char "n" {
-            output[at] = 10
-            at += 1
-        } else if escape == #char "t" {
-            output[at] = 9
-            at += 1
-        } else if escape == #char "r" {
-            output[at] = 13
-            at += 1
-        } else if escape == #char "b" {
-            output[at] = 8
-            at += 1
-        } else if escape == #char "f" {
-            output[at] = 12
-            at += 1
-        } else if escape == #char "u" && index + 4 <= span.end {
-            at = AppendUtf8(output, at, HexValue(text, index))
-            index += 4
-        } else {
-            output[at] = escape
-            at += 1
+        return value
+    }
+
+    AppendUtf8 :: (output: []u8, at: s32, codepoint: s32) -> s32 {
+        if codepoint < 0x80 {
+            output[at] = cast(u8)codepoint
+            return at + 1
         }
+        if codepoint < 0x800 {
+            output[at] = cast(u8)(0xC0 | (codepoint >> 6))
+            output[at + 1] = cast(u8)(0x80 | (codepoint & 0x3F))
+            return at + 2
+        }
+        if codepoint < 0x10000 {
+            output[at] = cast(u8)(0xE0 | (codepoint >> 12))
+            output[at + 1] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
+            output[at + 2] = cast(u8)(0x80 | (codepoint & 0x3F))
+            return at + 3
+        }
+        output[at] = cast(u8)(0xF0 | (codepoint >> 18))
+        output[at + 1] = cast(u8)(0x80 | ((codepoint >> 12) & 0x3F))
+        output[at + 2] = cast(u8)(0x80 | ((codepoint >> 6) & 0x3F))
+        output[at + 3] = cast(u8)(0x80 | (codepoint & 0x3F))
+        return at + 4
     }
-    output[at] = 0
-}
 
-HexValue :: (text: string, at: s32) -> s32 {
-    value: s32 = 0
-    index: s32 = 0
-    while index < 4 {
-        byte: s32 = text[at + index]
-        digit: s32 = 0
-        if byte >= 48 && byte <= 57 { digit = byte - 48 }
-        if byte >= 65 && byte <= 70 { digit = byte - 55 }
-        if byte >= 97 && byte <= 102 { digit = byte - 87 }
-        value = value * 16 + digit
-        index += 1
+    // A profile name is also a directory name: lowercase letters, digits, - and _.
+    ProfileName :: (name: string) -> bool {
+        if name.count == 0 || name.count > 63 { return false }
+        for i: 0..cast(s32)name.count - 1 {
+            c: u8 = name[i]
+            if !((c >= #char "a" && c <= #char "z") || (c >= #char "0" && c <= #char "9") || c == #char "-" || c == #char "_") { return false }
+        }
+        return true
     }
-    return value
-}
 
-// A profile name is also a directory name: lowercase letters, digits, - and _.
-ProfileName :: (name: string) -> bool {
-    if name.count == 0 || name.count > 63 { return false }
-    for i: 0..cast(s32)name.count - 1 {
-        c: u8 = name[i]
-        if !((c >= #char "a" && c <= #char "z") || (c >= #char "0" && c <= #char "9") || c == #char "-" || c == #char "_") { return false }
+    DocumentPath :: (name: string) -> bool {
+        if name.count < 9 || name.count >= 4096 { return false }
+        suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
+        return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0 || EndsWith(name, ".csv")
     }
-    return true
-}
 
-// Linux's native host owns main; read its file argument without changing
-// the profile selection for launches that supplied no document.
-#if !#defined(KRYON_HOSTED_UI) {
+    // Linux's native host owns main; read its file argument without changing
+    // the profile selection for launches that supplied no document.
     OpenFileArgument :: (out: []u8) -> bool {
         command: [8192]u8
         descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
@@ -2156,17 +803,8 @@ ProfileName :: (name: string) -> bool {
         return true
     }
 
-}
-
-DocumentPath :: (name: string) -> bool {
-    if name.count < 9 || name.count >= 4096 { return false }
-    suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
-    return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0 || EndsWith(name, ".csv")
-}
-
-// Whether the program was started under the given name. `geld` is a link to
-// workbook, and it opens the geld profile because of the name it was run as.
-#if !#defined(KRYON_HOSTED_UI) {
+    // Whether the program was started under the given name. `geld` is a link to
+    // workbook, and it opens the geld profile because of the name it was run as.
     StartedAs :: (name: string) -> bool {
         command: [4096]u8
         descriptor: s32 = OpenFile(CPath("/proc/self/cmdline"), 0)
@@ -2181,333 +819,12 @@ DocumentPath :: (name: string) -> bool {
         return FileName(TextView(command[0:end])) == name
     }
 
-    // The part of a path after its last slash.
-}
-
-FileName :: (path: string) -> string {
-    at: s32 = cast(s32)path.count
-    while at > 0 && path[at - 1] != #char "/" {
-        at -= 1
-    }
-    return path[at:cast(s32)path.count]
-}
-
-EndsWith :: (text: string, suffix: string) -> bool {
-    if text.count < suffix.count { return false }
-    start: s32 = cast(s32)(text.count - suffix.count)
-    return text[start:cast(s32)text.count] == suffix
-}
-
-#if !#defined(KRYON_HOSTED_UI) {
     FileExists :: (path: string) -> bool {
         return PathAccess(CPath(path), 0) == 0
     }
 
-}
-
-// A NUL-terminated copy of a path or name for libc.
-#if !#defined(KRYON_HOSTED_UI) {
+    // A NUL-terminated copy of a path or name for libc.
     CPath :: (text: string) -> *u8 {
         return cast(*u8)Engine.CText(text)
     }
-
-}
-
-MinFloat :: (a: float32, b: float32) -> float32 { return ifx a < b then a else b }
-
-// Menus use the same commands as the keyboard and grid's context menu.
-DrawMenus :: (session: Session, viewport: Rectangle) {
-    file: [4]Menu.MenuItem
-    file_count: s32 = 3
-    file[0] = Menu.MenuItem.{.id = 101, .label = "Open…", .accelerator = "Ctrl+O"}
-    file[1] = Menu.MenuItem.{.id = 102, .label = "Save", .accelerator = "Ctrl+S"}
-    file[2] = Menu.MenuItem.{.id = 103, .label = "Save As…", .accelerator = "Ctrl+Shift+S"}
-    #if #defined(KRYON_HOSTED_UI) {
-        if AppSupports("app.bundle.export.v1") {
-            file_count = 4
-            file[3] = Menu.MenuItem.{.id = 104, .label = "Download Workbook.zx…"}
-        }
-    }
-    edit_items: [9]Menu.MenuItem
-    edit_items[0] = Menu.MenuItem.{.id = 201, .label = "Undo", .accelerator = "Ctrl+Z", .disabled = undo_count == 0 && edit_undo_count == 0}
-    edit_items[1] = Menu.MenuItem.{.id = 202, .label = "Redo", .accelerator = "Ctrl+Y", .disabled = redo_count == 0 && edit_redo_count == 0}
-    edit_items[2].kind = Menu.MenuItemKind.MenuSeparator
-    edit_items[3] = Menu.MenuItem.{.id = 1, .label = "Cut", .accelerator = "Ctrl+X"}
-    edit_items[4] = Menu.MenuItem.{.id = 2, .label = "Copy", .accelerator = "Ctrl+C"}
-    edit_items[5] = Menu.MenuItem.{.id = 3, .label = "Paste", .accelerator = "Ctrl+V", .disabled = !EditorClipboardHasText()}
-    edit_items[6] = Menu.MenuItem.{.id = 4, .label = "Clear contents", .accelerator = "Delete"}
-    edit_items[7].kind = Menu.MenuItemKind.MenuSeparator
-    edit_items[8] = Menu.MenuItem.{.id = 203, .label = "Select all", .accelerator = "Ctrl+A"}
-    view: [1]Menu.MenuItem
-    view[0] = Menu.MenuItem.{.id = 301, .label = "Go to first cell", .accelerator = "Ctrl+Home"}
-    insert: [3]Menu.MenuItem
-    insert[0] = Menu.MenuItem.{.id = 6, .label = "Row above"}
-    insert[1] = Menu.MenuItem.{.id = 10, .label = "Row below"}
-    insert[2] = Menu.MenuItem.{.id = 8, .label = "Column before"}
-    sheet: [5]Menu.MenuItem
-    sheet[0] = Menu.MenuItem.{.id = 401, .label = "Add sheet"}
-    sheet[1] = Menu.MenuItem.{.id = 402, .label = "Previous sheet", .disabled = sheet_index == 0}
-    sheet[2] = Menu.MenuItem.{.id = 403, .label = "Next sheet", .disabled = sheet_index + 1 >= Engine.WorkbookSheetCount(workbook)}
-    sheet[3] = Menu.MenuItem.{.id = 404, .label = "Recalculate"}
-    sheet[4] = Menu.MenuItem.{.id = 405, .label = "Create formula chart from selection"}
-    groups: [5]Menu.MenuGroup
-    groups[0] = Menu.MenuGroup.{"File", file[:file_count]}
-    groups[1] = Menu.MenuGroup.{"Edit", edit_items[:]}
-    groups[2] = Menu.MenuGroup.{"View", view[:]}
-    groups[3] = Menu.MenuGroup.{"Insert", insert[:]}
-    groups[4] = Menu.MenuGroup.{"Sheet", sheet[:]}
-    props: Menu.Props
-    props.key = cast(u64)1300
-    props.bounds = Rectangle.{viewport.x, viewport.y, viewport.width, 26.0}
-    key := menu_key
-    props.focus_requested = key == 299 || ((menu_modifiers & KeyModifierAlt) != 0 && key == 70)
-    props.input.up = key == KeyUp
-    props.input.down = key == KeyDown
-    props.input.left = key == KeyLeft
-    props.input.right = key == KeyRight
-    props.input.enter = key == KeyEnter
-    props.input.escape = key == KeyEscape
-    result := EditorMenu(session, props, groups[:], *menu_state)
-    id := result.activated_id
-    if id == 101 { PickDocument(false) }
-    if id == 102 { SaveWorkbook(true) }
-    if id == 103 { PickDocument(true) }
-    #if #defined(KRYON_HOSTED_UI) {
-        if id == 104 { unused AppService("app.bundle.export.v1", "") }
-    }
-    if id == 201 { UndoCommand() }
-    if id == 202 { RedoCommand() }
-    if id == 203 { SelectAllCells() }
-    if id == 301 { GoToFirstCell() }
-    if id == 401 {
-        RecordChange()
-        name: [64]u8
-        SetText(name[:], "Sheet")
-        digits: [16]u8
-        AppendText(name[:], FormatInteger(cast(s64)Engine.WorkbookSheetCount(workbook) + 1, digits[:]))
-        unused Engine.WorkbookAddSheet(workbook, Engine.CText(TextUntilNul(name[:])))
-        sheet_index = Engine.WorkbookSheetCount(workbook) - 1
-        scroll_row = 0; scroll_column = 0
-        Changed()
-    }
-    if id == 402 || id == 403 {
-        if edit_focused { CommitCell(); EndEdit() }
-        sheet_index += ifx id == 402 then -1 else 1
-        scroll_row = 0; scroll_column = 0
-        SelectCell(0, 0)
-    }
-    if id == 404 { Changed() }
-    if id == 405 { CreateFormulaChart() }
-    if id > 0 && id < 11 { GridCommand(id) }
-}
-
-#if !#defined(KRYON_HOSTED_UI) {
-    PickDocument :: (save: bool) {
-        path: [4096]u8
-        props: Picker.FilePickerProps
-        props.title = ifx save then "Save Workbook As" else "Open Workbook"
-        props.filter = ifx save then "Spreadsheet | *.gnumeric" else "Spreadsheets | *.gnumeric *.csv"
-        props.save = save
-        suggestion: [4096]u8
-        SetText(suggestion[:], FileName(TextUntilNul(data_path[:])))
-        props.suggested_name = TextUntilNul(suggestion[:])
-        result := Picker.PickFile(props, path[:])
-        if result < 0 { SetText(status[:], "Could not open the file chooser") }
-        if result != 1 { return }
-        if !save { OpenDocument(TextUntilNul(path[:])); return }
-        if !EndsWith(TextUntilNul(path[:]), ".gnumeric") { AppendText(path[:], ".gnumeric") }
-        old_path: [4096]u8
-        old_directory: [4096]u8
-        SetText(old_path[:], TextUntilNul(data_path[:]))
-        SetText(old_directory[:], TextUntilNul(data_directory[:]))
-        SetText(data_path[:], TextUntilNul(path[:]))
-        data_directory[0] = 0
-        dirty = true
-        SaveWorkbook(true)
-        if dirty {
-            SetText(data_path[:], TextUntilNul(old_path[:]))
-            SetText(data_directory[:], TextUntilNul(old_directory[:]))
-        } else { UpdateDocumentTitle() }
-    }
-
-}
-
-#if #defined(KRYON_HOSTED_UI) {
-    input_pointer: PointerFrame;
-    input_secondary: SecondaryPointerFrame;
-    input_wheel: float32;
-    document_pending: bool;
-    document_export: bool;
-    FollowSystemTheme :: () {}
-    MonotonicMilliseconds :: () -> s64 { return cast(s64)(AppNow() * 1000.0) }
-    LoadWorkbook :: () {
-        workbook = Engine.WorkbookNew()
-        SetText(data_path[:], "workbook.gnumeric")
-        loaded := Engine.WorkbookLoadFile(workbook, Engine.CText("workbook.gnumeric")) != 0
-        load_failed = !loaded && Engine.DocumentStatus != DOCUMENT_MISSING
-        if Engine.WorkbookSheetCount(workbook) == 0 { unused Engine.WorkbookAddSheet(workbook, Engine.CText("Sheet1")) }
-        if load_failed { SetText(status[:], "Could not open workbook.gnumeric") }
-    }
-    SaveWorkbook :: (finish_edit: bool) {
-        if load_failed { return }
-        if finish_edit && edit_focused { CommitCell(); EndEdit(); SelectCell(selected_row, selected_column) }
-        if Engine.WorkbookWriteGnumeric(workbook, Engine.CText(TextUntilNul(data_path[:]))) != 0 {
-            dirty = false; save_retry_at = 0; status[0] = 0
-        } else { dirty = true; save_retry_at = MonotonicMilliseconds() + 2000; SetText(status[:], "Could not save workbook") }
-    }
-    PickDocument :: (save: bool) {
-        if document_pending { return }
-        if save { SaveWorkbook(true); if dirty { return } }
-        response := AppService("document.pick.v1", ifx save then "{\"op\":\"export\",\"name\":\"workbook.gnumeric\",\"filter\":\"Spreadsheet | *.gnumeric\",\"suggested_name\":\"workbook.gnumeric\"}" else "{\"op\":\"import\",\"name\":\"incoming.gnumeric\",\"filter\":\"Spreadsheet | *.gnumeric\"}")
-        if response == "pending" {
-            document_pending = true
-            document_export = save
-        } else { DocumentTransferred(response, save) }
-    }
-    DocumentTransferred :: (response: string, save: bool) {
-        if response == "ready" && !save {
-            OpenDocument("incoming.gnumeric")
-            if TextUntilNul(data_path[:]) == "incoming.gnumeric" {
-                SetText(data_path[:], "workbook.gnumeric")
-                dirty = true
-            }
-        }
-        if response == "error" { SetText(status[:], "Could not transfer the document") }
-    }
-    EditorKey :: (session: Session) -> s32 { unused session; return AppKey() }
-    EditorModifiers :: (session: Session) -> s32 { unused session; return AppModifiers() }
-    EditorTypedText :: (session: Session, out: []u8) -> s32 {
-        unused session
-        value := AppFieldInput().text
-        SetText(out, value)
-        return cast(s32)TextUntilNul(out).count
-    }
-    EditorPointer :: (session: Session) -> PointerFrame { unused session; return input_pointer }
-    EditorSecondaryPointer :: (session: Session) -> SecondaryPointerFrame { unused session; return input_secondary }
-    EditorWheel :: (session: Session, bounds: Rectangle) -> float32 {
-        unused session
-        wheel := input_wheel; input_wheel = 0.0
-        return ifx PointInBounds(input_pointer.x, input_pointer.y, bounds) then wheel else 0.0
-    }
-    EditorClipboardSet :: (value: string) { unused ClipboardCopy(value, 0) }
-    EditorClipboardText :: (out: []u8) -> string {
-        value := AppService("input.v1", "clipboard")
-        SetText(out, value)
-        return TextUntilNul(out)
-    }
-    EditorClipboardHasText :: () -> bool { return AppService("input.v1", "clipboard-has-text") == "true" }
-    ReadInput :: () {
-        value := AppService("input.v1", "frame")
-        input_pointer.x = cast(float32)Engine.Number(value, "x")
-        input_pointer.y = cast(float32)Engine.Number(value, "y")
-        input_pointer.down = Engine.Number(value, "down") != 0
-        input_pointer.pressed = Engine.Number(value, "pressed") != 0
-        input_pointer.released = Engine.Number(value, "released") != 0
-        input_secondary.down = Engine.Number(value, "secondary_down") != 0
-        input_secondary.pressed = Engine.Number(value, "secondary_pressed") != 0
-        input_secondary.released = Engine.Number(value, "secondary_released") != 0
-        input_wheel = cast(float32)Engine.Number(value, "wheel")
-    }
-    #scope_export
-    #program_export
-    Main :: () -> s32 {
-        mode := AppMode()
-        if mode == APP_IDENTIFY { AppIdentity("workbook", 1); AppDescribe("Workbook", RowAddIcon.Shape); return APP_PROTOCOL }
-        if mode == APP_FRAME {
-            if !AppSupports("spreadsheet.v1") {
-                Text.Draw(AppSession(), Text.Props.{.bounds = AppBounds(), .text = "Update Werkzeug to open Workbook.", .size = Text.Text16})
-                return 0
-            }
-            ReadInput()
-            unused Frame(AppSession(), AppBounds())
-            AppKeyboard(edit_focused)
-        }
-        if mode == APP_SAVE && workbook != null { SaveWorkbook(true) }
-        return 0
-    }
-    #scope_file
-} else {
-    EditorKey :: (session: Session) -> s32 { return KeyboardTake(session) }
-    EditorModifiers :: (session: Session) -> s32 { return KeyboardModifiers(session) }
-    EditorTypedText :: (session: Session, out: []u8) -> s32 { return TakeTypedText(session, out) }
-    EditorPointer :: (session: Session) -> PointerFrame { return PointerSample(session) }
-    EditorSecondaryPointer :: (session: Session) -> SecondaryPointerFrame { return SecondaryPointerSample(session) }
-    EditorWheel :: (session: Session, bounds: Rectangle) -> float32 { return PointerWheelTake(session, bounds) }
-    EditorClipboardSet :: (value: string) { SystemClipboardSet(value) }
-    EditorClipboardText :: (out: []u8) -> string { return SystemClipboardText(out) }
-    EditorClipboardHasText :: () -> bool { return SystemClipboardHasText() }
-}
-
-EditorColor :: (name: string) -> Color { return Grid.GridColor(name) }
-
-EditorMenu :: (session: Session, props: Menu.Props, groups: []Menu.MenuGroup, state: *Menu.MenuState) -> Menu.MenuResult {
-    #if #defined(KRYON_HOSTED_UI) {
-        if !state.initialized { Menu.MenuStateInit(state) }
-        result: Menu.MenuResult
-        x := props.bounds.x + 2.0
-        for index: 0..groups.count - 1 {
-            button: Button.Props
-            button.key = cast(u64)(1310 + index)
-            button.label = groups[index].label
-            button.bounds = Rectangle.{x, props.bounds.y, 58.0, 26.0}
-            button.size = ControlSize.ControlSizeSmall
-            if Button.Draw(session, button) != 0 { state.open_index = ifx state.open_index == index then -1 else cast(s32)index }
-            if state.open_index == index { grid_menu_x = x }
-            x += 58.0
-        }
-        if state.open_index >= 0 && state.open_index < groups.count {
-            items: [16]ContextMenu.ContextMenuItem
-            commands := groups[state.open_index].items
-            for index: 0..commands.count - 1 {
-                items[index].id = commands[index].id
-                items[index].label = commands[index].label
-                items[index].disabled = commands[index].disabled
-                items[index].separator = commands[index].kind == Menu.MenuItemKind.MenuSeparator
-            }
-            menu: ContextMenu.Props
-            menu.key = cast(u64)(1350 + state.open_index)
-            menu.open = true; menu.x = grid_menu_x; menu.y = props.bounds.y + 26.0
-            menu.escape = props.input.escape
-            drawn := ContextMenu.Draw(session, menu, items[:commands.count])
-            if !drawn.open { state.open_index = -1 }
-            result.activated_id = drawn.activated_id
-        }
-        result.open_index = state.open_index
-        return result
-    } else {
-        return Menu.Draw(session, props, groups, state)
-    }
-}
-
-#if #defined(KRYON_HOSTED_UI) {
-    EditorString :: (value: string) -> string { return value }
-    EditorSheetPrefix :: (sheet: s32, out: []u8) { unused Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(workbook, sheet), out) }
-    EditorCellDisplay :: (row: s32, col: s32, out: []u8) { Engine.WorkbookCellDisplay(workbook, sheet_index, row, col, out, cast(s32)out.count) }
-} else {
-    EditorString :: (value: *s8) -> string { return TextFromCString(cast(*u8)value) }
-    EditorSheetPrefix :: (sheet: s32, out: []u8) { unused Engine.FormulaSheetPrefix(Engine.WorkbookSheetName(workbook, sheet), cast(*s8)*out[0]) }
-    EditorCellDisplay :: (row: s32, col: s32, out: []u8) { Engine.WorkbookCellDisplay(workbook, sheet_index, row, col, cast(*s8)*out[0], cast(s32)out.count) }
-}
-
-EditorGlyphWidth :: (text: string) -> s32 {
-    #if #defined(KRYON_HOSTED_UI) {
-        bytes: Vec(u8)
-        BuilderPrint(*bytes, "{\"op\":\"measure\",\"text\":")
-        Engine.Quoted(*bytes, text)
-        BuilderPrint(*bytes, "}")
-        return Engine.Number(AppService("input.v1", BuilderFinish(bytes)), "width")
-    } else {
-        return GlyphWidth(text, Text.Text14, "")
-    }
-}
-
-GoToFirstCell :: () {
-    if edit_focused { CommitCell(); EndEdit() }
-    SelectCell(0, 0); scroll_row = 0; scroll_column = 0
-}
-SelectAllCells :: () {
-    if edit_focused { CommitCell(); EndEdit() }
-    SelectCell(0, 0)
-    range_row = Max(0, Engine.WorkbookSheetRows(workbook, sheet_index) - 1)
-    range_column = Max(0, Engine.WorkbookSheetColumns(workbook, sheet_index) - 1)
 }

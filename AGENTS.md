@@ -8,11 +8,13 @@ documents usage, dependencies and the test tooling.
 
 | Path | Contents |
 | --- | --- |
-| `src/app.zi` | Desktop application |
+| `src/editor.zi` | Embeddable editor exported as `workbook/editor` (handle, frame, save) |
+| `src/app.zi` | Desktop host: profiles, documents, title, menus and theme |
 | `src/engine.zi` | Spreadsheet engine for new workbooks and CSV |
 | `src/cell.zi` | Headless engine driver (`cell eval FILE`) |
 | `src/gnumeric.zi` | Imported-document support through the installed gnumeric library |
-| `tests/` | Structure, conversion, desktop, menu and parity tests |
+| `previews/host.zi` | Minimal host with a sidebar around the embedded editor |
+| `tests/` | Structure, conversion, desktop, host, menu and parity tests |
 | `docs/GNUMERIC_PARITY.md` | Document-format notes and the function inventory |
 
 ## Commands
@@ -20,8 +22,9 @@ documents usage, dependencies and the test tooling.
 ```sh
 make            # build ./build/workbook-desktop and ./build/cell
 make check      # type-check app, driver and tests
-make test       # full suite; desktop test on a private display, parity
+make test       # full suite; desktop and host tests on private displays, parity
 make test-ci    # CI suite without parity
+make host-test  # the exported editor inside a minimal host, private display
 make parity     # compare against gnumeric ssconvert
 make fuzz REFERENCE=PATH  # compare against another cell build
 make install    # install workbook, cell and geld under ~/.local
@@ -29,9 +32,9 @@ make install    # install workbook, cell and geld under ~/.local
 
 ## Pins
 
-- Ziran toolchain: `036cb7b5d2630302e0b73a2336ccbfb6d0250be5`
-- Kryon: `c7286549f7741c48730cc983f14aed233cb47c37`
-- mingcute: `9cc6872f75447c3a24c16764f9829d0f58751cb0`; css: `df8bbbbd665bd0632cd8687a145addc0b745eb87`
+- Ziran toolchain: `9432a110709c4a4f72c4f732fcfc368e15213a54`
+- Kryon: `facaace35051336a2a993d90d1bb7d7396543852`
+- mingcute: `9cc6872f75447c3a24c16764f9829d0f58751cb0`; css: `7dd9fff21bd1721deea91071a2317d106e901208`
 
 Commit as Waozi <waozi@proton.me>; ordinary changes stay in CHANGELOG's
 `Unreleased` section.

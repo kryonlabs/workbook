@@ -1,0 +1,223 @@
+// A minimal Kryon host with Workbook's editor embedded beside host-owned UI.
+// The host test starts this program on a private display and drives it through
+// Kryon's test driver; the sidebar buttons stand in for a real host's pages.
+using Editor :: #import "editor";
+Engine :: #import "engine";
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
+Text :: #import "kryon/text";
+Grid :: #import "grid";
+#import "kryon/geometry"
+#import "kryon/session"
+#import "kryon/drawing_props"
+#import "kryon/control_props"
+#import "kryon/text_input"
+#import "kryon/key_input"
+#import "kryon/tree_input"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/number_text"
+#import "std/environment_linux"
+
+SidebarWidth :: 200.0;
+
+host_editor: Editor;
+editor: *Editor;
+started: bool;
+host_focus: bool;
+host_clicked: bool;
+typed_storage: [128]u8;
+gnumeric_path: [4096]u8;
+csv_path: [4096]u8;
+path_text: [4096]u8;
+doc_text: [4200]u8;
+state_text: [64]u8;
+focus_text: [64]u8;
+save_text: [64]u8;
+editing_text: [64]u8;
+a1_text: [300]u8;
+b1_text: [300]u8;
+
+SetText :: (output: []u8, value: string) {
+    output[0] = 0
+    AppendText(output, value)
+}
+
+AppendText :: (output: []u8, value: string) {
+    at: s32 = cast(s32)TextUntilNul(output).count
+    index: s32 = 0
+    while index < cast(s32)value.count && at + 1 < cast(s32)output.count {
+        output[at] = value[index]
+        at += 1
+        index += 1
+    }
+    output[at] = 0
+}
+
+FileName :: (path: string) -> string {
+    at: s32 = cast(s32)path.count
+    while at > 0 && path[at - 1] != #char "/" {
+        at -= 1
+    }
+    return path[at:cast(s32)path.count]
+}
+
+CloseEditor :: () {
+    if editor == null { return }
+    EditorSetFocused(editor, false)
+    EditorClose(editor)
+    editor = null
+}
+
+OpenGnumeric :: () {
+    CloseEditor()
+    editor = EditorOpen(TextUntilNul(gnumeric_path[:]))
+    if editor == null { editor = EditorNew(TextUntilNul(gnumeric_path[:])) }
+    if editor != null {
+        EditorSetAutosave(editor, false)
+        EditorSetFocused(editor, true)
+    }
+    host_focus = false
+}
+
+OpenCsv :: () {
+    CloseEditor()
+    editor = EditorOpen(TextUntilNul(csv_path[:]))
+    if editor != null {
+        EditorSetAutosave(editor, false)
+        EditorSetFocused(editor, true)
+    }
+    host_focus = false
+}
+
+Start :: () {
+    SetText(gnumeric_path[:], EnvironmentText("HOST_TEST_GNUMERIC"))
+    SetText(csv_path[:], EnvironmentText("HOST_TEST_CSV"))
+    OpenGnumeric()
+}
+
+ButtonAt :: (session: Session, x: float32, y: float32, id: s32, label: string) -> bool {
+    button: Button.Props
+    button.id = id
+    button.key = cast(u64)(100 + id)
+    button.label = label
+    button.bounds = Rectangle.{x, y, SidebarWidth - 24.0, 28.0}
+    return Button.Draw(session, button) != 0
+}
+
+LabelAt :: (session: Session, x: float32, y: float32, key: u64, text: string) {
+    label: Text.Props
+    label.key = key
+    label.text = text
+    label.size = Text.Text14
+    label.bounds = Rectangle.{x, y, SidebarWidth - 24.0, 20.0}
+    Text.Draw(session, label)
+}
+
+// Reads the shown cell's displayed value into output as "NAME=value".
+CellLabel :: (name: string, sheet: s32, row: s32, column: s32, output: []u8) {
+    SetText(output, name)
+    AppendText(output, "=")
+    book := EditorWorkbook(editor)
+    if book == null { return }
+    display: [256]u8
+    Engine.WorkbookCellDisplay(book, sheet, row, column, cast(*s8)*display[0], 256)
+    AppendText(output, TextUntilNul(display[:]))
+}
+
+DrawSidebar :: (session: Session, viewport: Rectangle) {
+    panel: Box.Props
+    panel.key = cast(u64)900000
+    panel.bounds = Rectangle.{viewport.x, viewport.y, SidebarWidth, viewport.height}
+    panel.fill = Grid.GridColor("surface")
+    panel.border = Grid.GridColor("border-soft")
+    Box.Draw(session, panel)
+    host_clicked = false
+    x: float32 = viewport.x + 12.0
+    y: float32 = viewport.y + 16.0
+    if ButtonAt(session, x, y, 1, "Host focus") {
+        host_clicked = true
+        host_focus = true
+        if editor != null { EditorSetFocused(editor, false) }
+    }
+    y += 36.0
+    if ButtonAt(session, x, y, 2, "Editor focus") {
+        host_clicked = true
+        host_focus = false
+        if editor != null { EditorSetFocused(editor, true) }
+    }
+    y += 36.0
+    if ButtonAt(session, x, y, 3, "Save") {
+        host_clicked = true
+        if editor != null { unused EditorSave(editor, true) }
+    }
+    y += 36.0
+    if ButtonAt(session, x, y, 4, "Close") {
+        host_clicked = true
+        CloseEditor()
+    }
+    y += 36.0
+    if ButtonAt(session, x, y, 5, "Open Gnumeric") {
+        host_clicked = true
+        OpenGnumeric()
+    }
+    y += 36.0
+    if ButtonAt(session, x, y, 6, "Open CSV") {
+        host_clicked = true
+        OpenCsv()
+    }
+    y += 36.0
+    if ButtonAt(session, x, y, 7, "Reopen") {
+        host_clicked = true
+        OpenGnumeric()
+    }
+
+    SetText(state_text[:], ifx editor == null then "state=closed" else "state=open")
+    if editor == null {
+        SetText(focus_text[:], "focus=closed")
+        SetText(doc_text[:], "doc=")
+        SetText(save_text[:], "save=0")
+        SetText(editing_text[:], "editing=no")
+    } else {
+        SetText(focus_text[:], ifx EditorFocused(editor) then "focus=editor" else "focus=host")
+        SetText(doc_text[:], "doc=")
+        AppendText(doc_text[:], FileName(EditorPath(editor, path_text[:])))
+        SetText(save_text[:], "save=")
+        digits: [24]u8
+        AppendText(save_text[:], FormatInteger(cast(s64)EditorSaveCount(editor), digits[:]))
+        SetText(editing_text[:], ifx EditorEditingCell(editor) then "editing=yes" else "editing=no")
+    }
+    CellLabel("A1", 0, 0, 0, a1_text[:])
+    CellLabel("B1", 0, 0, 1, b1_text[:])
+
+    y = viewport.y + 16.0 + 7.0 * 36.0 + 12.0
+    LabelAt(session, x, y, cast(u64)910001, TextUntilNul(state_text[:])); y += 24.0
+    LabelAt(session, x, y, cast(u64)910002, TextUntilNul(focus_text[:])); y += 24.0
+    LabelAt(session, x, y, cast(u64)910003, TextUntilNul(doc_text[:])); y += 24.0
+    LabelAt(session, x, y, cast(u64)910004, TextUntilNul(a1_text[:])); y += 24.0
+    LabelAt(session, x, y, cast(u64)910005, TextUntilNul(b1_text[:])); y += 24.0
+    LabelAt(session, x, y, cast(u64)910006, TextUntilNul(save_text[:])); y += 24.0
+    LabelAt(session, x, y, cast(u64)910007, TextUntilNul(editing_text[:]))
+}
+
+#program_export
+Frame :: (session: Session, viewport: Rectangle) -> s32 {
+    if !started { Start(); started = true }
+    DrawSidebar(session, viewport)
+    bounds: Rectangle = Rectangle.{viewport.x + SidebarWidth, viewport.y,
+        viewport.width - SidebarWidth, viewport.height}
+    input := EditorSample(session, bounds, editor, typed_storage[:], false)
+    if host_focus {
+        // The host owns the keyboard while it has focus; its own widgets would
+        // consume these in a real host.
+        while TypedCodepointTake(session) != 0 {}
+        unused KeyboardTake(session)
+    }
+    if host_clicked {
+        input.blocked = true
+        host_clicked = false
+    }
+    unused EditorFrame(session, bounds, editor, input)
+    if editor != null && EditorFocused(editor) { host_focus = false }
+    return 0
+}

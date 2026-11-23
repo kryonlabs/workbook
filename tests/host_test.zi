@@ -1,0 +1,159 @@
+// A minimal host embeds the exported editor beside host-owned UI on a private
+// display: open a .gnumeric and a .csv, type a value and a formula, undo/redo,
+// save, close, reopen, and hand keyboard focus between host and editor.
+#load "test_support.zi";
+#import "kryon/private_display"
+#import "kryon/test_driver_client"
+
+HostAppPath :: "build/preview/desktop/host/workbook-desktop";
+
+GnumericDocument :: #string END
+<?xml version="1.0" encoding="UTF-8"?>
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:SheetNameIndex><gnm:SheetName>Sheet1</gnm:SheetName></gnm:SheetNameIndex>
+  <gnm:Sheets><gnm:Sheet><gnm:Name>Sheet1</gnm:Name><gnm:MaxCol>1</gnm:MaxCol><gnm:MaxRow>0</gnm:MaxRow>
+    <gnm:Cells>
+      <gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell>
+      <gnm:Cell Row="0" Col="1" ValueType="40">2</gnm:Cell>
+    </gnm:Cells>
+  </gnm:Sheet></gnm:Sheets>
+</gnm:Workbook>
+END;
+
+CsvDocument :: "x,y\n1,2\n";
+
+// Cell centers in the hosted window: the host sidebar is 200 wide, the grid
+// header 40, a column 96, the table starts at 60, its header is 24 and a row 22.
+CellA1X :: 288.0;
+CellB1X :: 384.0;
+CellRow1Y :: 95.0;
+
+failures: s32;
+path_buffer: [4096]u8;
+csv_buffer: [4096]u8;
+driver_buffer: [4096]u8;
+app_log_buffer: [4096]u8;
+xvfb_buffer: [4096]u8;
+editor_document_env: [4200]u8;
+editor_csv_env: [4200]u8;
+
+Step :: (ok: bool, what: string) {
+    if ok { return }
+    failures += 1
+    WriteText(2, "FAIL: ")
+    WriteText(2, what)
+    WriteText(2, "\n")
+}
+
+PathJoin :: (directory: string, name: string, output: []u8) -> string {
+    SetText(output, directory)
+    AppendText(output, "/")
+    AppendText(output, name)
+    return TextUntilNul(output)
+}
+
+#program_export
+main :: () -> s32 {
+    Check(IsExecutable(HostAppPath), "build the host app first: make host-test")
+    UnsetEnvironment("DISPLAY")
+    UnsetEnvironment("WAYLAND_DISPLAY")
+    UnsetEnvironment("XAUTHORITY")
+    template: [4096]u8
+    parent: string = Environment("TMPDIR")
+    if parent.count == 0 { parent = "/tmp" }
+    SetText(template[:], parent)
+    AppendText(template[:], "/workbook-host-XXXXXX")
+    work := MakeTemporaryDirectory(template[:])
+    Check(work.count > 0, "cannot create a temporary directory")
+    SetText(cleanup_directory[:], work)
+
+    gnumeric_path := PathJoin(work, "plan.gnumeric", path_buffer[:])
+    csv_path := PathJoin(work, "plan.csv", csv_buffer[:])
+    Check(WriteWholeFile(gnumeric_path, GnumericDocument), "cannot write the gnumeric document")
+    Check(WriteWholeFile(csv_path, CsvDocument), "cannot write the CSV document")
+
+    driver_path := PathJoin(work, "driver", driver_buffer[:])
+    driver := DriverOpen(driver_path)
+    app_log := PathJoin(work, "app.log", app_log_buffer[:])
+    xvfb_log := PathJoin(work, "xvfb.log", xvfb_buffer[:])
+    display := OpenPrivateDisplay(1000, 700, xvfb_log)
+    if !display.valid {
+        WriteText(2, "FAIL: ")
+        WriteText(2, display.error)
+        WriteText(2, "\n")
+        RemoveTree(work)
+        return 1
+    }
+    arguments: [1]string
+    arguments[0] = HostAppPath
+    environment: [3]string
+    environment[0] = DriverEnvironment(*driver)
+    SetText(editor_document_env[:], "HOST_TEST_GNUMERIC=")
+    AppendText(editor_document_env[:], gnumeric_path)
+    environment[1] = TextUntilNul(editor_document_env[:])
+    SetText(editor_csv_env[:], "HOST_TEST_CSV=")
+    AppendText(editor_csv_env[:], csv_path)
+    environment[2] = TextUntilNul(editor_csv_env[:])
+    app := StartOnDisplay(*display, arguments[:], environment[:], ".", app_log)
+    if !app.started {
+        WriteText(2, "FAIL: the host app did not start\n")
+        ClosePrivateDisplay(*display)
+        RemoveTree(work)
+        return 1
+    }
+    cleanup_pid = app.pid
+    DriverWatch(*driver, app.pid, app_log)
+
+    Step(DriverWait(*driver, .{label = "state=open"}, 15000), "the host opens a document")
+    Step(DriverWait(*driver, .{label = "focus=editor"}, 5000), "the editor takes focus")
+    Step(DriverWait(*driver, .{label = "A1=1"}, 5000), "A1 shows the document value")
+    Step(DriverWait(*driver, .{label = "B1=2"}, 5000), "B1 shows the document value")
+
+    Step(DriverTap(*driver, CellA1X, CellRow1Y), "tap A1")
+    Step(DriverType(*driver, "9"), "type a value")
+    Step(DriverWait(*driver, .{label = "A1=9"}, 5000), "A1 shows the typed value")
+
+    Step(DriverTap(*driver, CellB1X, CellRow1Y), "tap B1")
+    Step(DriverType(*driver, "=SUM(1,2)"), "type a formula")
+    Step(DriverWait(*driver, .{label = "B1=3"}, 5000), "B1 calculates the formula")
+    Step(DriverKey(*driver, DRIVER_KEY_ENTER, false, false), "commit the formula")
+    Step(DriverWait(*driver, .{label = "editing=no"}, 5000), "the formula is committed")
+
+    Step(DriverKey(*driver, 90, true, false), "undo")
+    Step(DriverWait(*driver, .{label = "B1=2"}, 5000), "undo restores the old value")
+    Step(DriverKey(*driver, 89, true, false), "redo")
+    Step(DriverWait(*driver, .{label = "B1=3"}, 5000), "redo puts the formula back")
+
+    Step(DriverPress(*driver, .{label = "Save", role = "button"}), "press Save")
+    Step(DriverWait(*driver, .{label = "save=1"}, 5000), "the editor saves once")
+    Step(DriverPress(*driver, .{label = "Close", role = "button"}), "press Close")
+    Step(DriverWait(*driver, .{label = "state=closed"}, 5000), "the editor closes")
+    Step(DriverPress(*driver, .{label = "Reopen", role = "button"}), "press Reopen")
+    Step(DriverWait(*driver, .{label = "state=open"}, 5000), "the editor reopens")
+    Step(DriverWait(*driver, .{label = "A1=9"}, 5000), "the saved value is reloaded")
+    Step(DriverWait(*driver, .{label = "B1=3"}, 5000), "the saved formula is reloaded")
+
+    Step(DriverPress(*driver, .{label = "Open CSV", role = "button"}), "open the CSV document")
+    Step(DriverWait(*driver, .{label = "A1=x"}, 5000), "the CSV text is shown")
+    Step(DriverWait(*driver, .{label = "B1=y"}, 5000), "the CSV header is shown")
+
+    Step(DriverPress(*driver, .{label = "Host focus", role = "button"}), "press Host focus")
+    Step(DriverWait(*driver, .{label = "focus=host"}, 5000), "the host takes focus")
+    Step(DriverType(*driver, "7"), "type while the host has focus")
+    Step(DriverWaitIdle(*driver, 3, 3000), "the host consumes the typed key")
+    Step(DriverTap(*driver, CellA1X, CellRow1Y), "click the editor")
+    Step(DriverWait(*driver, .{label = "focus=editor"}, 5000), "the editor takes focus back")
+    Step(DriverWait(*driver, .{label = "A1=x"}, 5000), "the host's key did not reach the cell")
+    Step(DriverWaitGone(*driver, .{label = "A1=7"}, 2000), "the editor ignored the host-focused key")
+    Step(DriverType(*driver, "3"), "type after focus returns")
+    Step(DriverWait(*driver, .{label = "A1=3"}, 5000), "the editor takes keys again")
+
+    Step(StopOwnedProcess(*app, 5000), "the host app stops")
+    ClosePrivateDisplay(*display)
+    RemoveTree(work)
+    cleanup_pid = 0
+    cleanup_directory[0] = 0
+    if failures > 0 { return 1 }
+    Say("host editor: open, edit, undo/redo, save, close/reopen, CSV and focus hand-off passed")
+    return 0
+}
