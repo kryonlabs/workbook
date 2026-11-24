@@ -7,6 +7,12 @@
 Json :: #import "std/json_scan";
 
 Workbook :: struct { id: s32; sheets: s32; cells: s32; }
+CellMerge :: struct { start_row: s32; start_col: s32; end_row: s32; end_col: s32; merged: s32; }
+CellStyle :: struct {
+    bg_rgba: u32; fg_rgba: u32; has_bg: s32; has_fg: s32;
+    bold: s32; italic: s32; align_h: s32; wrap: s32; font_size: float32;
+}
+SheetChart :: struct { left_pts: float64; top_pts: float64; right_pts: float64; bottom_pts: float64; }
 FormulaRef :: struct {
     start: s32; end: s32; corner_start: s32; sheet: s32; range: s32
     row1: s32; col1: s32; row2: s32; col2: s32
@@ -203,6 +209,19 @@ FileRequest :: (book: *Workbook, op: string, path: string) -> s32 {
 }
 WorkbookLoadFile :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "load", path) }
 WorkbookWriteGnumeric :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "save", path) }
+WorkbookWriteOds :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "save", path) }
+WorkbookSheetVisible :: (book: *Workbook, sheet: s32) -> s32 { unused book; unused sheet; return 1 }
+WorkbookSetSheetVisible :: (book: *Workbook, sheet: s32, visible: s32) -> s32 { unused book; unused sheet; unused visible; return 0 }
+WorkbookColHidden :: (book: *Workbook, sheet: s32, col: s32) -> s32 { unused book; unused sheet; unused col; return 0 }
+WorkbookColWidth :: (book: *Workbook, sheet: s32, col: s32) -> float32 { unused book; unused sheet; unused col; return 0.0 }
+WorkbookRowHeight :: (book: *Workbook, sheet: s32, row: s32) -> float32 { unused book; unused sheet; unused row; return 0.0 }
+WorkbookColDistancePts :: (book: *Workbook, sheet: s32, from: s32, to: s32) -> float64 { unused book; unused sheet; unused from; unused to; return 0.0 }
+WorkbookRowDistancePts :: (book: *Workbook, sheet: s32, from: s32, to: s32) -> float64 { unused book; unused sheet; unused from; unused to; return 0.0 }
+WorkbookCellMerge :: (book: *Workbook, sheet: s32, row: s32, col: s32, out: *CellMerge) -> s32 { unused book; unused sheet; unused row; unused col; if out != null { out.* = CellMerge.{} }; return 0 }
+WorkbookCellStyle :: (book: *Workbook, sheet: s32, row: s32, col: s32, out: *CellStyle) -> s32 { unused book; unused sheet; unused row; unused col; if out != null { out.* = CellStyle.{} }; return 0 }
+WorkbookChartCount :: (book: *Workbook, sheet: s32) -> s32 { unused book; unused sheet; return 0 }
+WorkbookChartBounds :: (book: *Workbook, sheet: s32, chart_index: s32, out: *SheetChart) -> s32 { unused book; unused sheet; unused chart_index; if out != null { out.* = SheetChart.{} }; return 0 }
+WorkbookChartRenderRgba :: (book: *Workbook, sheet: s32, chart_index: s32, width: s32, height: s32, out_rgba: []u8) -> s32 { unused book; unused sheet; unused chart_index; unused width; unused height; unused out_rgba; return 0 }
 
 PacketNumber :: (text: string, at: *s64) -> s32 {
     n: s32

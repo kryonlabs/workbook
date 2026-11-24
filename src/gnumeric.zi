@@ -1,9 +1,40 @@
-// Gnumeric's native document engine owns imported .gnumeric workbooks.
+// Gnumeric's native document engine owns imported .gnumeric and .ods workbooks.
 // Its public C ABI is loaded on demand; the editor and headless driver stay
 // Ziran. Keeping the native document retains styles, names, arrays, charts,
 // print settings and shared expressions through edits, saves and undo.
 NativeArray :: struct { data: **void; count: u32; }
 NativePosition :: struct { col: s32; row: s32; }
+NativeRange :: struct { start: NativePosition; end: NativePosition; }
+NativeSList :: struct { data: *void; next: *NativeSList; }
+NativeColor :: struct { go_color: u32; ref_count: s32; is_auto: s32; }
+NativeColRowInfo :: struct { size_pts: float64; size_pixels: s32; flags: u32; }
+
+CellMerge :: struct {
+    start_row: s32;
+    start_col: s32;
+    end_row: s32;
+    end_col: s32;
+    merged: s32;
+}
+
+CellStyle :: struct {
+    bg_rgba: u32;
+    fg_rgba: u32;
+    has_bg: s32;
+    has_fg: s32;
+    bold: s32;
+    italic: s32;
+    align_h: s32;
+    wrap: s32;
+    font_size: float32;
+}
+
+SheetChart :: struct {
+    left_pts: float64;
+    top_pts: float64;
+    right_pts: float64;
+    bottom_pts: float64;
+}
 
 #scope_file
 native_dl :: #system_library "dl";
@@ -191,11 +222,84 @@ native_current_sheet: NativeFn_current_sheet;
 NativeFn_focus_sheet :: #type (*void, *void) #c_call;
 native_focus_sheet: NativeFn_focus_sheet;
 
-NativeResolve :: (slot: *void, name: string) -> bool {
-    symbol: *void = NativeSymbol(native_library, CText(name))
+// Optional layout, style, merge, visibility and chart rendering symbols.
+native_cairo_library: *void;
+NativeFn_get_int :: #type (*void, *s8, *s32, *void) #c_call;
+native_get_int: NativeFn_get_int;
+NativeFn_set_string :: #type (*void, *s8, *s8, *void) #c_call;
+native_set_string: NativeFn_set_string;
+NativeFn_set_int :: #type (*void, *s8, s32, *void) #c_call;
+native_set_int: NativeFn_set_int;
+NativeFn_sheet_add :: #type (*void, s32, s32, s32) -> *void #c_call;
+native_sheet_add: NativeFn_sheet_add;
+NativeFn_col_hidden :: #type (*void, s32) -> s32 #c_call;
+native_col_hidden: NativeFn_col_hidden;
+NativeFn_col_info :: #type (*void, s32) -> *NativeColRowInfo #c_call;
+native_col_info: NativeFn_col_info;
+NativeFn_row_info :: #type (*void, s32) -> *NativeColRowInfo #c_call;
+native_row_info: NativeFn_row_info;
+NativeFn_col_distance_pts :: #type (*void, s32, s32) -> float64 #c_call;
+native_col_distance_pts: NativeFn_col_distance_pts;
+NativeFn_row_distance_pts :: #type (*void, s32, s32) -> float64 #c_call;
+native_row_distance_pts: NativeFn_row_distance_pts;
+NativeFn_merge_contains :: #type (*void, *NativePosition) -> *NativeRange #c_call;
+native_merge_contains: NativeFn_merge_contains;
+NativeFn_style_get :: #type (*void, s32, s32) -> *void #c_call;
+native_style_get: NativeFn_style_get;
+NativeFn_style_pattern :: #type (*void) -> s32 #c_call;
+native_style_pattern: NativeFn_style_pattern;
+NativeFn_style_color :: #type (*void) -> *NativeColor #c_call;
+native_style_back_color: NativeFn_style_color;
+native_style_font_color: NativeFn_style_color;
+NativeFn_style_flag :: #type (*void) -> s32 #c_call;
+native_style_bold: NativeFn_style_flag;
+native_style_italic: NativeFn_style_flag;
+native_style_align_h: NativeFn_style_flag;
+native_style_wrap: NativeFn_style_flag;
+NativeFn_style_font_size :: #type (*void) -> float64 #c_call;
+native_style_font_size: NativeFn_style_font_size;
+NativeFn_graph_type :: #type () -> usize #c_call;
+native_graph_type: NativeFn_graph_type;
+NativeFn_sheet_objects :: #type (*void, *void, usize) -> *NativeSList #c_call;
+native_sheet_objects: NativeFn_sheet_objects;
+NativeFn_slist_free :: #type (*NativeSList) #c_call;
+native_slist_free: NativeFn_slist_free;
+NativeFn_so_anchor :: #type (*void) -> *void #c_call;
+native_so_anchor: NativeFn_so_anchor;
+NativeFn_anchor_to_pts :: #type (*void, *void, *float64) #c_call;
+native_anchor_to_pts: NativeFn_anchor_to_pts;
+NativeFn_so_graph_gog :: #type (*void) -> *void #c_call;
+native_so_graph_gog: NativeFn_so_graph_gog;
+NativeFn_gog_render :: #type (*void, *void, float64, float64) #c_call;
+native_gog_render: NativeFn_gog_render;
+NativeFn_cairo_surface_create :: #type (s32, s32, s32) -> *void #c_call;
+native_cairo_surface_create: NativeFn_cairo_surface_create;
+NativeFn_cairo_create :: #type (*void) -> *void #c_call;
+native_cairo_create: NativeFn_cairo_create;
+NativeFn_cairo_set_rgb :: #type (*void, float64, float64, float64) #c_call;
+native_cairo_set_rgb: NativeFn_cairo_set_rgb;
+NativeFn_cairo_paint :: #type (*void) #c_call;
+native_cairo_paint: NativeFn_cairo_paint;
+NativeFn_cairo_flush :: #type (*void) #c_call;
+native_cairo_flush: NativeFn_cairo_flush;
+NativeFn_cairo_data :: #type (*void) -> *u8 #c_call;
+native_cairo_data: NativeFn_cairo_data;
+NativeFn_cairo_stride :: #type (*void) -> s32 #c_call;
+native_cairo_stride: NativeFn_cairo_stride;
+NativeFn_cairo_destroy :: #type (*void) #c_call;
+native_cairo_destroy: NativeFn_cairo_destroy;
+native_cairo_surface_destroy: NativeFn_cairo_destroy;
+
+NativeResolveFrom :: (library: *void, slot: *void, name: string) -> bool {
+    if library == null { return false }
+    symbol: *void = NativeSymbol(library, CText(name))
     if symbol == null { return false }
     MemoryCopy(slot, cast(*void)*symbol, size_of(*void))
     return true
+}
+
+NativeResolve :: (slot: *void, name: string) -> bool {
+    return NativeResolveFrom(native_library, slot, name)
 }
 
 NativeSubtotalCollector :: struct {
@@ -443,6 +547,45 @@ NativeReady :: () -> bool {
         ok = ok && NativeResolve(cast(*void)*native_filename_uri, "g_filename_to_uri")
         ok = ok && NativeResolve(cast(*void)*native_document_uri, "go_doc_get_uri")
         if !ok { return false }
+        // Optional rich layout, style, merge and chart APIs.
+        unused NativeResolve(cast(*void)*native_get_int, "g_object_get")
+        unused NativeResolve(cast(*void)*native_set_string, "g_object_set")
+        unused NativeResolve(cast(*void)*native_set_int, "g_object_set")
+        unused NativeResolve(cast(*void)*native_sheet_add, "workbook_sheet_add")
+        unused NativeResolve(cast(*void)*native_col_hidden, "sheet_col_is_hidden")
+        unused NativeResolve(cast(*void)*native_col_info, "sheet_col_get_info")
+        unused NativeResolve(cast(*void)*native_row_info, "sheet_row_get_info")
+        unused NativeResolve(cast(*void)*native_col_distance_pts, "sheet_col_get_distance_pts")
+        unused NativeResolve(cast(*void)*native_row_distance_pts, "sheet_row_get_distance_pts")
+        unused NativeResolve(cast(*void)*native_merge_contains, "gnm_sheet_merge_contains_pos")
+        unused NativeResolve(cast(*void)*native_style_get, "sheet_style_get")
+        unused NativeResolve(cast(*void)*native_style_pattern, "gnm_style_get_pattern")
+        unused NativeResolve(cast(*void)*native_style_back_color, "gnm_style_get_back_color")
+        unused NativeResolve(cast(*void)*native_style_font_color, "gnm_style_get_font_color")
+        unused NativeResolve(cast(*void)*native_style_bold, "gnm_style_get_font_bold")
+        unused NativeResolve(cast(*void)*native_style_italic, "gnm_style_get_font_italic")
+        unused NativeResolve(cast(*void)*native_style_align_h, "gnm_style_get_align_h")
+        unused NativeResolve(cast(*void)*native_style_wrap, "gnm_style_get_wrap_text")
+        unused NativeResolve(cast(*void)*native_style_font_size, "gnm_style_get_font_size")
+        unused NativeResolve(cast(*void)*native_graph_type, "sheet_object_graph_get_type")
+        unused NativeResolve(cast(*void)*native_sheet_objects, "sheet_objects_get")
+        unused NativeResolve(cast(*void)*native_slist_free, "g_slist_free")
+        unused NativeResolve(cast(*void)*native_so_anchor, "sheet_object_get_anchor")
+        unused NativeResolve(cast(*void)*native_anchor_to_pts, "sheet_object_anchor_to_pts")
+        unused NativeResolve(cast(*void)*native_so_graph_gog, "sheet_object_graph_get_gog")
+        unused NativeResolve(cast(*void)*native_gog_render, "gog_graph_render_to_cairo")
+        native_cairo_library = NativeOpenLibrary(CText("libcairo.so.2"), 1)
+        if native_cairo_library != null {
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_surface_create, "cairo_image_surface_create")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_create, "cairo_create")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_set_rgb, "cairo_set_source_rgb")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_paint, "cairo_paint")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_flush, "cairo_surface_flush")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_data, "cairo_image_surface_get_data")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_stride, "cairo_image_surface_get_stride")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_destroy, "cairo_destroy")
+            unused NativeResolveFrom(native_cairo_library, cast(*void)*native_cairo_surface_destroy, "cairo_surface_destroy")
+        }
         argv: [2]*s8
         argv[0] = CText("workbook")
         // Gnumeric's start-up adopts the user's locale. Restore Workbook's
@@ -472,12 +615,13 @@ NativeReady :: () -> bool {
     }
 }
 
-NativeRead :: (bytes: *u8, count: s64, uri: *s8 = null) -> *void {
+NativeRead :: (bytes: *u8, count: s64, uri: *s8 = null, ods: bool = false) -> *void {
     if !NativeReady() { return null }
     input: *void = native_input_memory(bytes, count, 0)
     if input == null { return null }
     io: *void = native_new_io(native_context)
-    opener: *void = native_opener(CText("Gnumeric_XmlIO:sax"))
+    opener_id: *s8 = ifx ods then CText("Gnumeric_OpenCalc:openoffice") else CText("Gnumeric_XmlIO:sax")
+    opener: *void = native_opener(opener_id)
     view: *void
     if opener != null { view = native_read(input, uri, opener, io, null) }
     failed: bool = native_io_failed(io) != 0
@@ -488,14 +632,14 @@ NativeRead :: (bytes: *u8, count: s64, uri: *s8 = null) -> *void {
 }
 
 // Supply the source URI so Gnumeric can resolve relative workbook links.
-NativeReadDocument :: (bytes: *u8, count: s64, path: *s8) -> *void {
+NativeReadDocument :: (bytes: *u8, count: s64, path: *s8, ods: bool = false) -> *void {
     if !NativeReady() { return null }
     absolute: *s8 = native_canonical_path(path, null)
     if absolute == null { return null }
     uri: *s8 = native_filename_uri(absolute, null, null)
     native_free(cast(*void)absolute)
     if uri == null { return null }
-    view: *void = NativeRead(bytes, count, uri)
+    view: *void = NativeRead(bytes, count, uri, ods)
     native_free(cast(*void)uri)
     return view
 }
@@ -515,7 +659,7 @@ NativeWriteOutput :: (view: *void, output: *void, format: *s8) -> bool {
     return ok
 }
 
-NativeSave :: (view: *void, path: *s8, csv: bool) -> s32 {
+NativeSave :: (view: *void, path: *s8, csv: bool, ods: bool = false) -> s32 {
     error: *void
     // CSV is also written to pipes such as /dev/stdout. The native file
     // output requires a seekable file; its memory output has no such limit.
@@ -526,8 +670,10 @@ NativeSave :: (view: *void, path: *s8, csv: bool) -> s32 {
     }
     previous: *void = native_current_sheet(view)
     if csv { native_focus_sheet(view, native_sheet(native_book(view), 0)) }
-    ok: bool = NativeWriteOutput(view, output,
-        ifx csv then CText("Gnumeric_stf:stf_csv") else CText("Gnumeric_XmlIO:sax"))
+    format: *s8 = CText("Gnumeric_XmlIO:sax")
+    if csv { format = CText("Gnumeric_stf:stf_csv") }
+    else if ods { format = CText("Gnumeric_OpenCalc:odf") }
+    ok: bool = NativeWriteOutput(view, output, format)
     if csv {
         native_focus_sheet(view, previous)
         if ok {
@@ -570,7 +716,7 @@ NativeRefresh :: (wb: *Workbook) -> s32 {
         source: *void = native_sheet(book, index)
         name: *s8
         native_get_name(source, CText("name"), *name, null)
-        sheet: *Sheet = WorkbookAddSheet(wb, name)
+        sheet: *Sheet = WorkbookPushSheet(wb, name)
         native_free(cast(*void)name)
         if sheet == null { return 0 }
         positions: *NativeArray = native_positions(source, 0)
@@ -674,4 +820,256 @@ NativeDisplay :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *s8, cap: 
         FormatText(out, cast(usize)cap, CText("%s"), text)
         native_free(cast(*void)text)
     }
+}
+
+NativeAddSheet :: (wb: *Workbook, name: *s8) -> s32 {
+    if wb == null || wb.native == null || native_sheet_add == null { return 0 }
+    book: *void = native_book(wb.native)
+    if book == null { return 0 }
+    added: *void = native_sheet_add(book, -1, 256, 65536)
+    if added == null { return 0 }
+    if name != null && name[0] != 0 && native_set_string != null {
+        native_set_string(added, CText("name"), name, null)
+    }
+    return NativeRefresh(wb)
+}
+
+NativeSheetVisible :: (wb: *Workbook, index: s32) -> s32 {
+    if wb == null || wb.native == null || native_get_int == null { return 1 }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 1 }
+    visibility: s32 = 0
+    native_get_int(sheet, CText("visibility"), *visibility, null)
+    return ifx visibility == 0 then 1 else 0
+}
+
+NativeSetSheetVisible :: (wb: *Workbook, index: s32, visible: s32) -> s32 {
+    if wb == null || wb.native == null || native_set_int == null { return 0 }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    native_set_int(sheet, CText("visibility"), ifx visible != 0 then 0 else 1, null)
+    return 1
+}
+
+NativeColHidden :: (wb: *Workbook, index: s32, col: s32) -> s32 {
+    if wb == null || wb.native == null || native_col_hidden == null || col < 0 || col >= WB_MAX_COLS {
+        return 0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    return native_col_hidden(sheet, col)
+}
+
+NativeColWidth :: (wb: *Workbook, index: s32, col: s32) -> float32 {
+    if wb == null || wb.native == null || native_col_info == null || col < 0 || col >= WB_MAX_COLS {
+        return 0.0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0.0 }
+    info: *NativeColRowInfo = native_col_info(sheet, col)
+    if info == null || (info.flags & 1) != 0 || info.size_pixels <= 0 { return 0.0 }
+    // Respect explicit column widths (hard_size) and ODS column styles, while
+    // keeping Workbook's default column width for unstyled Gnumeric sheets.
+    if (info.flags & 64) == 0 && wb.native_format != 1 { return 0.0 }
+    return cast(float32)info.size_pixels
+}
+
+NativeRowHeight :: (wb: *Workbook, index: s32, row: s32) -> float32 {
+    if wb == null || wb.native == null || native_row_info == null || row < 0 || row >= WB_MAX_ROWS {
+        return 0.0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0.0 }
+    info: *NativeColRowInfo = native_row_info(sheet, row)
+    if info == null || (info.flags & 1) != 0 || info.size_pixels <= 0 { return 0.0 }
+    // Respect explicit row heights (hard_size) and tall ODS rows; default body
+    // rows keep Workbook's comfortable 22px row height.
+    if (info.flags & 64) == 0 && (wb.native_format != 1 || info.size_pixels <= 22) { return 0.0 }
+    return cast(float32)info.size_pixels
+}
+
+NativeColDistancePts :: (wb: *Workbook, index: s32, from: s32, to: s32) -> float64 {
+    if wb == null || wb.native == null || native_col_distance_pts == null { return 0.0 }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0.0 }
+    return native_col_distance_pts(sheet, from, to)
+}
+
+NativeRowDistancePts :: (wb: *Workbook, index: s32, from: s32, to: s32) -> float64 {
+    if wb == null || wb.native == null || native_row_distance_pts == null { return 0.0 }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0.0 }
+    return native_row_distance_pts(sheet, from, to)
+}
+
+NativeCellMerge :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellMerge) -> s32 {
+    if out != null { out.* = CellMerge.{} }
+    if wb == null || wb.native == null || out == null || native_merge_contains == null ||
+    row < 0 || col < 0 || row >= WB_MAX_ROWS || col >= WB_MAX_COLS {
+        return 0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    pos: NativePosition = NativePosition.{.col = col, .row = row}
+    found: *NativeRange = native_merge_contains(sheet, *pos)
+    if found == null { return 0 }
+    out.start_row = found.start.row
+    out.start_col = found.start.col
+    out.end_row = found.end.row
+    out.end_col = found.end.col
+    out.merged = 1
+    return 1
+}
+
+NativeCellStyle :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellStyle) -> s32 {
+    if out != null { out.* = CellStyle.{} }
+    if wb == null || wb.native == null || out == null || native_style_get == null ||
+    row < 0 || col < 0 || row >= WB_MAX_ROWS || col >= WB_MAX_COLS {
+        return 0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    style: *void = native_style_get(sheet, col, row)
+    if style == null { return 0 }
+    if native_style_pattern != null && native_style_back_color != null {
+        if native_style_pattern(style) > 0 {
+            bg: *NativeColor = native_style_back_color(style)
+            if bg != null && bg.is_auto == 0 {
+                out.bg_rgba = bg.go_color
+                out.has_bg = 1
+            }
+        }
+    }
+    if native_style_font_color != null {
+        fg: *NativeColor = native_style_font_color(style)
+        if fg != null && fg.is_auto == 0 {
+            out.fg_rgba = fg.go_color
+            out.has_fg = 1
+        }
+    }
+    if native_style_bold != null { out.bold = native_style_bold(style) }
+    if native_style_italic != null { out.italic = native_style_italic(style) }
+    if native_style_align_h != null { out.align_h = native_style_align_h(style) }
+    if native_style_wrap != null { out.wrap = native_style_wrap(style) }
+    if native_style_font_size != null { out.font_size = cast(float32)native_style_font_size(style) }
+    return 1
+}
+
+NativeChartCount :: (wb: *Workbook, index: s32) -> s32 {
+    if wb == null || wb.native == null || native_graph_type == null ||
+    native_sheet_objects == null || native_slist_free == null {
+        return 0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    list: *NativeSList = native_sheet_objects(sheet, null, native_graph_type())
+    count: s32 = 0
+    node: *NativeSList = list
+    while node != null {
+        count += 1
+        node = node.next
+    }
+    if list != null { native_slist_free(list) }
+    return count
+}
+
+NativeChartBounds :: (wb: *Workbook, index: s32, chart_index: s32, out: *SheetChart) -> s32 {
+    if out != null { out.* = SheetChart.{} }
+    if wb == null || wb.native == null || out == null || chart_index < 0 ||
+    native_graph_type == null || native_sheet_objects == null || native_slist_free == null ||
+    native_so_anchor == null || native_anchor_to_pts == null {
+        return 0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    list: *NativeSList = native_sheet_objects(sheet, null, native_graph_type())
+    node: *NativeSList = list
+    at: s32 = 0
+    found: *void = null
+    while node != null {
+        if at == chart_index { found = node.data; break }
+        at += 1
+        node = node.next
+    }
+    ok: s32 = 0
+    if found != null {
+        anchor: *void = native_so_anchor(found)
+        if anchor != null {
+            pts: [4]float64
+            native_anchor_to_pts(anchor, sheet, *pts[0])
+            out.left_pts = pts[0]
+            out.top_pts = pts[1]
+            out.right_pts = pts[2]
+            out.bottom_pts = pts[3]
+            ok = 1
+        }
+    }
+    if list != null { native_slist_free(list) }
+    return ok
+}
+
+NativeChartRenderRgba :: (wb: *Workbook, index: s32, chart_index: s32, width: s32, height: s32, out_rgba: []u8) -> s32 {
+    if wb == null || wb.native == null || chart_index < 0 || width <= 0 || height <= 0 ||
+    out_rgba.count < cast(s64)width * cast(s64)height * 4 ||
+    native_graph_type == null || native_sheet_objects == null || native_slist_free == null ||
+    native_so_graph_gog == null || native_gog_render == null ||
+    native_cairo_surface_create == null || native_cairo_create == null ||
+    native_cairo_set_rgb == null || native_cairo_paint == null ||
+    native_cairo_flush == null || native_cairo_data == null ||
+    native_cairo_stride == null || native_cairo_destroy == null ||
+    native_cairo_surface_destroy == null {
+        return 0
+    }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    list: *NativeSList = native_sheet_objects(sheet, null, native_graph_type())
+    node: *NativeSList = list
+    at: s32 = 0
+    found: *void = null
+    while node != null {
+        if at == chart_index { found = node.data; break }
+        at += 1
+        node = node.next
+    }
+    gog: *void = ifx found != null then native_so_graph_gog(found) else null
+    if list != null { native_slist_free(list) }
+    if gog == null { return 0 }
+    // CAIRO_FORMAT_ARGB32 = 0 (little-endian BGRA). Paint opaque white first
+    // so transparent regions composite cleanly and output alpha is 255.
+    surface: *void = native_cairo_surface_create(0, width, height)
+    if surface == null { return 0 }
+    cr: *void = native_cairo_create(surface)
+    if cr == null {
+        native_cairo_surface_destroy(surface)
+        return 0
+    }
+    native_cairo_set_rgb(cr, 1.0, 1.0, 1.0)
+    native_cairo_paint(cr)
+    native_gog_render(gog, cr, cast(float64)width, cast(float64)height)
+    native_cairo_flush(surface)
+    pixels: *u8 = native_cairo_data(surface)
+    stride: s32 = native_cairo_stride(surface)
+    ok: s32 = 0
+    if pixels != null && stride >= width * 4 {
+        y: s32 = 0
+        while y < height {
+            src_row: *u8 = *pixels[cast(s64)y * cast(s64)stride]
+            dst_off: s64 = cast(s64)y * cast(s64)width * 4
+            x: s32 = 0
+            while x < width {
+                sx: s64 = cast(s64)x * 4
+                dx: s64 = dst_off + sx
+                out_rgba[dx + 0] = src_row[sx + 2]
+                out_rgba[dx + 1] = src_row[sx + 1]
+                out_rgba[dx + 2] = src_row[sx + 0]
+                out_rgba[dx + 3] = 255
+                x += 1
+            }
+            y += 1
+        }
+        ok = 1
+    }
+    native_cairo_destroy(cr)
+    native_cairo_surface_destroy(surface)
+    return ok
 }

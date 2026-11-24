@@ -83,7 +83,8 @@ Save :: (book: *Engine.Workbook, files: *AppFiles, name: string) -> bool {
     if !CopyCString(suffix, temporary[:]) { return false }
     fd := Temporary(*temporary[0])
     if fd < 0 { return false }
-    ok := Engine.WorkbookWriteGnumeric(book, cast(*s8)*temporary[0]) != 0
+    is_ods := name.count >= 4 && Engine.TextCompareFoldLiteral(Engine.CText(name[name.count - 4:]), ".ods") == 0
+    ok := ifx is_ods then Engine.WorkbookWriteOds(book, cast(*s8)*temporary[0]) != 0 else Engine.WorkbookWriteGnumeric(book, cast(*s8)*temporary[0]) != 0
     #if !#defined(PLATFORM_WEB) {
         if ok { ok = Sync(fd) == 0 }
     }

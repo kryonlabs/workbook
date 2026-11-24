@@ -222,8 +222,11 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
     edit_items[6] = Menu.MenuItem.{.id = 4, .label = "Clear contents", .accelerator = "Delete"}
     edit_items[7].kind = Menu.MenuItemKind.MenuSeparator
     edit_items[8] = Menu.MenuItem.{.id = 203, .label = "Select all", .accelerator = "Ctrl+A"}
-    view: [1]Menu.MenuItem
+    view: [2]Menu.MenuItem
     view[0] = Menu.MenuItem.{.id = 301, .label = "Go to first cell", .accelerator = "Ctrl+Home"}
+    view[1] = Menu.MenuItem.{.id = 302,
+        .label = ifx EditorShowHiddenSheets(editor) then "Hide hidden sheets" else "Show hidden sheets",
+        .disabled = EditorHiddenSheetCount(editor) == 0}
     insert: [3]Menu.MenuItem
     insert[0] = Menu.MenuItem.{.id = 6, .label = "Row above"}
     insert[1] = Menu.MenuItem.{.id = 10, .label = "Row below"}
@@ -266,6 +269,7 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
     if id == 202 { EditorRedo(editor) }
     if id == 203 { EditorSelectAll(editor) }
     if id == 301 { EditorGoToFirstCell(editor) }
+    if id == 302 { EditorSetShowHiddenSheets(editor, !EditorShowHiddenSheets(editor)) }
     if id == 401 { EditorAddSheet(editor) }
     if id == 402 { EditorSelectSheet(editor, EditorSheetIndex(editor) - 1) }
     if id == 403 { EditorSelectSheet(editor, EditorSheetIndex(editor) + 1) }
@@ -474,7 +478,7 @@ UpdateDocumentTitle :: () {
         path_buffer: [4096]u8
         props: Picker.FilePickerProps
         props.title = ifx save then "Save Workbook As" else "Open Workbook"
-        props.filter = ifx save then "Spreadsheet | *.gnumeric" else "Spreadsheets | *.gnumeric *.csv"
+        props.filter = "Spreadsheets | *.ods *.gnumeric *.csv"
         props.save = save
         current_buffer: [4096]u8
         current := EditorPath(editor, current_buffer[:])
@@ -485,8 +489,12 @@ UpdateDocumentTitle :: () {
         if result < 0 { EditorSetStatus(editor, "Could not open the file chooser") }
         if result != 1 { return }
         if !save { OpenDocument(TextUntilNul(path_buffer[:])); return }
-        if !EndsWith(TextUntilNul(path_buffer[:]), ".gnumeric") {
-            AppendText(path_buffer[:], ".gnumeric")
+        if !DocumentPath(TextUntilNul(path_buffer[:])) {
+            if EndsWith(current, ".ods") || EndsWith(current, ".ODS") {
+                AppendText(path_buffer[:], ".ods")
+            } else {
+                AppendText(path_buffer[:], ".gnumeric")
+            }
         }
         if EditorSaveAs(editor, TextUntilNul(path_buffer[:])) {
             EditorSetFocused(editor, true)
@@ -776,9 +784,13 @@ UpdateDocumentTitle :: () {
     }
 
     DocumentPath :: (name: string) -> bool {
-        if name.count < 9 || name.count >= 4096 { return false }
+        if name.count < 4 || name.count >= 4096 { return false }
+        tail4: string = name[cast(s32)name.count - 4:cast(s32)name.count]
+        if Engine.TextCompareFoldLiteral(Engine.CText(tail4), ".ods") == 0 ||
+        Engine.TextCompareFoldLiteral(Engine.CText(tail4), ".csv") == 0 { return true }
+        if name.count < 9 { return false }
         suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
-        return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0 || EndsWith(name, ".csv")
+        return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0
     }
 
     // Linux's native host owns main; read its file argument without changing

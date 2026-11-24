@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- Full OpenDocument Spreadsheet (`.ods`) support via Gnumeric's OpenCalc
+  engine: open, evaluate, edit, undo/redo, and save `.ods` workbooks directly
+  in Workbook, embedded `workbook/editor`, and `cell`, including file picker
+  filters, drag-and-drop, and `application/vnd.oasis.opendocument.spreadsheet`
+  MIME registration.
+- Render embedded ODS/Gnumeric charts (`SheetObjectGraph` / `GogGraph`) live
+  over the grid via Cairo at their anchor coordinates with viewport clipping,
+  texture caching, smooth scrolling, and automatic refresh on cell edits.
+- Support rich spreadsheet layout and formatting: merged cells, explicit cell
+  backgrounds and text colors (with automatic contrast), bold/italic/font-size
+  styles, horizontal alignment, custom column widths and row heights, hidden
+  columns, collapsed multi-row hidden spans, hidden sheet filtering on the tab
+  bar (`View → Show hidden sheets`), and scrollable sheet tabs for workbooks
+  with more than 16 sheets.
 - Export the full editor as `workbook/editor` for other Kryon apps:
   `EditorOpen`/`EditorNew` return a handle, `EditorFrame` draws and handles one
   frame in a host region, `EditorSave`/`EditorSaveAs` save it, and

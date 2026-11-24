@@ -61,6 +61,7 @@ Sheet :: struct {
 
 Workbook :: struct {
     native: *void
+    native_format: s32
     sheets: *Sheet
     sheet_count: s32
     sheet_cap: s32
@@ -417,6 +418,7 @@ WorkbookClone :: (wb: *Workbook) -> *Workbook {
         copy: *Workbook = WorkbookNew()
         if copy == null { return null }
         copy.native = NativeClone(wb.native)
+        copy.native_format = wb.native_format
         if copy.native == null || NativeRefresh(copy) == 0 {
             WorkbookFree(copy)
             return null
@@ -489,7 +491,7 @@ WorkbookCellCount :: (wb: *Workbook) -> s32 {
     return count
 }
 
-WorkbookAddSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
+WorkbookPushSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
     if wb.native == null && wb.sheet_count >= WB_MAX_SHEETS {
         return null
     }
@@ -507,6 +509,14 @@ WorkbookAddSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
     FormatText(*sheet.name[0], 128, CText("%s"), name)
     wb.sheet_count += 1
     return sheet
+}
+
+WorkbookAddSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
+    if wb.native != null {
+        if NativeAddSheet(wb, name) == 0 || wb.sheet_count == 0 { return null }
+        return *wb.sheets[wb.sheet_count - 1]
+    }
+    return WorkbookPushSheet(wb, name)
 }
 
 WorkbookFindSheet :: (wb: *Workbook, name: *s8) -> *Sheet {
@@ -28985,6 +28995,8 @@ WorkbookLoadFile :: (wb: *Workbook, path: *s8) -> s32 {
     while IsSpaceByte(cast(s32)first[0]) != 0 { first = *first[1] }
     length: u64 = TextLength(path)
     document: bool = length >= 9 && TextCompareFoldLiteral(*path[length - 9], ".gnumeric") == 0
+    ods_ext: bool = length >= 4 && TextCompareFoldLiteral(*path[length - 4], ".ods") == 0
+    ods_zip: bool = size >= 4 && bytes[0] == 80 && bytes[1] == 75 && bytes[2] == 3 && bytes[3] == 4
     csv: bool = length >= 4 && TextCompareFoldLiteral(*path[length - 4], ".csv") == 0
     csv_gzip: bool = length >= 7 && TextCompareFoldLiteral(*path[length - 7], ".csv.gz") == 0
     if csv_gzip {
@@ -28996,6 +29008,19 @@ WorkbookLoadFile :: (wb: *Workbook, path: *s8) -> s32 {
         MemoryFree(cast(*void)text)
         if ok != 0 { WorkbookEvaluate(wb) }
         return ok
+    }
+    if ods_ext || (!csv && !document && ods_zip) {
+        if !NativeReady() {
+            FreeFileBytes(bytes)
+            return 0
+        }
+        view: *void = NativeReadDocument(bytes, cast(s64)size, path, true)
+        FreeFileBytes(bytes)
+        if view == null { return 0 }
+        NativeClose(wb.native)
+        wb.native = view
+        wb.native_format = 1
+        return NativeRefresh(wb)
     }
     if document || (!csv && (first[0] == 60 || GzipIs(bytes, cast(u64)size) != 0)) {
         if !NativeReady() {
@@ -29013,11 +29038,12 @@ WorkbookLoadFile :: (wb: *Workbook, path: *s8) -> s32 {
         }
         // Pass the original bytes and their length to Gnumeric: it handles
         // compression, XML encodings, namespaces and shared expressions.
-        view: *void = NativeReadDocument(bytes, cast(s64)size, path)
+        view: *void = NativeReadDocument(bytes, cast(s64)size, path, false)
         FreeFileBytes(bytes)
         if view == null { return 0 }
         NativeClose(wb.native)
         wb.native = view
+        wb.native_format = 0
         return NativeRefresh(wb)
     }
     ok: s32 = ParseCsvIntoSheet(wb, cast(*s8)bytes)
@@ -29168,14 +29194,35 @@ ParseGnumericCell :: (sheet: *Sheet, node: *XmlNode) {
 }
 
 WorkbookWriteGnumeric :: (wb: *Workbook, path: *s8) -> s32 {
-    if wb.native != null { return NativeSave(wb.native, path, false) }
+    if wb.native != null { return NativeSave(wb.native, path, false, false) }
     buf: XmlBuffer
     ok: s32 = 0
+    WorkbookSerializeGnumericXml(wb, *buf)
+    ok = ifx WriteFileText(path, XmlBufferFinish(*buf)) then 1 else 0
+    XmlBufferFree(*buf)
+    return ok
+}
+
+WorkbookWriteOds :: (wb: *Workbook, path: *s8) -> s32 {
+    if wb.native != null { return NativeSave(wb.native, path, false, true) }
+    if !NativeReady() { return 0 }
+    buf: XmlBuffer
+    WorkbookSerializeGnumericXml(wb, *buf)
+    xml: *s8 = XmlBufferFinish(*buf)
+    view: *void = NativeRead(cast(*u8)xml, cast(s64)TextLength(xml), null, false)
+    XmlBufferFree(*buf)
+    if view == null { return 0 }
+    ok: s32 = NativeSave(view, path, false, true)
+    NativeClose(view)
+    return ok
+}
+
+WorkbookSerializeGnumericXml :: (wb: *Workbook, buf: *XmlBuffer) {
     sheet_index: s32 = 0
-    XmlBufferRaw(*buf, CText("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"))
-    XmlBufferRaw(*buf, CText("<gnm:Workbook xmlns:gnm=\"http://www.gnumeric.org/v10.dtd\">\n"))
-    XmlBufferRaw(*buf, CText("  <gnm:Version Epoch=\"1\" Major=\"12\" Minor=\"62\" Full=\"1.12.62\"/>\n"))
-    XmlBufferRaw(*buf, CText("  <gnm:SheetNameIndex>\n"))
+    XmlBufferRaw(buf, CText("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"))
+    XmlBufferRaw(buf, CText("<gnm:Workbook xmlns:gnm=\"http://www.gnumeric.org/v10.dtd\">\n"))
+    XmlBufferRaw(buf, CText("  <gnm:Version Epoch=\"1\" Major=\"12\" Minor=\"62\" Full=\"1.12.62\"/>\n"))
+    XmlBufferRaw(buf, CText("  <gnm:SheetNameIndex>\n"))
     sheet_index = 0
     while sheet_index < wb.sheet_count {
         columns: s32 = 256
@@ -29183,30 +29230,27 @@ WorkbookWriteGnumeric :: (wb: *Workbook, path: *s8) -> s32 {
         while columns <= wb.sheets[sheet_index].max_col && columns < WB_MAX_COLS { columns *= 2 }
         while rows <= wb.sheets[sheet_index].max_row && rows < WB_MAX_ROWS { rows *= 2 }
         dimension: [32]s8
-        XmlBufferRaw(*buf, CText("    <gnm:SheetName gnm:Cols=\""))
+        XmlBufferRaw(buf, CText("    <gnm:SheetName gnm:Cols=\""))
         FormatNumber(cast(float64)columns, *dimension[0], 32)
-        XmlBufferRaw(*buf, *dimension[0])
-        XmlBufferRaw(*buf, CText("\" gnm:Rows=\""))
+        XmlBufferRaw(buf, *dimension[0])
+        XmlBufferRaw(buf, CText("\" gnm:Rows=\""))
         FormatNumber(cast(float64)rows, *dimension[0], 32)
-        XmlBufferRaw(*buf, *dimension[0])
-        XmlBufferRaw(*buf, CText("\">"))
-        XmlBufferEsc(*buf, *wb.sheets[sheet_index].name[0])
-        XmlBufferRaw(*buf, CText("</gnm:SheetName>\n"))
+        XmlBufferRaw(buf, *dimension[0])
+        XmlBufferRaw(buf, CText("\">"))
+        XmlBufferEsc(buf, *wb.sheets[sheet_index].name[0])
+        XmlBufferRaw(buf, CText("</gnm:SheetName>\n"))
         sheet_index += 1
     }
-    XmlBufferRaw(*buf, CText("  </gnm:SheetNameIndex>\n"))
-    XmlBufferRaw(*buf, CText("  <gnm:Sheets>\n"))
+    XmlBufferRaw(buf, CText("  </gnm:SheetNameIndex>\n"))
+    XmlBufferRaw(buf, CText("  <gnm:Sheets>\n"))
     sheet_index = 0
     while sheet_index < wb.sheet_count {
-        WriteGnumericSheet(*buf, *wb.sheets[sheet_index])
+        WriteGnumericSheet(buf, *wb.sheets[sheet_index])
         sheet_index += 1
     }
-    XmlBufferRaw(*buf, CText("  </gnm:Sheets>\n"))
-    XmlBufferRaw(*buf, CText("  <gnm:UIData SelectedTab=\"0\"/>\n"))
-    XmlBufferRaw(*buf, CText("</gnm:Workbook>\n"))
-    ok = ifx WriteFileText(path, XmlBufferFinish(*buf)) then 1 else 0
-    XmlBufferFree(*buf)
-    return ok
+    XmlBufferRaw(buf, CText("  </gnm:Sheets>\n"))
+    XmlBufferRaw(buf, CText("  <gnm:UIData SelectedTab=\"0\"/>\n"))
+    XmlBufferRaw(buf, CText("</gnm:Workbook>\n"))
 }
 
 WriteGnumericSheet :: (buf: *XmlBuffer, sheet: *Sheet) {
@@ -29507,6 +29551,81 @@ WorkbookRowHidden :: (wb: *Workbook, index: s32, row: s32) -> s32 {
         return NativeRowHidden(wb, index, row)
     }
     return SheetRowHidden(*wb.sheets[index], row)
+}
+
+WorkbookSheetVisible :: (wb: *Workbook, index: s32) -> s32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 1 }
+    if wb.native != null { return NativeSheetVisible(wb, index) }
+    return 1
+}
+
+WorkbookSetSheetVisible :: (wb: *Workbook, index: s32, visible: s32) -> s32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0 }
+    if wb.native != null { return NativeSetSheetVisible(wb, index, visible) }
+    return 1
+}
+
+WorkbookColHidden :: (wb: *Workbook, index: s32, col: s32) -> s32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0 }
+    if wb.native != null { return NativeColHidden(wb, index, col) }
+    return 0
+}
+
+WorkbookColWidth :: (wb: *Workbook, index: s32, col: s32) -> float32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0.0 }
+    if wb.native != null { return NativeColWidth(wb, index, col) }
+    return 0.0
+}
+
+WorkbookRowHeight :: (wb: *Workbook, index: s32, row: s32) -> float32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0.0 }
+    if wb.native != null { return NativeRowHeight(wb, index, row) }
+    return 0.0
+}
+
+WorkbookColDistancePts :: (wb: *Workbook, index: s32, from: s32, to: s32) -> float64 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0.0 }
+    if wb.native != null { return NativeColDistancePts(wb, index, from, to) }
+    return 0.0
+}
+
+WorkbookRowDistancePts :: (wb: *Workbook, index: s32, from: s32, to: s32) -> float64 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0.0 }
+    if wb.native != null { return NativeRowDistancePts(wb, index, from, to) }
+    return 0.0
+}
+
+WorkbookCellMerge :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellMerge) -> s32 {
+    if out != null { out.* = CellMerge.{} }
+    if wb == null || index < 0 || index >= wb.sheet_count || out == null { return 0 }
+    if wb.native != null { return NativeCellMerge(wb, index, row, col, out) }
+    return 0
+}
+
+WorkbookCellStyle :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellStyle) -> s32 {
+    if out != null { out.* = CellStyle.{} }
+    if wb == null || index < 0 || index >= wb.sheet_count || out == null { return 0 }
+    if wb.native != null { return NativeCellStyle(wb, index, row, col, out) }
+    return 0
+}
+
+WorkbookChartCount :: (wb: *Workbook, index: s32) -> s32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0 }
+    if wb.native != null { return NativeChartCount(wb, index) }
+    return 0
+}
+
+WorkbookChartBounds :: (wb: *Workbook, index: s32, chart_index: s32, out: *SheetChart) -> s32 {
+    if out != null { out.* = SheetChart.{} }
+    if wb == null || index < 0 || index >= wb.sheet_count || out == null { return 0 }
+    if wb.native != null { return NativeChartBounds(wb, index, chart_index, out) }
+    return 0
+}
+
+WorkbookChartRenderRgba :: (wb: *Workbook, index: s32, chart_index: s32, width: s32, height: s32, out_rgba: []u8) -> s32 {
+    if wb == null || index < 0 || index >= wb.sheet_count { return 0 }
+    if wb.native != null { return NativeChartRenderRgba(wb, index, chart_index, width, height, out_rgba) }
+    return 0
 }
 
 WorkbookSetRowsHidden :: (wb: *Workbook, index: s32, first: s32, last: s32, hidden: s32) -> s32 {

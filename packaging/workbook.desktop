@@ -5,4 +5,4 @@ Comment=Spreadsheet editor
 Exec=workbook %f
 Terminal=false
 Categories=Office;Spreadsheet;
-MimeType=application/x-gnumeric;
+MimeType=application/x-gnumeric;application/vnd.oasis.opendocument.spreadsheet;

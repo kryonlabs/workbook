@@ -16,6 +16,8 @@ Button :: #import "kryon/button";
 #if !#defined(KRYON_HOSTED_UI) {
     #import "kryon/key_input"
     #import "kryon/tree_input"
+    Image :: #import "kryon/image";
+    #import "kryon/bitmap_image"
 }
 #import "kryon/geometry"
 #import "kryon/session"
@@ -101,10 +103,23 @@ EditTyping :: 1;
 EditDeleting :: 2;
 EditOther :: 3;
 DoubleClickFrames :: 24;
+ChartCacheLimit :: 24;
+MaxShownTabs :: 16;
 
 DefaultKeyBase :: 20000000;
 
 #scope_export
+
+// Cached rasterized texture for one embedded native chart (ODS/Gnumeric).
+ChartCacheSlot :: struct {
+    valid: bool;
+    sheet: s32;
+    chart_index: s32;
+    change_count: u64;
+    width: s32;
+    height: s32;
+    texture: Texture2D;
+}
 
 // One undo/redo snapshot of the workbook and selection.
 UndoState :: struct {
@@ -236,6 +251,13 @@ Editor :: struct {
     frames_since_click: s32;
     last_click_row: s32;
     last_click_column: s32;
+
+    // Sheet tabs visibility/overflow and embedded chart texture cache.
+    show_hidden_sheets: bool;
+    tab_scroll: s32;
+    chart_session: Session;
+    chart_session_valid: bool;
+    chart_cache: [ChartCacheLimit]ChartCacheSlot;
 }
 
 // --------------------------------------------------------------- lifecycle
@@ -243,6 +265,7 @@ Editor :: struct {
 // Initializes a caller-owned, zero-initialized Editor struct with an existing
 // Workbook and path. EditorDestroy releases its workbook without freeing it.
 EditorInitWithWorkbook :: (editor: *Editor, book: *Engine.Workbook, path: string, load_failed: bool = false) {
+    ReleaseChartCache(editor)
     ClearUndoStacks(editor)
     if editor.workbook != null { Engine.WorkbookFree(editor.workbook) }
     editor.workbook = book
@@ -299,9 +322,19 @@ EditorInitWithWorkbook :: (editor: *Editor, book: *Engine.Workbook, path: string
     editor.frames_since_click = 1000
     editor.last_click_row = -1
     editor.last_click_column = -1
+    editor.show_hidden_sheets = false
+    editor.tab_scroll = 0
     if editor.workbook != null {
         if Engine.WorkbookSheetCount(editor.workbook) == 0 {
             unused Engine.WorkbookAddSheet(editor.workbook, Engine.CText("Sheet1"))
+        }
+        // Start on the first visible sheet (e.g. skipping hidden helper tabs).
+        count := Engine.WorkbookSheetCount(editor.workbook)
+        for index: 0..count - 1 {
+            if Engine.WorkbookSheetVisible(editor.workbook, index) != 0 {
+                editor.sheet_index = index
+                break
+            }
         }
         SelectCell(editor, 0, 0)
     }
@@ -310,6 +343,7 @@ EditorInitWithWorkbook :: (editor: *Editor, book: *Engine.Workbook, path: string
 // Releases all workbooks owned by a caller-owned Editor without freeing editor itself.
 EditorDestroy :: (editor: *Editor) {
     if editor == null { return }
+    ReleaseChartCache(editor)
     ClearUndoStacks(editor)
     if editor.workbook != null {
         Engine.WorkbookFree(editor.workbook)
@@ -458,6 +492,36 @@ EditorSheetCount :: (editor: *Editor) -> s32 {
     return Engine.WorkbookSheetCount(editor.workbook)
 }
 
+EditorHiddenSheetCount :: (editor: *Editor) -> s32 {
+    if editor == null || editor.workbook == null { return 0 }
+    count := Engine.WorkbookSheetCount(editor.workbook)
+    hidden: s32 = 0
+    for index: 0..count - 1 {
+        if Engine.WorkbookSheetVisible(editor.workbook, index) == 0 { hidden += 1 }
+    }
+    return hidden
+}
+
+EditorShowHiddenSheets :: (editor: *Editor) -> bool {
+    if editor == null { return false }
+    return editor.show_hidden_sheets
+}
+
+EditorSetShowHiddenSheets :: (editor: *Editor, show: bool) {
+    if editor == null { return }
+    editor.show_hidden_sheets = show
+    editor.tab_scroll = 0
+    if !show && editor.workbook != null && Engine.WorkbookSheetVisible(editor.workbook, editor.sheet_index) == 0 {
+        count := Engine.WorkbookSheetCount(editor.workbook)
+        for index: 0..count - 1 {
+            if Engine.WorkbookSheetVisible(editor.workbook, index) != 0 {
+                EditorSelectSheet(editor, index)
+                return
+            }
+        }
+    }
+}
+
 EditorClipboardAvailable :: () -> bool {
     return EditorClipboardHasText()
 }
@@ -525,6 +589,8 @@ EditorSave :: (editor: *Editor, finish_edit: bool = true) -> bool {
             if descriptor >= 0 {
                 if IsCsvPath(path) {
                     saved = Engine.WorkbookExportCsv(editor.workbook, cast(*s8)*temporary[0]) != 0
+                } else if IsOdsPath(path) {
+                    saved = Engine.WorkbookWriteOds(editor.workbook, cast(*s8)*temporary[0]) != 0
                 } else {
                     saved = Engine.WorkbookWriteGnumeric(editor.workbook, cast(*s8)*temporary[0]) != 0
                 }
@@ -819,7 +885,7 @@ SetEditorPath :: (editor: *Editor, path: string) {
 
 DocumentPath :: (name: string) -> bool {
     if name.count < 4 || name.count >= 4096 { return false }
-    if IsCsvPath(name) { return true }
+    if IsCsvPath(name) || IsOdsPath(name) { return true }
     if name.count < 9 { return false }
     suffix: string = name[cast(s32)name.count - 9:cast(s32)name.count]
     return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".gnumeric") == 0
@@ -829,6 +895,12 @@ IsCsvPath :: (name: string) -> bool {
     if name.count < 4 { return false }
     suffix: string = name[cast(s32)name.count - 4:cast(s32)name.count]
     return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".csv") == 0
+}
+
+IsOdsPath :: (name: string) -> bool {
+    if name.count < 4 { return false }
+    suffix: string = name[cast(s32)name.count - 4:cast(s32)name.count]
+    return Engine.TextCompareFoldLiteral(Engine.CText(suffix), ".ods") == 0
 }
 
 FileName :: (path: string) -> string {
@@ -1025,9 +1097,9 @@ HandleGridKeys :: (editor: *Editor, key: s32, control: bool, typed: []u8, typed_
     if control && key == KeyV { PasteCells(editor) }
     if key == KeyUp { SelectCell(editor, NextVisibleRow(editor, editor.selected_row, -1), editor.selected_column) }
     if key == KeyDown { SelectCell(editor, NextVisibleRow(editor, editor.selected_row, 1), editor.selected_column) }
-    if key == KeyLeft { SelectCell(editor, editor.selected_row, editor.selected_column - 1) }
+    if key == KeyLeft { SelectCell(editor, editor.selected_row, NextVisibleColumn(editor, editor.selected_column, -1)) }
     if key == KeyRight || key == KeyTab {
-        SelectCell(editor, editor.selected_row, editor.selected_column + 1)
+        SelectCell(editor, editor.selected_row, NextVisibleColumn(editor, editor.selected_column, 1))
     }
     if key == KeyEnter { editor.selection_axis = 0; StartEdit(editor) }
     if key == KeyDelete || key == KeyBackspace { ClearCell(editor) }
@@ -1451,41 +1523,98 @@ Changed :: (editor: *Editor) {
     editor.range_column = Min(keep_column, MaxColumns - 1)
 }
 
+CollectShownSheets :: (editor: *Editor, out: []s32) -> s32 {
+    total := Engine.WorkbookSheetCount(editor.workbook)
+    count: s32 = 0
+    for index: 0..total - 1 {
+        if (editor.show_hidden_sheets || Engine.WorkbookSheetVisible(editor.workbook, index) != 0) && count < cast(s32)out.count {
+            out[count] = index
+            count += 1
+        }
+    }
+    if count == 0 {
+        for index: 0..total - 1 {
+            if count < cast(s32)out.count {
+                out[count] = index
+                count += 1
+            }
+        }
+    }
+    return count
+}
+
 SheetTabsBounds :: (editor: *Editor, bounds: Rectangle) -> Rectangle {
-    count: s32 = Min(Engine.WorkbookSheetCount(editor.workbook), 16)
-    return Rectangle.{bounds.x, bounds.y + bounds.height - TabsBottom, MinFloat(bounds.width, 104.0 * cast(float32)count), 28.0}
+    shown: [64]s32
+    shown_count := CollectShownSheets(editor, shown[:])
+    count: s32 = Min(shown_count, MaxShownTabs)
+    left_offset: float32 = ifx shown_count > MaxShownTabs then 52.0 else 0.0
+    available: float32 = bounds.width - left_offset
+    if available < 0.0 { available = 0.0 }
+    return Rectangle.{bounds.x + left_offset, bounds.y + bounds.height - TabsBottom, MinFloat(available, 104.0 * cast(float32)count), 28.0}
 }
 
 DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle) {
-    count: s32 = Engine.WorkbookSheetCount(editor.workbook)
-    if count < 1 { return }
-    if count > 16 { count = 16 }
-    tabs: [16]TabBar.Tab
-    index: s32 = 0
-    while index < count {
-        tabs[index].key = editor.key_base + cast(u64)(1100 + index)
-        tabs[index].label = EditorString(Engine.WorkbookSheetName(editor.workbook, index))
-        index += 1
-    }
+    shown: [64]s32
+    shown_count := CollectShownSheets(editor, shown[:])
+    if shown_count < 1 { return }
     strip: Box.Props
     strip.key = editor.key_base + 1098
     strip.bounds = Rectangle.{bounds.x, bounds.y + bounds.height - TabsBottom, bounds.width, TabsBottom}
     strip.fill = Grid.GridHeaderBackground()
     strip.border = Grid.GridLineColor()
     Box.Draw(session, strip)
+
+    max_scroll: s32 = Max(0, shown_count - MaxShownTabs)
+    if editor.tab_scroll > max_scroll { editor.tab_scroll = max_scroll }
+    if editor.tab_scroll < 0 { editor.tab_scroll = 0 }
+    if shown_count > MaxShownTabs {
+        prev_btn: Button.Props
+        prev_btn.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + 1096
+        prev_btn.label = "<"
+        prev_btn.size = cast(ControlSize)ControlSizeSmall
+        prev_btn.disabled = editor.tab_scroll <= 0
+        prev_btn.bounds = Rectangle.{bounds.x + 2.0, bounds.y + bounds.height - TabsBottom + 2.0, 22.0, 24.0}
+        if Button.Draw(session, prev_btn) != 0 && editor.tab_scroll > 0 { editor.tab_scroll -= 1 }
+        next_btn: Button.Props
+        next_btn.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + 1097
+        next_btn.label = ">"
+        next_btn.size = cast(ControlSize)ControlSizeSmall
+        next_btn.disabled = editor.tab_scroll >= max_scroll
+        next_btn.bounds = Rectangle.{bounds.x + 26.0, bounds.y + bounds.height - TabsBottom + 2.0, 22.0, 24.0}
+        if Button.Draw(session, next_btn) != 0 && editor.tab_scroll < max_scroll { editor.tab_scroll += 1 }
+    }
+
+    count: s32 = Min(shown_count - editor.tab_scroll, MaxShownTabs)
+    tabs: [MaxShownTabs]TabBar.Tab
+    selected_tab: s32 = -1
+    index: s32 = 0
+    while index < count {
+        sheet_id := shown[editor.tab_scroll + index]
+        tabs[index].key = editor.key_base + cast(u64)(1100 + index)
+        tabs[index].label = EditorString(Engine.WorkbookSheetName(editor.workbook, sheet_id))
+        if sheet_id == editor.sheet_index { selected_tab = index }
+        index += 1
+    }
     bar: TabBar.Props
     bar.key = editor.key_base + 1099
     bar.placement = cast(TabBar.TabBarPlacement)TabBarBottom
-    bar.selected_index = editor.sheet_index
+    bar.selected_index = ifx selected_tab >= 0 then selected_tab else 0
     bar.bounds = SheetTabsBounds(editor, bounds)
     bar.min_tab_width = 72
     bar.max_tab_width = 104
     result: TabBar.Result = TabBar.Draw(session, bar, tabs[0:count])
-    if result.selected_index != editor.sheet_index && result.selected_index >= 0 {
-        editor.sheet_index = result.selected_index
-        editor.scroll_row = 0
-        editor.scroll_column = 0
-        if !FormulaEditing(editor) && !editor.edit_refocus { SelectCell(editor, 0, 0) }
+    if result.selected_index >= 0 && result.selected_index < count {
+        picked := shown[editor.tab_scroll + result.selected_index]
+        if picked != editor.sheet_index {
+            editor.sheet_index = picked
+            editor.scroll_row = 0
+            editor.scroll_column = 0
+            if !FormulaEditing(editor) && !editor.edit_refocus {
+                first_vis_row: s32 = ifx RowHidden(editor, 0) then NextVisibleRow(editor, 0, 1) else 0
+                first_vis_col: s32 = ifx ColHidden(editor, 0) then NextVisibleColumn(editor, 0, 1) else 0
+                SelectCell(editor, first_vis_row, first_vis_col)
+            }
+        }
     }
 }
 
@@ -1691,6 +1820,8 @@ RunFormulaField :: (session: Session, editor: *Editor, bounds: Rectangle, key: s
 
 GridRows :: (editor: *Editor) -> s32 {
     count: s32 = Engine.WorkbookSheetRows(editor.workbook, editor.sheet_index)
+    chart_rows: s32 = ChartExtentRow(editor)
+    if count < chart_rows { count = chart_rows }
     if count < 8 { count = 8 }
     if count < editor.selected_row + 1 { count = editor.selected_row + 1 }
     if count < editor.range_row + 1 { count = editor.range_row + 1 }
@@ -1702,6 +1833,8 @@ GridRows :: (editor: *Editor) -> s32 {
 
 GridColumns :: (editor: *Editor) -> s32 {
     count: s32 = Engine.WorkbookSheetColumns(editor.workbook, editor.sheet_index)
+    chart_cols: s32 = ChartExtentColumn(editor)
+    if count < chart_cols { count = chart_cols }
     if count < 8 { count = 8 }
     if count < editor.selected_column + 1 { count = editor.selected_column + 1 }
     if count < editor.range_column + 1 { count = editor.range_column + 1 }
@@ -1711,15 +1844,84 @@ GridColumns :: (editor: *Editor) -> s32 {
     return count
 }
 
+ChartExtentRow :: (editor: *Editor) -> s32 {
+    count := Engine.WorkbookChartCount(editor.workbook, editor.sheet_index)
+    if count <= 0 { return 0 }
+    max_pts: float64 = 0.0
+    for i: 0..Min(count, ChartCacheLimit) - 1 {
+        chart: Engine.SheetChart
+        if Engine.WorkbookChartBounds(editor.workbook, editor.sheet_index, i, *chart) != 0 && chart.bottom_pts > max_pts {
+            max_pts = chart.bottom_pts
+        }
+    }
+    if max_pts <= 0.0 { return 0 }
+    row: s32 = 0
+    while row < 512 && Engine.WorkbookRowDistancePts(editor.workbook, editor.sheet_index, 0, row) < max_pts {
+        row += 1
+    }
+    return row + 2
+}
+
+ChartExtentColumn :: (editor: *Editor) -> s32 {
+    count := Engine.WorkbookChartCount(editor.workbook, editor.sheet_index)
+    if count <= 0 { return 0 }
+    max_pts: float64 = 0.0
+    for i: 0..Min(count, ChartCacheLimit) - 1 {
+        chart: Engine.SheetChart
+        if Engine.WorkbookChartBounds(editor.workbook, editor.sheet_index, i, *chart) != 0 && chart.right_pts > max_pts {
+            max_pts = chart.right_pts
+        }
+    }
+    if max_pts <= 0.0 { return 0 }
+    col: s32 = 0
+    while col < 128 && Engine.WorkbookColDistancePts(editor.workbook, editor.sheet_index, 0, col) < max_pts {
+        col += 1
+    }
+    return col + 1
+}
+
 PickShown :: (editor: *Editor) -> bool { return FormulaEditing(editor) && editor.pick_start >= 0 && editor.pick_sheet == editor.sheet_index }
 
 RowHidden :: (editor: *Editor, row: s32) -> bool { return Engine.WorkbookRowHidden(editor.workbook, editor.sheet_index, row) != 0 }
-GridRowHeight :: (editor: *Editor, row: s32) -> float32 { return ifx RowHidden(editor, row) then Grid.GridHiddenRowHeight else Grid.GridRowHeight }
+ColHidden :: (editor: *Editor, column: s32) -> bool { return Engine.WorkbookColHidden(editor.workbook, editor.sheet_index, column) != 0 }
+
+GridRowHeight :: (editor: *Editor, row: s32) -> float32 {
+    if RowHidden(editor, row) {
+        if row >= 3 && RowHidden(editor, row - 1) && RowHidden(editor, row - 2) && RowHidden(editor, row - 3) {
+            return 0.0
+        }
+        return Grid.GridHiddenRowHeight
+    }
+    h := Engine.WorkbookRowHeight(editor.workbook, editor.sheet_index, row)
+    if h > 0.0 {
+        if h < 18.0 { h = 18.0 }
+        if h > 200.0 { h = 200.0 }
+        return h
+    }
+    return Grid.GridRowHeight
+}
+
+GridColWidth :: (editor: *Editor, column: s32) -> float32 {
+    if ColHidden(editor, column) { return 0.0 }
+    w := Engine.WorkbookColWidth(editor.workbook, editor.sheet_index, column)
+    if w > 0.0 {
+        if w < 28.0 { w = 28.0 }
+        if w > 560.0 { w = 560.0 }
+        return w
+    }
+    return Grid.GridColumnWidth
+}
 
 NextVisibleRow :: (editor: *Editor, row: s32, step: s32) -> s32 {
     next: s32 = row + step
     while next >= 0 && next < MaxRows && RowHidden(editor, next) { next += step }
     return ifx next >= 0 && next < MaxRows then next else row
+}
+
+NextVisibleColumn :: (editor: *Editor, column: s32, step: s32) -> s32 {
+    next: s32 = column + step
+    while next >= 0 && next < MaxColumns && ColHidden(editor, next) { next += step }
+    return ifx next >= 0 && next < MaxColumns then next else column
 }
 
 GridRowAt :: (editor: *Editor, table: Rectangle, y: float32) -> s32 {
@@ -1730,6 +1932,19 @@ GridRowAt :: (editor: *Editor, table: Rectangle, y: float32) -> s32 {
         row += 1
     }
     return row
+}
+
+GridColumnAt :: (editor: *Editor, table: Rectangle, x: float32) -> s32 {
+    column: s32 = editor.scroll_column
+    left: float32 = table.x + Grid.GridRowHeaderWidth
+    limit: s32 = editor.scroll_column + editor.visible_columns - 1
+    while column < limit {
+        w := GridColWidth(editor, column)
+        if w > 0.0 && x < left + w { return column }
+        left += w
+        column += 1
+    }
+    return column
 }
 
 SetRowsHidden :: (editor: *Editor, first: s32, last: s32, hidden: bool) {
@@ -1766,8 +1981,15 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     columns: s32 = GridColumns(editor)
 
     if !input.blocked && input.wheel != 0.0 && PointInBounds(input.pointer.x, input.pointer.y, table) {
-        if input.wheel > 0.0 { editor.scroll_row -= 1 }
-        if input.wheel < 0.0 { editor.scroll_row += 1 }
+        if editor.shift_held {
+            if input.wheel > 0.0 { editor.scroll_column -= 1 }
+            if input.wheel < 0.0 { editor.scroll_column += 1 }
+            if editor.scroll_column < 0 { editor.scroll_column = 0 }
+            if editor.scroll_column >= MaxColumns { editor.scroll_column = MaxColumns - 1 }
+        } else {
+            if input.wheel > 0.0 { editor.scroll_row -= 1 }
+            if input.wheel < 0.0 { editor.scroll_row += 1 }
+        }
     }
     last_start: s32 = rows
     tail_height: float32 = 0.0
@@ -1781,11 +2003,19 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     if rows < editor.scroll_row + editor.visible_rows { rows = editor.scroll_row + editor.visible_rows }
     editor.visible_rows = 0
     used_height: float32 = 0.0
-    while used_height < editor.grid_body_height && editor.scroll_row + editor.visible_rows < MaxRows {
+    while used_height < editor.grid_body_height && editor.scroll_row + editor.visible_rows < MaxRows && editor.visible_rows < 512 {
         used_height += GridRowHeight(editor, editor.scroll_row + editor.visible_rows)
         editor.visible_rows += 1
     }
     if editor.visible_rows < 1 { editor.visible_rows = 1 }
+    editor.visible_columns = 0
+    used_width: float32 = 0.0
+    body_width: float32 = table.width - Grid.GridRowHeaderWidth
+    while used_width < body_width && editor.scroll_column + editor.visible_columns < MaxColumns && editor.visible_columns < 256 {
+        used_width += GridColWidth(editor, editor.scroll_column + editor.visible_columns)
+        editor.visible_columns += 1
+    }
+    if editor.visible_columns < 1 { editor.visible_columns = 1 }
     if rows < editor.scroll_row + editor.visible_rows { rows = editor.scroll_row + editor.visible_rows }
     if columns < editor.scroll_column + editor.visible_columns { columns = editor.scroll_column + editor.visible_columns }
 
@@ -1800,53 +2030,135 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
         Grid.GridHeaderBackground(), "")
     column: s32 = editor.scroll_column
     while column < editor.scroll_column + editor.visible_columns && column < columns {
-        name: [8]u8
-        AppendCellColumn(name[:], column)
-        GridSquare(session, editor, 20 + column - editor.scroll_column, Rectangle.{ColumnX(editor, table, column), table.y,
-                Grid.GridColumnWidth, Grid.GridHeaderHeight}, ifx here && editor.selection_axis == 2 && column == editor.selected_column then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(name[:]))
+        col_w := GridColWidth(editor, column)
+        if col_w > 0.0 {
+            name: [8]u8
+            AppendCellColumn(name[:], column)
+            GridSquare(session, editor, 20 + column - editor.scroll_column, Rectangle.{ColumnX(editor, table, column), table.y,
+                    col_w, Grid.GridHeaderHeight}, ifx here && editor.selection_axis == 2 && column == editor.selected_column then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(name[:]))
+        }
         column += 1
     }
     shown: s32 = 0
     while shown < editor.visible_rows && editor.scroll_row + shown < rows {
         row: s32 = editor.scroll_row + shown
         y: float32 = RowY(editor, table, row)
+        row_h: float32 = GridRowHeight(editor, row)
         if RowHidden(editor, row) {
-            GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, table.width, Grid.GridHiddenRowHeight}, Grid.GridHeaderBackground(), "")
-            strip: Box.Props
-            strip.key = editor.key_base + cast(u64)(500000 + shown)
-            strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
-            strip.fill = Grid.GridLineColor()
-            Box.Draw(session, strip)
+            if row_h > 0.0 {
+                GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, table.width, row_h}, Grid.GridHeaderBackground(), "")
+                strip: Box.Props
+                strip.key = editor.key_base + cast(u64)(500000 + shown)
+                strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
+                strip.fill = Grid.GridLineColor()
+                Box.Draw(session, strip)
+            }
             shown += 1
             continue
         }
         number: [16]u8
         row_digits: [16]u8
         SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
-        GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, Grid.GridRowHeaderWidth, Grid.GridRowHeight},
+        GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, Grid.GridRowHeaderWidth, row_h},
             ifx here && editor.selection_axis == 1 && row == editor.selected_row then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(number[:]))
         column = editor.scroll_column
         while column < editor.scroll_column + editor.visible_columns && column < columns {
+            col_w := GridColWidth(editor, column)
+            if col_w <= 0.0 { column += 1; continue }
+            src_row: s32 = row
+            src_col: s32 = column
+            cell_w: float32 = col_w
+            cell_h: float32 = row_h
+            merge: Engine.CellMerge
+            if Engine.WorkbookCellMerge(editor.workbook, editor.sheet_index, row, column, *merge) != 0 && merge.merged != 0 {
+                vis_r0 := Max(merge.start_row, editor.scroll_row)
+                while vis_r0 <= merge.end_row && RowHidden(editor, vis_r0) { vis_r0 += 1 }
+                vis_c0 := Max(merge.start_col, editor.scroll_column)
+                while vis_c0 <= merge.end_col && ColHidden(editor, vis_c0) { vis_c0 += 1 }
+                if row != vis_r0 || column != vis_c0 { column += 1; continue }
+                src_row = merge.start_row
+                src_col = merge.start_col
+                cell_w = 0.0
+                mc := vis_c0
+                max_c := Min(merge.end_col, editor.scroll_column + editor.visible_columns - 1)
+                while mc <= max_c { cell_w += GridColWidth(editor, mc); mc += 1 }
+                cell_h = 0.0
+                mr := vis_r0
+                max_r := Min(merge.end_row, editor.scroll_row + editor.visible_rows - 1)
+                while mr <= max_r { cell_h += GridRowHeight(editor, mr); mr += 1 }
+                if cell_w <= 0.0 || cell_h <= 0.0 { column += 1; continue }
+            }
             display: [256]u8
-            EditorCellDisplay(editor, row, column, display[:])
+            EditorCellDisplay(editor, src_row, src_col, display[:])
             #if !#defined(KRYON_HOSTED_UI) {
                 if editor.workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
             }
+            text := TextUntilNul(display[:])
+            style: Engine.CellStyle
+            has_style := Engine.WorkbookCellStyle(editor.workbook, editor.sheet_index, src_row, src_col, *style) != 0
             fill: Color = Grid.GridCellBackground()
+            if has_style && style.has_bg != 0 { fill = ColorFromPacked(style.bg_rgba) }
             active: bool = row == editor.selected_row && column == editor.selected_column
             in_rows: bool = editor.selection_axis == 2 || (row >= first_row && row <= last_row)
             in_columns: bool = editor.selection_axis == 1 || (column >= first_column && column <= last_column)
-            if here && in_rows && in_columns && !(spans && active) { fill = Grid.GridSelectedBackground() }
-            GridSquare(session, editor, 10000 + shown * editor.visible_columns + column - editor.scroll_column,
-                Rectangle.{ColumnX(editor, table, column), y, Grid.GridColumnWidth, Grid.GridRowHeight},
-                fill, TextUntilNul(display[:]))
+            if here && in_rows && in_columns && !(spans && active) {
+                if has_style && style.has_bg != 0 {
+                    if spans || editor.selection_axis != 0 {
+                        fill = BlendColor(fill, Grid.GridAccentColor(), 64)
+                    }
+                } else {
+                    fill = Grid.GridSelectedBackground()
+                }
+            }
+            has_fg: bool = false
+            fg: Color = Color.{0, 0, 0, 255}
+            bold: bool = false
+            italic: bool = false
+            align: s32 = 0
+            font_size: s32 = Text.Text14
+            if has_style {
+                if style.has_fg != 0 {
+                    fg = ColorFromPacked(style.fg_rgba)
+                    has_fg = true
+                } else if style.has_bg != 0 {
+                    fg = AutoContrastInk(fill)
+                    has_fg = true
+                }
+                bold = style.bold != 0
+                italic = style.italic != 0
+                if style.align_h == 4 { align = 2 }
+                else if style.align_h == 8 || style.align_h == 64 { align = 1 }
+                else if style.align_h == 2 { align = 0 }
+                else if LooksNumeric(text) { align = 2 }
+                if style.font_size > 0.0 {
+                    font_size = cast(s32)(style.font_size * 1.33 + 0.5)
+                    if font_size < 11 { font_size = 11 }
+                    if font_size > 22 { font_size = 22 }
+                }
+            }
+            GridSquareStyled(session, editor, 10000 + shown * editor.visible_columns + column - editor.scroll_column,
+                Rectangle.{ColumnX(editor, table, column), y, cell_w, cell_h},
+                fill, text, has_fg, fg, bold, italic, align, font_size)
             column += 1
         }
         shown += 1
     }
 
     if here && editor.selection_axis == 0 && !editor.edit_focused {
-        CellOutline(session, editor, 400000, table, first_row, first_column, last_row, last_column, Grid.GridAccentColor(), 2)
+        out_r1 := first_row
+        out_c1 := first_column
+        out_r2 := last_row
+        out_c2 := last_column
+        if !spans {
+            sel_merge: Engine.CellMerge
+            if Engine.WorkbookCellMerge(editor.workbook, editor.sheet_index, first_row, first_column, *sel_merge) != 0 && sel_merge.merged != 0 {
+                out_r1 = sel_merge.start_row
+                out_c1 = sel_merge.start_col
+                out_r2 = sel_merge.end_row
+                out_c2 = sel_merge.end_col
+            }
+        }
+        CellOutline(session, editor, 400000, table, out_r1, out_c1, out_r2, out_c2, Grid.GridAccentColor(), 2)
         handle: Rectangle = FillHandleBounds(editor, table)
         if handle.width > 0.0 {
             mark: Box.Props
@@ -1865,6 +2177,7 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
         CellOutline(session, editor, 400010, table, top, left, bottom, right, Grid.GridAccentColor(), 1)
     }
     DrawReferenceOutlines(session, editor, table)
+    DrawEmbeddedCharts(session, editor, table)
     DrawCellEditor(session, editor, table)
 
     if input.blocked { return }
@@ -1872,7 +2185,7 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     body: Rectangle = Rectangle.{table.x + Grid.GridRowHeaderWidth, table.y + Grid.GridHeaderHeight,
         table.width - Grid.GridRowHeaderWidth, table.height - Grid.GridHeaderHeight}
     hit_row: s32 = GridRowAt(editor, table, pointer.y)
-    hit_column: s32 = editor.scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
+    hit_column: s32 = GridColumnAt(editor, table, pointer.x)
     on_cell: bool = PointInBounds(pointer.x, pointer.y, body) && hit_row < rows &&
     hit_row < editor.scroll_row + editor.visible_rows && hit_column < columns && hit_column < editor.scroll_column + editor.visible_columns
     if pointer.pressed && !editor.grid_menu_open {
@@ -1928,7 +2241,7 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
         if pointer.y > body.y { row = GridRowAt(editor, table, pointer.y) }
         row = Min(row, Min(editor.scroll_row + editor.visible_rows - 1, MaxRows - 1))
         column = editor.scroll_column
-        if pointer.x > body.x { column = editor.scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth) }
+        if pointer.x > body.x { column = GridColumnAt(editor, table, pointer.x) }
         column = Min(column, Min(editor.scroll_column + editor.visible_columns - 1, MaxColumns - 1))
         if editor.drag_mode == DragRange && !editor.edit_focused && here {
             editor.selection_axis = 0
@@ -1962,7 +2275,7 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     }
     if secondary.released && !editor.grid_menu_open && PointInBounds(pointer.x, pointer.y, body) {
         row: s32 = GridRowAt(editor, table, pointer.y)
-        clicked: s32 = editor.scroll_column + cast(s32)((pointer.x - body.x) / Grid.GridColumnWidth)
+        clicked: s32 = GridColumnAt(editor, table, pointer.x)
         if row < rows && !RowHidden(editor, row) && clicked < columns && clicked < editor.scroll_column + editor.visible_columns {
             inside: bool = here && editor.selection_axis == 0 && row >= first_row && row <= last_row &&
             clicked >= first_column && clicked <= last_column
@@ -1985,8 +2298,8 @@ FillHandleBounds :: (editor: *Editor, table: Rectangle) -> Rectangle {
     if RowHidden(editor, row) { return none }
     if row < editor.scroll_row || row >= editor.scroll_row + editor.visible_rows ||
     column < editor.scroll_column || column >= editor.scroll_column + editor.visible_columns { return none }
-    x: float32 = ColumnX(editor, table, column) + Grid.GridColumnWidth
-    y: float32 = RowY(editor, table, row) + Grid.GridRowHeight
+    x: float32 = ColumnX(editor, table, column) + GridColWidth(editor, column)
+    y: float32 = RowY(editor, table, row) + GridRowHeight(editor, row)
     return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
 }
 
@@ -2065,13 +2378,15 @@ DrawCellEditor :: (session: Session, editor: *Editor, table: Rectangle) {
     text: string = TextUntilNul(editor.edit[:])
     x: float32 = ColumnX(editor, table, editor.selected_column)
     y: float32 = RowY(editor, table, editor.selected_row)
+    cell_h: float32 = GridRowHeight(editor, editor.selected_row)
+    col_w: float32 = GridColWidth(editor, editor.selected_column)
     width: float32 = cast(float32)(EditorGlyphWidth(text) + 16)
-    if width < Grid.GridColumnWidth { width = Grid.GridColumnWidth }
+    if width < col_w { width = col_w }
     limit: float32 = ColumnX(editor, table, editor.scroll_column + editor.visible_columns) - x
     if width > limit { width = limit }
     box: Box.Props
     box.key = editor.key_base + 400500
-    box.bounds = Rectangle.{x, y, width, Grid.GridRowHeight}
+    box.bounds = Rectangle.{x, y, width, cell_h}
     box.fill = Grid.GridCellBackground()
     box.border = Grid.GridAccentColor()
     Box.Draw(session, box)
@@ -2080,14 +2395,14 @@ DrawCellEditor :: (session: Session, editor: *Editor, table: Rectangle) {
     label.text = text
     label.size = Text.Text14
     label.wrap = cast(Text.Wrap)TextWrapNone
-    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, Grid.GridRowHeight - 4.0}
+    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, cell_h - 4.0}
     Text.Draw(session, label)
     cursor: s32 = Min(editor.edit_cursor, cast(s32)text.count)
     caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
     if caret_x < x + width - 2.0 {
         caret: Box.Props
         caret.key = editor.key_base + 400502
-        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, Grid.GridRowHeight - 10.0}
+        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, cell_h - 10.0}
         caret.fill = Grid.GridAccentColor()
         caret.border = Grid.GridAccentColor()
         Box.Draw(session, caret)
@@ -2103,7 +2418,7 @@ CellOutline :: (session: Session, editor: *Editor, key: s32, table: Rectangle, f
     if top > bottom || left > right { return }
     x: float32 = ColumnX(editor, table, left)
     y: float32 = RowY(editor, table, top)
-    width: float32 = cast(float32)(right - left + 1) * Grid.GridColumnWidth
+    width: float32 = ColumnX(editor, table, right) + GridColWidth(editor, right) - x
     height: float32 = RowY(editor, table, bottom) + GridRowHeight(editor, bottom) - y
     width = MinFloat(width, editor.grid_right - x)
     height = MinFloat(height, editor.grid_bottom - y)
@@ -2205,7 +2520,10 @@ GridCommand :: (editor: *Editor, id: s32) {
 }
 
 ColumnX :: (editor: *Editor, table: Rectangle, column: s32) -> float32 {
-    return table.x + Grid.GridRowHeaderWidth + cast(float32)(column - editor.scroll_column) * Grid.GridColumnWidth
+    x: float32 = table.x + Grid.GridRowHeaderWidth
+    at: s32 = editor.scroll_column
+    while at < column { x += GridColWidth(editor, at); at += 1 }
+    return x
 }
 
 RowY :: (editor: *Editor, table: Rectangle, row: s32) -> float32 {
@@ -2217,6 +2535,218 @@ RowY :: (editor: *Editor, table: Rectangle, row: s32) -> float32 {
 
 GridSquare :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, text: string) {
     Grid.GridSquare(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom, fill, text)
+}
+
+GridSquareStyled :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, text: string,
+    has_fg: bool, fg: Color, bold: bool, italic: bool, align: s32, font_size: s32) {
+    Grid.GridSquareStyled(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom,
+        fill, text, has_fg, fg, bold, italic, align, font_size)
+}
+
+BlendColor :: (base: Color, tint: Color, weight: s32) -> Color {
+    inv := 255 - weight
+    return Color.{
+        cast(u8)((cast(s32)base.r * inv + cast(s32)tint.r * weight) / 255),
+        cast(u8)((cast(s32)base.g * inv + cast(s32)tint.g * weight) / 255),
+        cast(u8)((cast(s32)base.b * inv + cast(s32)tint.b * weight) / 255),
+        255
+    }
+}
+
+AutoContrastInk :: (bg: Color) -> Color {
+    luma := (cast(s32)bg.r * 299 + cast(s32)bg.g * 587 + cast(s32)bg.b * 114) / 1000
+    return ifx luma < 140 then Color.{248, 250, 252, 255} else Color.{17, 24, 39, 255}
+}
+
+LooksNumeric :: (text: string) -> bool {
+    if text.count == 0 { return false }
+    digits: s32 = 0
+    for byte: text {
+        if byte >= 48 && byte <= 57 { digits += 1; continue }
+        if byte == 45 || byte == 43 || byte == 46 || byte == 44 || byte == 36 || byte == 37 || byte == 32 || byte == 40 || byte == 41 { continue }
+        return false
+    }
+    return digits > 0
+}
+
+// ------------------------------------------------------------ embedded charts
+
+ReleaseChartCache :: (editor: *Editor) {
+    #if !#defined(KRYON_HOSTED_UI) {
+        if editor == null { return }
+        for index: 0..ChartCacheLimit - 1 {
+            if editor.chart_cache[index].valid && editor.chart_cache[index].texture.id != 0 && editor.chart_session_valid {
+                BitmapImageRelease(editor.chart_session, editor.chart_cache[index].texture)
+            }
+            editor.chart_cache[index] = ChartCacheSlot.{}
+        }
+        editor.chart_session_valid = false
+    } else {
+        unused editor
+    }
+}
+
+SheetPtsToScreenX :: (editor: *Editor, table: Rectangle, target_pts: float64) -> float32 {
+    scroll_pts := Engine.WorkbookColDistancePts(editor.workbook, editor.sheet_index, 0, editor.scroll_column)
+    x: float32 = table.x + Grid.GridRowHeaderWidth
+    if target_pts >= scroll_pts {
+        cur_pts := scroll_pts
+        col := editor.scroll_column
+        while col < 512 {
+            step_pts := Engine.WorkbookColDistancePts(editor.workbook, editor.sheet_index, col, col + 1)
+            w := GridColWidth(editor, col)
+            if step_pts > 0.0 && target_pts <= cur_pts + step_pts {
+                frac := (target_pts - cur_pts) / step_pts
+                return x + cast(float32)frac * w
+            }
+            cur_pts += step_pts
+            x += w
+            col += 1
+        }
+        return x + cast(float32)((target_pts - cur_pts) * (96.0 / 72.0))
+    }
+    cur_pts := scroll_pts
+    col := editor.scroll_column - 1
+    while col >= 0 {
+        step_pts := Engine.WorkbookColDistancePts(editor.workbook, editor.sheet_index, col, col + 1)
+        w := GridColWidth(editor, col)
+        x -= w
+        cur_pts -= step_pts
+        if step_pts > 0.0 && target_pts >= cur_pts {
+            frac := (target_pts - cur_pts) / step_pts
+            return x + cast(float32)frac * w
+        }
+        col -= 1
+    }
+    return x + cast(float32)((target_pts - cur_pts) * (96.0 / 72.0))
+}
+
+SheetPtsToScreenY :: (editor: *Editor, table: Rectangle, target_pts: float64) -> float32 {
+    scroll_pts := Engine.WorkbookRowDistancePts(editor.workbook, editor.sheet_index, 0, editor.scroll_row)
+    y: float32 = table.y + Grid.GridHeaderHeight
+    if target_pts >= scroll_pts {
+        cur_pts := scroll_pts
+        row := editor.scroll_row
+        while row < 2048 {
+            step_pts := Engine.WorkbookRowDistancePts(editor.workbook, editor.sheet_index, row, row + 1)
+            h := GridRowHeight(editor, row)
+            if step_pts > 0.0 && target_pts <= cur_pts + step_pts {
+                frac := (target_pts - cur_pts) / step_pts
+                return y + cast(float32)frac * h
+            }
+            cur_pts += step_pts
+            y += h
+            row += 1
+        }
+        return y + cast(float32)((target_pts - cur_pts) * (96.0 / 72.0))
+    }
+    cur_pts := scroll_pts
+    row := editor.scroll_row - 1
+    while row >= 0 {
+        step_pts := Engine.WorkbookRowDistancePts(editor.workbook, editor.sheet_index, row, row + 1)
+        h := GridRowHeight(editor, row)
+        y -= h
+        cur_pts -= step_pts
+        if step_pts > 0.0 && target_pts >= cur_pts {
+            frac := (target_pts - cur_pts) / step_pts
+            return y + cast(float32)frac * h
+        }
+        row -= 1
+    }
+    return y + cast(float32)((target_pts - cur_pts) * (96.0 / 72.0))
+}
+
+DrawEmbeddedCharts :: (session: Session, editor: *Editor, table: Rectangle) {
+    #if #defined(KRYON_HOSTED_UI) {
+        unused session; unused editor; unused table
+        return
+    } else {
+        count := Engine.WorkbookChartCount(editor.workbook, editor.sheet_index)
+        if count <= 0 { return }
+        if !editor.chart_session_valid || editor.chart_session.slot != session.slot || editor.chart_session.epoch != session.epoch {
+            ReleaseChartCache(editor)
+            editor.chart_session = session
+            editor.chart_session_valid = true
+        }
+        body: Rectangle = Rectangle.{table.x + Grid.GridRowHeaderWidth, table.y + Grid.GridHeaderHeight,
+            table.width - Grid.GridRowHeaderWidth, table.height - Grid.GridHeaderHeight}
+        if body.width <= 4.0 || body.height <= 4.0 { return }
+        limit := Min(count, ChartCacheLimit)
+        for chart_index: 0..limit - 1 {
+            chart: Engine.SheetChart
+            if Engine.WorkbookChartBounds(editor.workbook, editor.sheet_index, chart_index, *chart) == 0 { continue }
+            x1 := SheetPtsToScreenX(editor, table, chart.left_pts)
+            y1 := SheetPtsToScreenY(editor, table, chart.top_pts)
+            x2 := SheetPtsToScreenX(editor, table, chart.right_pts)
+            y2 := SheetPtsToScreenY(editor, table, chart.bottom_pts)
+            if x2 - x1 < 24.0 || y2 - y1 < 24.0 { continue }
+            cx1 := ifx x1 > body.x then x1 else body.x
+            cy1 := ifx y1 > body.y then y1 else body.y
+            cx2 := ifx x2 < body.x + body.width then x2 else body.x + body.width
+            cy2 := ifx y2 < body.y + body.height then y2 else body.y + body.height
+            if cx2 - cx1 < 2.0 || cy2 - cy1 < 2.0 { continue }
+
+            rw := cast(s32)(x2 - x1 + 0.5)
+            rh := cast(s32)(y2 - y1 + 0.5)
+            if rw < 80 { rw = 80 }
+            if rw > 1280 { rw = 1280 }
+            if rh < 60 { rh = 60 }
+            if rh > 960 { rh = 960 }
+
+            slot := *editor.chart_cache[chart_index]
+            if !slot.valid || slot.sheet != editor.sheet_index || slot.chart_index != chart_index ||
+            slot.change_count != editor.change_count || slot.width != rw || slot.height != rh || slot.texture.id == 0 {
+                if slot.valid && slot.texture.id != 0 {
+                    BitmapImageRelease(session, slot.texture)
+                    slot.texture = Texture2D.{}
+                }
+                byte_count: u64 = cast(u64)rw * cast(u64)rh * 4
+                raw: *u8 = cast(*u8)AllocZero(byte_count, 1)
+                if raw == null { continue }
+                rgba := BytesFromPointer(raw, byte_count)
+                rendered := Engine.WorkbookChartRenderRgba(editor.workbook, editor.sheet_index, chart_index, rw, rh, rgba)
+                if rendered != 0 {
+                    slot.texture = BitmapImageCreate(session, rw, rh, rgba)
+                    slot.valid = slot.texture.id != 0
+                    slot.sheet = editor.sheet_index
+                    slot.chart_index = chart_index
+                    slot.change_count = editor.change_count
+                    slot.width = rw
+                    slot.height = rh
+                } else {
+                    slot.valid = false
+                }
+                FreeBytes(cast(*void)raw)
+            }
+            if !slot.valid || slot.texture.id == 0 { continue }
+
+            u0 := (cx1 - x1) / (x2 - x1)
+            v0 := (cy1 - y1) / (y2 - y1)
+            u1 := (cx2 - x1) / (x2 - x1)
+            v1 := (cy2 - y1) / (y2 - y1)
+            src: Rectangle = Rectangle.{
+                u0 * cast(float32)rw,
+                v0 * cast(float32)rh,
+                (u1 - u0) * cast(float32)rw,
+                (v1 - v0) * cast(float32)rh
+            }
+            dest: Rectangle = Rectangle.{cx1, cy1, cx2 - cx1, cy2 - cy1}
+            img: Image.Props
+            img.key = editor.key_base + cast(u64)(600000 + chart_index * 2)
+            img.bounds = dest
+            img.source = src
+            img.texture = slot.texture
+            img.fit = Image.ImageFit.ImageFitStretch
+            img.smooth = true
+            Image.Draw(session, img)
+            frame: Box.Props
+            frame.key = editor.key_base + cast(u64)(600001 + chart_index * 2)
+            frame.bounds = dest
+            frame.fill = Color.{0, 0, 0, 0}
+            frame.border = Grid.GridLineColor()
+            Box.Draw(session, frame)
+        }
+    }
 }
 
 // -------------------------------------------------------------------- text

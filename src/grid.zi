@@ -12,6 +12,9 @@ TextAlign :: #import "kryon/text_align";
 #import "kryon/session"
 #if !#defined(KRYON_HOSTED_UI) {
     #import "kryon/tree_input"
+    #import "kryon/font_metrics"
+    #import "kryon/paint_queue"
+    KryonTheme :: #import "kryon/theme";
 }
 #if #defined(KRYON_HOSTED_UI) {
     Engine :: #import "portable_engine";
@@ -102,6 +105,15 @@ GridLineColor :: () -> Color { return GridColor("border-soft") }
 // It uses two widget keys, key and key + 1.
 GridSquare :: (session: Session, key: u64, bounds: Rectangle, right: float32, bottom: float32,
     fill: Color, text: string, align_end: bool = false) {
+    GridSquareStyled(session, key, bounds, right, bottom, fill, text,
+        false, Color.{0, 0, 0, 255}, false, false, ifx align_end then 2 else 0, Text.Text14)
+}
+
+// One styled grid square with optional explicit text color, bold/italic,
+// horizontal alignment (0 start, 1 center, 2 end), and font size.
+GridSquareStyled :: (session: Session, key: u64, bounds: Rectangle, right: float32, bottom: float32,
+    fill: Color, text: string, has_fg: bool, fg: Color, bold: bool, italic: bool,
+    align: s32, font_size: s32) {
     if bounds.x + bounds.width > right { bounds.width = right - bounds.x }
     if bounds.y + bounds.height > bottom { bounds.height = bottom - bounds.y }
     if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
@@ -112,12 +124,45 @@ GridSquare :: (session: Session, key: u64, bounds: Rectangle, right: float32, bo
     box.border = GridLineColor()
     Box.Draw(session, box)
     if text.count == 0 { return }
+    size := font_size
+    if size < 11 { size = 11 }
+    if size > 22 { size = 22 }
+    #if !#defined(KRYON_HOSTED_UI) {
+        if has_fg || bold || italic || size != Text.Text14 || bounds.height > 26.0 {
+            color := ifx has_fg then fg else ColorFromPacked(KryonTheme.CurrentText())
+            inner_x := bounds.x + 4.0
+            inner_w := bounds.width - 8.0
+            if inner_w <= 1.0 { return }
+            text_w := cast(float32)GlyphWidth(text, size, "")
+            tx := inner_x
+            if align == 1 {
+                if inner_w > text_w { tx = inner_x + (inner_w - text_w) * 0.5 }
+            } else if align == 2 {
+                if inner_w > text_w { tx = inner_x + (inner_w - text_w) }
+            }
+            line_h := cast(float32)GlyphLineHeight(size, "")
+            if line_h <= 0.0 { line_h = cast(float32)size + 4.0 }
+            ty := bounds.y + (bounds.height - line_h) * 0.5
+            if ty < bounds.y + 1.0 { ty = bounds.y + 1.0 }
+            clip := Rectangle.{bounds.x + 2.0, bounds.y + 1.0, bounds.width - 4.0, bounds.height - 2.0}
+            if clip.width <= 0.0 || clip.height <= 0.0 { return }
+            if italic {
+                PaintClippedSlanted(session, -1, text, cast(s32)tx, cast(s32)ty, size, color, clip, false)
+                if bold { PaintClippedSlanted(session, -1, text, cast(s32)tx, cast(s32)ty, size, color, clip, true) }
+            } else {
+                PaintClippedLabel(session, -1, text, cast(s32)tx, cast(s32)ty, size, color, clip)
+                if bold { PaintClippedEmphasis(session, -1, text, cast(s32)tx, cast(s32)ty, size, color, clip) }
+            }
+            return
+        }
+    }
     label: Text.Props
     label.key = key + 1
     label.text = text
-    label.size = Text.Text14
+    label.size = size
     label.wrap = Text.Wrap.TextWrapNone
-    if align_end { label.align = TextAlign.TextAlign.TextAlignEnd }
+    if align == 1 { label.align = TextAlign.TextAlign.TextAlignCenter }
+    else if align == 2 { label.align = TextAlign.TextAlign.TextAlignEnd }
     label.bounds = Rectangle.{bounds.x + 4.0, bounds.y + 3.0,
         bounds.width - 8.0, bounds.height - 4.0}
     Text.Draw(session, label)
@@ -409,11 +454,25 @@ GridDraw :: (session: Session, bounds: Rectangle, book: *Engine.Workbook, view: 
     }
 
     if sheets < 2 { return }
-    count := ifx sheets > 16 then 16 else sheets
+    shown_indices: [16]s32
+    count: s32 = 0
+    for index: 0..sheets - 1 {
+        if Engine.WorkbookSheetVisible(book, index) != 0 && count < 16 {
+            shown_indices[count] = index
+            count += 1
+        }
+    }
+    if count == 0 {
+        count = ifx sheets > 16 then 16 else sheets
+        for index: 0..count - 1 { shown_indices[index] = index }
+    }
     tabs: [16]TabBar.Tab
+    selected_tab: s32 = 0
     for index: 0..count - 1 {
+        sheet_id := shown_indices[index]
         tabs[index].key = view.key + cast(u64)(90000 + index)
-        tabs[index].label = GridSheetName(book, index)
+        tabs[index].label = GridSheetName(book, sheet_id)
+        if sheet_id == view.sheet { selected_tab = index }
     }
     strip: Box.Props
     strip.key = view.key + 89998
@@ -424,14 +483,14 @@ GridDraw :: (session: Session, bounds: Rectangle, book: *Engine.Workbook, view: 
     bar: TabBar.Props
     bar.key = view.key + 89999
     bar.placement = TabBar.TabBarPlacement.TabBarBottom
-    bar.selected_index = view.sheet
+    bar.selected_index = selected_tab
     width := 140.0 * cast(float32)count
     bar.bounds = Rectangle.{bounds.x, bottom, ifx width < bounds.width then width else bounds.width, GridTabsHeight}
     bar.min_tab_width = 96
     bar.max_tab_width = 160
     result := TabBar.Draw(session, bar, tabs[0:count])
-    if result.selected_index != view.sheet && result.selected_index >= 0 {
-        view.sheet = result.selected_index
+    if result.selected_index >= 0 && result.selected_index < count && shown_indices[result.selected_index] != view.sheet {
+        view.sheet = shown_indices[result.selected_index]
         view.scroll_row = 0
         view.scroll_column = 0
     }

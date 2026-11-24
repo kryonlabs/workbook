@@ -89,7 +89,11 @@ Evaluate :: (input: *s8, output: *s8) -> s32 {
 Convert :: (input: *s8, output: *s8) -> s32 {
     workbook: *Workbook = Load(input)
     if workbook == null { return 1 }
-    if WorkbookWriteGnumeric(workbook, output) == 0 {
+    length: s64 = 0
+    while output[length] != 0 { length += 1 }
+    is_ods: bool = length >= 4 && TextCompareFoldLiteral(*output[length - 4], ".ods") == 0
+    ok: s32 = ifx is_ods then WorkbookWriteOds(workbook, output) else WorkbookWriteGnumeric(workbook, output)
+    if ok == 0 {
         Fail("cannot write ", output)
         WorkbookFree(workbook)
         return 1
