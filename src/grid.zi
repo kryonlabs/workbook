@@ -105,15 +105,17 @@ GridLineColor :: () -> Color { return GridColor("border-soft") }
 // It uses two widget keys, key and key + 1.
 GridSquare :: (session: Session, key: u64, bounds: Rectangle, right: float32, bottom: float32,
     fill: Color, text: string, align_end: bool = false) {
-    GridSquareStyled(session, key, bounds, right, bottom, fill, text,
-        false, Color.{0, 0, 0, 255}, false, false, ifx align_end then 2 else 0, Text.Text14)
+    empty_style: Engine.CellStyle
+    GridSquareStyled(session, key, bounds, right, bottom, fill, GridLineColor(), text,
+        false, Color.{0, 0, 0, 255}, false, false, ifx align_end then 2 else 0, Text.Text14, *empty_style)
 }
 
 // One styled grid square with optional explicit text color, bold/italic,
-// horizontal alignment (0 start, 1 center, 2 end), and font size.
+// horizontal alignment (0 start, 1 center, 2 end), font size, gridline color,
+// and per-edge cell borders.
 GridSquareStyled :: (session: Session, key: u64, bounds: Rectangle, right: float32, bottom: float32,
-    fill: Color, text: string, has_fg: bool, fg: Color, bold: bool, italic: bool,
-    align: s32, font_size: s32) {
+    fill: Color, grid_line: Color, text: string, has_fg: bool, fg: Color, bold: bool, italic: bool,
+    align: s32, font_size: s32, borders: *Engine.CellStyle) {
     if bounds.x + bounds.width > right { bounds.width = right - bounds.x }
     if bounds.y + bounds.height > bottom { bounds.height = bottom - bounds.y }
     if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
@@ -121,8 +123,28 @@ GridSquareStyled :: (session: Session, key: u64, bounds: Rectangle, right: float
     box.key = key
     box.bounds = bounds
     box.fill = fill
-    box.border = GridLineColor()
+    box.border = grid_line
     Box.Draw(session, box)
+    #if !#defined(KRYON_HOSTED_UI) {
+        if borders != null {
+            if borders.border_top_width > 0 {
+                bw := cast(float32)borders.border_top_width
+                PaintRoundedFill(session, -1, Rectangle.{bounds.x, bounds.y, bounds.width, bw}, 0.0, 1, ColorFromPacked(borders.border_top_rgba))
+            }
+            if borders.border_bottom_width > 0 {
+                bw := cast(float32)borders.border_bottom_width
+                PaintRoundedFill(session, -1, Rectangle.{bounds.x, bounds.y + bounds.height - bw, bounds.width, bw}, 0.0, 1, ColorFromPacked(borders.border_bottom_rgba))
+            }
+            if borders.border_left_width > 0 {
+                bw := cast(float32)borders.border_left_width
+                PaintRoundedFill(session, -1, Rectangle.{bounds.x, bounds.y, bw, bounds.height}, 0.0, 1, ColorFromPacked(borders.border_left_rgba))
+            }
+            if borders.border_right_width > 0 {
+                bw := cast(float32)borders.border_right_width
+                PaintRoundedFill(session, -1, Rectangle.{bounds.x + bounds.width - bw, bounds.y, bw, bounds.height}, 0.0, 1, ColorFromPacked(borders.border_right_rgba))
+            }
+        }
+    }
     if text.count == 0 { return }
     size := font_size
     if size < 11 { size = 11 }

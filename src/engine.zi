@@ -29559,6 +29559,17 @@ WorkbookSheetVisible :: (wb: *Workbook, index: s32) -> s32 {
     return 1
 }
 
+WorkbookIsOds :: (wb: *Workbook) -> s32 {
+    return ifx wb != null && wb.native != null && wb.native_format == 1 then 1 else 0
+}
+
+WorkbookSheetTabColor :: (wb: *Workbook, index: s32, out: *SheetTabColor) -> s32 {
+    if out != null { out.* = SheetTabColor.{} }
+    if wb == null || index < 0 || index >= wb.sheet_count || out == null { return 0 }
+    if wb.native != null { return NativeSheetTabColor(wb, index, out) }
+    return 0
+}
+
 WorkbookSetSheetVisible :: (wb: *Workbook, index: s32, visible: s32) -> s32 {
     if wb == null || index < 0 || index >= wb.sheet_count { return 0 }
     if wb.native != null { return NativeSetSheetVisible(wb, index, visible) }

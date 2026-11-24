@@ -7,6 +7,7 @@ NativePosition :: struct { col: s32; row: s32; }
 NativeRange :: struct { start: NativePosition; end: NativePosition; }
 NativeSList :: struct { data: *void; next: *NativeSList; }
 NativeColor :: struct { go_color: u32; ref_count: s32; is_auto: s32; }
+NativeBorder :: struct { line_type: s32; color: *NativeColor; begin_margin: s32; end_margin: s32; width: s32; }
 NativeColRowInfo :: struct { size_pts: float64; size_pixels: s32; flags: u32; }
 
 CellMerge :: struct {
@@ -27,6 +28,21 @@ CellStyle :: struct {
     align_h: s32;
     wrap: s32;
     font_size: float32;
+    border_top_rgba: u32;
+    border_bottom_rgba: u32;
+    border_left_rgba: u32;
+    border_right_rgba: u32;
+    border_top_width: s32;
+    border_bottom_width: s32;
+    border_left_width: s32;
+    border_right_width: s32;
+}
+
+SheetTabColor :: struct {
+    bg_rgba: u32;
+    fg_rgba: u32;
+    has_bg: s32;
+    has_fg: s32;
 }
 
 SheetChart :: struct {
@@ -226,6 +242,10 @@ native_focus_sheet: NativeFn_focus_sheet;
 native_cairo_library: *void;
 NativeFn_get_int :: #type (*void, *s8, *s32, *void) #c_call;
 native_get_int: NativeFn_get_int;
+NativeFn_get_ptr :: #type (*void, *s8, **void, *void) #c_call;
+native_get_ptr: NativeFn_get_ptr;
+NativeFn_color_unref :: #type (*NativeColor) #c_call;
+native_color_unref: NativeFn_color_unref;
 NativeFn_set_string :: #type (*void, *s8, *s8, *void) #c_call;
 native_set_string: NativeFn_set_string;
 NativeFn_set_int :: #type (*void, *s8, s32, *void) #c_call;
@@ -251,6 +271,16 @@ native_style_pattern: NativeFn_style_pattern;
 NativeFn_style_color :: #type (*void) -> *NativeColor #c_call;
 native_style_back_color: NativeFn_style_color;
 native_style_font_color: NativeFn_style_color;
+NativeFn_style_border :: #type (*void, s32) -> *NativeBorder #c_call;
+native_style_border: NativeFn_style_border;
+NativeFn_style_conditions :: #type (*void) -> *void #c_call;
+native_style_conditions: NativeFn_style_conditions;
+NativeFn_conditions_eval :: #type (*void, *NativeEvalPosition) -> s32 #c_call;
+native_conditions_eval: NativeFn_conditions_eval;
+NativeFn_conditions_overlay :: #type (*void, *void) -> *NativeArray #c_call;
+native_conditions_overlay: NativeFn_conditions_overlay;
+NativeFn_cell_render_color :: #type (*void) -> u32 #c_call;
+native_cell_render_color: NativeFn_cell_render_color;
 NativeFn_style_flag :: #type (*void) -> s32 #c_call;
 native_style_bold: NativeFn_style_flag;
 native_style_italic: NativeFn_style_flag;
@@ -549,6 +579,8 @@ NativeReady :: () -> bool {
         if !ok { return false }
         // Optional rich layout, style, merge and chart APIs.
         unused NativeResolve(cast(*void)*native_get_int, "g_object_get")
+        unused NativeResolve(cast(*void)*native_get_ptr, "g_object_get")
+        unused NativeResolve(cast(*void)*native_color_unref, "style_color_unref")
         unused NativeResolve(cast(*void)*native_set_string, "g_object_set")
         unused NativeResolve(cast(*void)*native_set_int, "g_object_set")
         unused NativeResolve(cast(*void)*native_sheet_add, "workbook_sheet_add")
@@ -562,6 +594,11 @@ NativeReady :: () -> bool {
         unused NativeResolve(cast(*void)*native_style_pattern, "gnm_style_get_pattern")
         unused NativeResolve(cast(*void)*native_style_back_color, "gnm_style_get_back_color")
         unused NativeResolve(cast(*void)*native_style_font_color, "gnm_style_get_font_color")
+        unused NativeResolve(cast(*void)*native_style_border, "gnm_style_get_border")
+        unused NativeResolve(cast(*void)*native_style_conditions, "gnm_style_get_conditions")
+        unused NativeResolve(cast(*void)*native_conditions_eval, "gnm_style_conditions_eval")
+        unused NativeResolve(cast(*void)*native_conditions_overlay, "gnm_style_conditions_overlay")
+        unused NativeResolve(cast(*void)*native_cell_render_color, "gnm_cell_get_render_color")
         unused NativeResolve(cast(*void)*native_style_bold, "gnm_style_get_font_bold")
         unused NativeResolve(cast(*void)*native_style_italic, "gnm_style_get_font_italic")
         unused NativeResolve(cast(*void)*native_style_align_h, "gnm_style_get_align_h")
@@ -921,6 +958,51 @@ NativeCellMerge :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellMer
     return 1
 }
 
+NativeBorderRead :: (style: *void, elem: s32, out_rgba: *u32, out_width: *s32) {
+    out_rgba.* = 0
+    out_width.* = 0
+    if native_style_border == null || style == null { return }
+    border: *NativeBorder = native_style_border(style, elem)
+    if border == null || border.line_type <= 0 { return }
+    t := border.line_type
+    w: s32 = 1
+    if t == 2 || t == 5 || t == 6 || t == 8 || t == 10 || t == 12 { w = 2 }
+    out_width.* = w
+    if border.color != null && border.color.is_auto == 0 {
+        out_rgba.* = border.color.go_color
+    } else {
+        out_rgba.* = 0x000000ff
+    }
+}
+
+NativeSheetTabColor :: (wb: *Workbook, index: s32, out: *SheetTabColor) -> s32 {
+    if out != null { out.* = SheetTabColor.{} }
+    if wb == null || wb.native == null || out == null || native_get_ptr == null { return 0 }
+    sheet: *void = native_sheet(native_book(wb.native), index)
+    if sheet == null { return 0 }
+    bg_ptr: *void = null
+    fg_ptr: *void = null
+    native_get_ptr(sheet, CText("tab-background"), *bg_ptr, null)
+    native_get_ptr(sheet, CText("tab-foreground"), *fg_ptr, null)
+    if bg_ptr != null {
+        c := cast(*NativeColor)bg_ptr
+        if c.is_auto == 0 {
+            out.bg_rgba = c.go_color
+            out.has_bg = 1
+        }
+        if native_color_unref != null { native_color_unref(c) }
+    }
+    if fg_ptr != null {
+        c := cast(*NativeColor)fg_ptr
+        if c.is_auto == 0 {
+            out.fg_rgba = c.go_color
+            out.has_fg = 1
+        }
+        if native_color_unref != null { native_color_unref(c) }
+    }
+    return ifx out.has_bg != 0 || out.has_fg != 0 then 1 else 0
+}
+
 NativeCellStyle :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellStyle) -> s32 {
     if out != null { out.* = CellStyle.{} }
     if wb == null || wb.native == null || out == null || native_style_get == null ||
@@ -931,9 +1013,27 @@ NativeCellStyle :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellSty
     if sheet == null { return 0 }
     style: *void = native_style_get(sheet, col, row)
     if style == null { return 0 }
+    active_style: *void = style
+    overlay: *NativeArray = null
+    if native_style_conditions != null && native_conditions_eval != null && native_conditions_overlay != null {
+        conds: *void = native_style_conditions(style)
+        if conds != null {
+            ep: NativeEvalPosition
+            ep.eval.col = col
+            ep.eval.row = row
+            ep.sheet = sheet
+            matched: s32 = native_conditions_eval(conds, *ep)
+            if matched >= 0 {
+                overlay = native_conditions_overlay(conds, style)
+                if overlay != null && cast(u32)matched < overlay.count && overlay.data[matched] != null {
+                    active_style = overlay.data[matched]
+                }
+            }
+        }
+    }
     if native_style_pattern != null && native_style_back_color != null {
-        if native_style_pattern(style) > 0 {
-            bg: *NativeColor = native_style_back_color(style)
+        if native_style_pattern(active_style) > 0 {
+            bg: *NativeColor = native_style_back_color(active_style)
             if bg != null && bg.is_auto == 0 {
                 out.bg_rgba = bg.go_color
                 out.has_bg = 1
@@ -941,17 +1041,34 @@ NativeCellStyle :: (wb: *Workbook, index: s32, row: s32, col: s32, out: *CellSty
         }
     }
     if native_style_font_color != null {
-        fg: *NativeColor = native_style_font_color(style)
+        fg: *NativeColor = native_style_font_color(active_style)
         if fg != null && fg.is_auto == 0 {
             out.fg_rgba = fg.go_color
             out.has_fg = 1
         }
     }
-    if native_style_bold != null { out.bold = native_style_bold(style) }
-    if native_style_italic != null { out.italic = native_style_italic(style) }
-    if native_style_align_h != null { out.align_h = native_style_align_h(style) }
-    if native_style_wrap != null { out.wrap = native_style_wrap(style) }
-    if native_style_font_size != null { out.font_size = cast(float32)native_style_font_size(style) }
+    // Number-format color overrides (e.g. [Red] for negative values).
+    if native_cell_render_color != null {
+        cell: *void = native_cell(sheet, col, row)
+        if cell != null {
+            rc: u32 = native_cell_render_color(cell)
+            if rc != 0 && rc != 0x000000ff {
+                out.fg_rgba = rc
+                out.has_fg = 1
+            }
+        }
+    }
+    if native_style_bold != null { out.bold = native_style_bold(active_style) }
+    if native_style_italic != null { out.italic = native_style_italic(active_style) }
+    if native_style_align_h != null { out.align_h = native_style_align_h(active_style) }
+    if native_style_wrap != null { out.wrap = native_style_wrap(active_style) }
+    if native_style_font_size != null { out.font_size = cast(float32)native_style_font_size(active_style) }
+    // MSTYLE_BORDER_TOP=2, BOTTOM=3, LEFT=4, RIGHT=5
+    NativeBorderRead(active_style, 2, *out.border_top_rgba, *out.border_top_width)
+    NativeBorderRead(active_style, 3, *out.border_bottom_rgba, *out.border_bottom_width)
+    NativeBorderRead(active_style, 4, *out.border_left_rgba, *out.border_left_width)
+    NativeBorderRead(active_style, 5, *out.border_right_rgba, *out.border_right_width)
+    if overlay != null { native_array_release(cast(*void)overlay) }
     return 1
 }
 

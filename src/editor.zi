@@ -18,6 +18,7 @@ Button :: #import "kryon/button";
     #import "kryon/tree_input"
     Image :: #import "kryon/image";
     #import "kryon/bitmap_image"
+    #import "kryon/paint_queue"
 }
 #import "kryon/geometry"
 #import "kryon/session"
@@ -861,7 +862,7 @@ EditorFrame :: (session: Session, bounds: Rectangle, editor: *Editor, input: Edi
         HandleGridKeys(editor, key, control, typed_buf[:], typed_length)
     }
     DrawGrid(session, editor, bounds, input)
-    DrawSheetTabs(session, editor, bounds)
+    DrawSheetTabs(session, editor, bounds, input)
     DrawGridMenu(session, editor, key == KeyEscape)
     if editor.autosave && editor.dirty && editor.data_path[0] != 0 &&
     MonotonicMilliseconds() >= editor.save_retry_at {
@@ -1553,7 +1554,7 @@ SheetTabsBounds :: (editor: *Editor, bounds: Rectangle) -> Rectangle {
     return Rectangle.{bounds.x + left_offset, bounds.y + bounds.height - TabsBottom, MinFloat(available, 104.0 * cast(float32)count), 28.0}
 }
 
-DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle) {
+DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle, input: EditorInput) {
     shown: [64]s32
     shown_count := CollectShownSheets(editor, shown[:])
     if shown_count < 1 { return }
@@ -1585,6 +1586,68 @@ DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle) {
     }
 
     count: s32 = Min(shown_count - editor.tab_scroll, MaxShownTabs)
+    has_tab_colors: bool = false
+    #if !#defined(KRYON_HOSTED_UI) {
+        for index: 0..count - 1 {
+            tc: Engine.SheetTabColor
+            if Engine.WorkbookSheetTabColor(editor.workbook, shown[editor.tab_scroll + index], *tc) != 0 && tc.has_bg != 0 {
+                has_tab_colors = true
+                break
+            }
+        }
+    }
+    if has_tab_colors {
+        #if !#defined(KRYON_HOSTED_UI) {
+            tabs_bounds := SheetTabsBounds(editor, bounds)
+            tab_w: float32 = tabs_bounds.width / cast(float32)count
+            if tab_w < 72.0 { tab_w = 72.0 }
+            if tab_w > 104.0 { tab_w = 104.0 }
+            picked: s32 = -1
+            for index: 0..count - 1 {
+                sheet_id := shown[editor.tab_scroll + index]
+                rect := Rectangle.{tabs_bounds.x + cast(float32)index * tab_w, tabs_bounds.y, tab_w, TabsBottom}
+                if !input.blocked && input.pointer.pressed && PointInBounds(input.pointer.x, input.pointer.y, rect) {
+                    picked = sheet_id
+                }
+                tc: Engine.SheetTabColor
+                colored := Engine.WorkbookSheetTabColor(editor.workbook, sheet_id, *tc) != 0 && tc.has_bg != 0
+                active := sheet_id == editor.sheet_index
+                fill := ifx colored then ColorFromPacked(tc.bg_rgba) else (ifx active then Color.{241, 245, 249, 255} else Grid.GridHeaderBackground())
+                ink := ifx colored && tc.has_fg != 0 then ColorFromPacked(tc.fg_rgba) else AutoContrastInk(fill)
+                if !colored && !active { ink = Color.{226, 232, 240, 255} }
+                tbox: Box.Props
+                tbox.key = editor.key_base + cast(u64)(1100 + index)
+                tbox.bounds = rect
+                tbox.fill = fill
+                tbox.border = Color.{0, 0, 0, 50}
+                Box.Draw(session, tbox)
+                if active {
+                    bar_color := ifx colored then Color.{255, 255, 255, 235} else Grid.GridAccentColor()
+                    PaintRoundedFill(session, -1, Rectangle.{rect.x + 1.0, rect.y, rect.width - 2.0, 3.0}, 0.0, 1, bar_color)
+                }
+                label := EditorString(Engine.WorkbookSheetName(editor.workbook, sheet_id))
+                tw := cast(float32)GlyphWidth(label, Text.Text12, "")
+                tx := rect.x + 6.0
+                if rect.width - 12.0 > tw { tx = rect.x + (rect.width - tw) * 0.5 }
+                ty := rect.y + 7.0
+                clip := Rectangle.{rect.x + 4.0, rect.y + 3.0, rect.width - 8.0, rect.height - 5.0}
+                PaintClippedLabel(session, -1, label, cast(s32)tx, cast(s32)ty, Text.Text12, ink, clip)
+                if active { PaintClippedEmphasis(session, -1, label, cast(s32)tx, cast(s32)ty, Text.Text12, ink, clip) }
+            }
+            if picked >= 0 && picked != editor.sheet_index {
+                editor.sheet_index = picked
+                editor.scroll_row = 0
+                editor.scroll_column = 0
+                if !FormulaEditing(editor) && !editor.edit_refocus {
+                    first_vis_row: s32 = ifx RowHidden(editor, 0) then NextVisibleRow(editor, 0, 1) else 0
+                    first_vis_col: s32 = ifx ColHidden(editor, 0) then NextVisibleColumn(editor, 0, 1) else 0
+                    SelectCell(editor, first_vis_row, first_vis_col)
+                }
+            }
+            return
+        }
+    }
+
     tabs: [MaxShownTabs]TabBar.Tab
     selected_tab: s32 = -1
     index: s32 = 0
@@ -2020,6 +2083,10 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     if columns < editor.scroll_column + editor.visible_columns { columns = editor.scroll_column + editor.visible_columns }
 
     here: bool = editor.sheet_index == editor.edit_sheet
+    is_ods: bool = Engine.WorkbookIsOds(editor.workbook) != 0
+    ods_paper: Color = Color.{255, 255, 255, 255}
+    ods_grid_line: Color = Color.{217, 225, 235, 255}
+    ods_ink: Color = Color.{17, 24, 39, 255}
     first_row: s32 = SelectionFirstRow(editor)
     last_row: s32 = SelectionLastRow(editor)
     first_column: s32 = SelectionFirstColumn(editor)
@@ -2096,15 +2163,15 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
             text := TextUntilNul(display[:])
             style: Engine.CellStyle
             has_style := Engine.WorkbookCellStyle(editor.workbook, editor.sheet_index, src_row, src_col, *style) != 0
-            fill: Color = Grid.GridCellBackground()
+            fill: Color = ifx is_ods then ods_paper else Grid.GridCellBackground()
             if has_style && style.has_bg != 0 { fill = ColorFromPacked(style.bg_rgba) }
             active: bool = row == editor.selected_row && column == editor.selected_column
             in_rows: bool = editor.selection_axis == 2 || (row >= first_row && row <= last_row)
             in_columns: bool = editor.selection_axis == 1 || (column >= first_column && column <= last_column)
             if here && in_rows && in_columns && !(spans && active) {
-                if has_style && style.has_bg != 0 {
+                if (has_style && style.has_bg != 0) || is_ods {
                     if spans || editor.selection_axis != 0 {
-                        fill = BlendColor(fill, Grid.GridAccentColor(), 64)
+                        fill = BlendColor(fill, Grid.GridAccentColor(), 56)
                     }
                 } else {
                     fill = Grid.GridSelectedBackground()
@@ -2123,6 +2190,9 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
                 } else if style.has_bg != 0 {
                     fg = AutoContrastInk(fill)
                     has_fg = true
+                } else if is_ods {
+                    fg = ods_ink
+                    has_fg = true
                 }
                 bold = style.bold != 0
                 italic = style.italic != 0
@@ -2135,10 +2205,14 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
                     if font_size < 11 { font_size = 11 }
                     if font_size > 22 { font_size = 22 }
                 }
+            } else if is_ods {
+                fg = ods_ink
+                has_fg = true
             }
+            cell_grid_line := ifx is_ods || (has_style && style.has_bg != 0 && AutoContrastInk(fill).r < 128) then ods_grid_line else Grid.GridLineColor()
             GridSquareStyled(session, editor, 10000 + shown * editor.visible_columns + column - editor.scroll_column,
                 Rectangle.{ColumnX(editor, table, column), y, cell_w, cell_h},
-                fill, text, has_fg, fg, bold, italic, align, font_size)
+                fill, cell_grid_line, text, has_fg, fg, bold, italic, align, font_size, *style)
             column += 1
         }
         shown += 1
@@ -2537,10 +2611,10 @@ GridSquare :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, f
     Grid.GridSquare(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom, fill, text)
 }
 
-GridSquareStyled :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, text: string,
-    has_fg: bool, fg: Color, bold: bool, italic: bool, align: s32, font_size: s32) {
+GridSquareStyled :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, grid_line: Color, text: string,
+    has_fg: bool, fg: Color, bold: bool, italic: bool, align: s32, font_size: s32, borders: *Engine.CellStyle) {
     Grid.GridSquareStyled(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom,
-        fill, text, has_fg, fg, bold, italic, align, font_size)
+        fill, grid_line, text, has_fg, fg, bold, italic, align, font_size, borders)
 }
 
 BlendColor :: (base: Color, tint: Color, weight: s32) -> Color {

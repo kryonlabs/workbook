@@ -11,7 +11,10 @@ CellMerge :: struct { start_row: s32; start_col: s32; end_row: s32; end_col: s32
 CellStyle :: struct {
     bg_rgba: u32; fg_rgba: u32; has_bg: s32; has_fg: s32;
     bold: s32; italic: s32; align_h: s32; wrap: s32; font_size: float32;
+    border_top_rgba: u32; border_bottom_rgba: u32; border_left_rgba: u32; border_right_rgba: u32;
+    border_top_width: s32; border_bottom_width: s32; border_left_width: s32; border_right_width: s32;
 }
+SheetTabColor :: struct { bg_rgba: u32; fg_rgba: u32; has_bg: s32; has_fg: s32; }
 SheetChart :: struct { left_pts: float64; top_pts: float64; right_pts: float64; bottom_pts: float64; }
 FormulaRef :: struct {
     start: s32; end: s32; corner_start: s32; sheet: s32; range: s32
@@ -211,6 +214,8 @@ WorkbookLoadFile :: (book: *Workbook, path: string) -> s32 { return FileRequest(
 WorkbookWriteGnumeric :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "save", path) }
 WorkbookWriteOds :: (book: *Workbook, path: string) -> s32 { return FileRequest(book, "save", path) }
 WorkbookSheetVisible :: (book: *Workbook, sheet: s32) -> s32 { unused book; unused sheet; return 1 }
+WorkbookIsOds :: (book: *Workbook) -> s32 { unused book; return 0 }
+WorkbookSheetTabColor :: (book: *Workbook, sheet: s32, out: *SheetTabColor) -> s32 { unused book; unused sheet; if out != null { out.* = SheetTabColor.{} }; return 0 }
 WorkbookSetSheetVisible :: (book: *Workbook, sheet: s32, visible: s32) -> s32 { unused book; unused sheet; unused visible; return 0 }
 WorkbookColHidden :: (book: *Workbook, sheet: s32, col: s32) -> s32 { unused book; unused sheet; unused col; return 0 }
 WorkbookColWidth :: (book: *Workbook, sheet: s32, col: s32) -> float32 { unused book; unused sheet; unused col; return 0.0 }

@@ -10,12 +10,14 @@
 - Render embedded ODS/Gnumeric charts (`SheetObjectGraph` / `GogGraph`) live
   over the grid via Cairo at their anchor coordinates with viewport clipping,
   texture caching, smooth scrolling, and automatic refresh on cell edits.
-- Support rich spreadsheet layout and formatting: merged cells, explicit cell
-  backgrounds and text colors (with automatic contrast), bold/italic/font-size
-  styles, horizontal alignment, custom column widths and row heights, hidden
-  columns, collapsed multi-row hidden spans, hidden sheet filtering on the tab
-  bar (`View → Show hidden sheets`), and scrollable sheet tabs for workbooks
-  with more than 16 sheets.
+- Support rich spreadsheet layout and formatting: merged cells, exact ODS cell
+  backgrounds, text colors (including number-format color rules and evaluated
+  conditional formatting overlays), per-edge border colors and weights, ODS
+  paper canvas and subtle gridlines, colored sheet tabs (`table:tab-color`),
+  bold/italic/font-size styles, horizontal alignment, custom column widths and
+  row heights, hidden columns, collapsed multi-row hidden spans, hidden sheet
+  filtering on the tab bar (`View → Show hidden sheets`), and scrollable sheet
+  tabs for workbooks with more than 16 sheets.
 - Export the full editor as `workbook/editor` for other Kryon apps:
   `EditorOpen`/`EditorNew` return a handle, `EditorFrame` draws and handles one
   frame in a host region, `EditorSave`/`EditorSaveAs` save it, and
