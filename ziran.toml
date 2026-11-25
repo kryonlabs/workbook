@@ -7,11 +7,11 @@ bridge_modules = ["app"]
 
 [toolchain]
 git = "https://git.waozi.xyz/ziranlang/ziran.git"
-ref = "9432a110709c4a4f72c4f732fcfc368e15213a54"
+ref = "c041afb6de9b5f5f8be13c367563c267841e1cb6"
 
 [dependencies.kryon]
 git = "https://git.waozi.xyz/kryonlabs/kryon.git"
-ref = "facaace35051336a2a993d90d1bb7d7396543852"
+ref = "09664f076d3e8ea8db2013fb46fbcd9eda45c54b"
 
 [dependencies.mingcute]
 git = "https://git.waozi.xyz/kryonlabs/mingcute.git"

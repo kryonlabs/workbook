@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Build with Ziran c041afb6 and Kryon 09664f07: the desktop app and the preview host declare `main` and run `App.Run` like every Kryon program now that the program-export program entry is gone; the Werkzeug hosted `Main` protocol keeps its C-ABI export.
 - Full OpenDocument Spreadsheet (`.ods`) support via Gnumeric's OpenCalc
   engine: open, evaluate, edit, undo/redo, and save `.ods` workbooks directly
   in Workbook, embedded `workbook/editor`, and `cell`, including file picker

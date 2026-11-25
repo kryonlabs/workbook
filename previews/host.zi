@@ -3,6 +3,7 @@
 // Kryon's test driver; the sidebar buttons stand in for a real host's pages.
 using Editor :: #import "editor";
 Engine :: #import "engine";
+App :: #import "kryon/app";
 Box :: #import "kryon/box";
 Button :: #import "kryon/button";
 Text :: #import "kryon/text";
@@ -200,8 +201,9 @@ DrawSidebar :: (session: Session, viewport: Rectangle) {
     LabelAt(session, x, y, cast(u64)910007, TextUntilNul(editing_text[:]))
 }
 
-#program_export
-Frame :: (session: Session, viewport: Rectangle) -> s32 {
+Frame :: (frame: App.Frame) {
+    session := Session.{.slot = frame.slot, .epoch = frame.epoch}
+    viewport := frame.viewport
     if !started { Start(); started = true }
     DrawSidebar(session, viewport)
     bounds: Rectangle = Rectangle.{viewport.x + SidebarWidth, viewport.y,
@@ -219,5 +221,6 @@ Frame :: (session: Session, viewport: Rectangle) -> s32 {
     }
     unused EditorFrame(session, bounds, editor, input)
     if editor != null && EditorFocused(editor) { host_focus = false }
-    return 0
 }
+
+main :: () -> s32 { return App.Run(App.Window.{.title = "workbook-host"}, Frame) }

@@ -1,6 +1,7 @@
 // Workbook desktop application: profile selection, documents, window title,
 // menus and theme around the embeddable editor in src/editor.zi.
 Menu :: #import "kryon/menu";
+App :: #import "kryon/app";
 ContextMenu :: #import "kryon/context_menu";
 Box :: #import "kryon/box";
 Text :: #import "kryon/text";
@@ -106,8 +107,9 @@ dropped_path: [4096]u8;
         return 0
     }
 } else {
-    #program_export
-    Frame :: (session: Session, viewport: Rectangle) -> s32 {
+    Frame :: (frame: App.Frame) {
+        session := Session.{.slot = frame.slot, .epoch = frame.epoch}
+        viewport := frame.viewport
         FollowSystemTheme()
         if !app_started { LoadWorkbook(); app_started = true }
         while Desktop.DesktopTakeDroppedFile(dropped_path[:]) { OpenDocument(TextUntilNul(dropped_path[:])) }
@@ -115,8 +117,11 @@ dropped_path: [4096]u8;
         if !menus_block_input && !EditorFocused(editor) { EditorSetFocused(editor, true) }
         input := EditorSample(session, EditorBounds(viewport), editor, typed_storage[:], false)
         RunHostFrame(session, viewport, input)
-        return 0
     }
+
+// The desktop program entry sits at column zero so Kryon's project check
+// finds it; the hosted build above still enters through its `Main` protocol.
+main :: () -> s32 { return App.Run(App.Window.{.title = "Workbook"}, Frame) }
 }
 
 #scope_file
