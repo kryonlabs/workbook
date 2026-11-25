@@ -108,12 +108,12 @@
       "url": "https://github.com/videolan/dav1d.git"
     },
     {
-      "commit": "7dd9fff21bd1721deea91071a2317d106e901208",
+      "commit": "095874a1fd099d8810450785a1d96e6bce111246",
       "dependencies": {"kryon": "p0a84714856700560"},
-      "dependency_refs": {"kryon": "facaace35051336a2a993d90d1bb7d7396543852"},
-      "id": "pdf5ed733b0ff8cd3",
+      "dependency_refs": {"kryon": "09664f076d3e8ea8db2013fb46fbcd9eda45c54b"},
+      "id": "pbeedddb8faea6b41",
       "name": "Css",
-      "ref": "7dd9fff21bd1721deea91071a2317d106e901208",
+      "ref": "095874a1fd099d8810450785a1d96e6bce111246",
       "url": "https://git.waozi.xyz/kryonlabs/css.git"
     },
     {
@@ -136,8 +136,8 @@
     }
   ],
   "root": {
-    "dependencies": {"css": "pdf5ed733b0ff8cd3", "kryon": "p0a84714856700560", "mingcute": "p1007dc6cf1299f68"},
-    "dependency_refs": {"css": "7dd9fff21bd1721deea91071a2317d106e901208", "kryon": "09664f076d3e8ea8db2013fb46fbcd9eda45c54b", "mingcute": "9cc6872f75447c3a24c16764f9829d0f58751cb0"},
+    "dependencies": {"css": "pbeedddb8faea6b41", "kryon": "p0a84714856700560", "mingcute": "p1007dc6cf1299f68"},
+    "dependency_refs": {"css": "095874a1fd099d8810450785a1d96e6bce111246", "kryon": "09664f076d3e8ea8db2013fb46fbcd9eda45c54b", "mingcute": "9cc6872f75447c3a24c16764f9829d0f58751cb0"},
     "name": "workbook"
   },
   "toolchain": {

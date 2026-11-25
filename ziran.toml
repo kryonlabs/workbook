@@ -19,7 +19,7 @@ ref = "9cc6872f75447c3a24c16764f9829d0f58751cb0"
 
 [dependencies.css]
 git = "https://git.waozi.xyz/kryonlabs/css.git"
-ref = "7dd9fff21bd1721deea91071a2317d106e901208"
+ref = "095874a1fd099d8810450785a1d96e6bce111246"
 
 [install]
 bin = "workbook"
