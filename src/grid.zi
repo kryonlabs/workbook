@@ -5,8 +5,8 @@
 Box :: #import "kryon/box";
 Styles :: #import "kryon/style";
 TabBar :: #import "kryon/tab_bar";
+View :: #import "grid_view";
 Text :: #import "kryon/text";
-TextAlign :: #import "kryon/text_align";
 #import "kryon/drawing_props"
 #import "kryon/geometry"
 #import "kryon/session"
@@ -119,12 +119,7 @@ GridSquareStyled :: (session: Session, key: u64, bounds: Rectangle, right: float
     if bounds.x + bounds.width > right { bounds.width = right - bounds.x }
     if bounds.y + bounds.height > bottom { bounds.height = bottom - bounds.y }
     if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
-    box: Box.Props
-    box.key = key
-    box.bounds = bounds
-    box.fill = fill
-    box.border = grid_line
-    Box.Draw(session, box)
+    View.DrawCellBackground(session, key, bounds, fill, grid_line)
     #if !#defined(KRYON_HOSTED_UI) {
         if borders != null {
             if borders.border_top_width > 0 {
@@ -178,16 +173,7 @@ GridSquareStyled :: (session: Session, key: u64, bounds: Rectangle, right: float
             return
         }
     }
-    label: Text.Props
-    label.key = key + 1
-    label.text = text
-    label.size = size
-    label.wrap = Text.Wrap.TextWrapNone
-    if align == 1 { label.align = TextAlign.TextAlign.TextAlignCenter }
-    else if align == 2 { label.align = TextAlign.TextAlign.TextAlignEnd }
-    label.bounds = Rectangle.{bounds.x + 4.0, bounds.y + 3.0,
-        bounds.width - 8.0, bounds.height - 4.0}
-    Text.Draw(session, label)
+    View.DrawCellLabel(session, key, bounds, text, size, align)
 }
 
 // Column letters: A to Z, then AA to ZZ.

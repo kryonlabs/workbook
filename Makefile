@@ -14,7 +14,7 @@ CELL := build/cell
 HOST_APP := build/preview/desktop/host/workbook-desktop
 TESTS := gnumeric_test source_audit_test structure_test conversion_test differential_fuzz desktop_test parity_test service_test grid_test host_test
 TEST_PROGRAMS := $(TESTS:%=build/%)
-SOURCES := $(wildcard src/*.zi) ziran.toml ziran.lock
+SOURCES := $(wildcard src/*.zi src/*.tsx) ziran.toml ziran.lock
 
 # Programs that read their arguments from main(argc, argv) build without
 # -pedantic-errors: C wants that signature spelled with char, and signed char

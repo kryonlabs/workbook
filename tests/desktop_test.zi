@@ -712,13 +712,13 @@ DriveHeaders :: (directory: string) -> s32 {
         result = Run(evaluate[:],bytes[:]); Check(result.code==0 && ParseCsv(0,TextView(bytes[:result.length])),"cannot read cleared column")
         Check(CsvCellText(0,0,1)=="" && CsvCellText(0,1,1)=="" && CsvCellText(0,20,1)=="","delete clears the entire column")
         Check(CsvCellText(0,0,0)=="11" && CsvCellText(0,20,2)=="212","column delete preserves neighboring columns")
-        Press(GridLeft-30,GridTop+14); Key("Delete"); Save()
-        // Native CSV trims leading empty rows and columns. Check the saved
-        // coordinates directly so export bounds do not change this selection test.
-        ExpectSavedCell(0,0,""); ExpectSavedCell(0,2,"")
-        ExpectSavedCell(1,2,"22"); ExpectSavedCell(20,2,"212")
-        Check(StopApp()==0,"header test app exits cleanly")
     }
+    Press(GridLeft-30,GridTop+14); Key("Delete"); Save()
+    // Native CSV trims leading empty rows and columns. Check the saved
+    // coordinates directly so export bounds do not change this selection test.
+    ExpectSavedCell(0,0,""); ExpectSavedCell(0,2,"")
+    ExpectSavedCell(1,2,"22"); ExpectSavedCell(20,2,"212")
+    Check(StopApp()==0,"header test app exits cleanly")
 
     // Right-clicking a row number targets that row, regardless of the active cell.
     Check(WriteWholeFile(TextUntilNul(fixture[:]),RowMenuWorkbook),"cannot write row menu fixture"); StartApp(directory)

@@ -7,7 +7,7 @@ bridge_modules = ["app"]
 
 [toolchain]
 git = "https://git.waozi.xyz/ziranlang/ziran.git"
-ref = "bb0323cef6c7b144eeea5ad1670ccf7a3fbde253"
+ref = "23dece1339d51cf51730be438325605e6ec29c87"
 
 [dependencies.kryon]
 git = "https://git.waozi.xyz/kryonlabs/kryon.git"
@@ -40,4 +40,4 @@ categories = "Office;Spreadsheet;"
 service = "src/service.zi"
 grid = "src/grid.zi"
 engine = "src/engine.zi"
-editor = "src/editor.zi"
+editor = "src/editor_api.zi"

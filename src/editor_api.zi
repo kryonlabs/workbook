@@ -1,0 +1,10 @@
+// Public workbook/editor API. Keep the original handle and action types.
+using EditorModel :: #import "editor";
+#import "kryon/session"
+#import "kryon/geometry"
+View :: #import "editor_view";
+
+// Draw one frame inside the host bounds and report whether it handled input.
+EditorFrame :: (session: Session, bounds: Rectangle, editor: *Editor, input: EditorInput) -> bool {
+    return View.WorkbookEditor(.{session = session, bounds = bounds, editor = editor, input = input})
+}

@@ -1,5 +1,5 @@
-// Workbook is authored in Ziran: no Kry source, no code in another language
-// (C, Go, Python, shell, JavaScript), no vendored runtime, and no SSH package
+// Workbook uses Ziran and its native TSX frontend: no Kry source, no JavaScript
+// runtime, no C/Go/Python/shell sources, no vendored runtime, and no SSH package
 // URL may come back. Run it from the repository root.
 #load "test_support.zi";
 
@@ -93,7 +93,7 @@ main :: () -> s32 {
     failures: s32 = 0
     failures += Walk(".", true)
     if failures > 0 {
-        WriteText(2, "code in another language or legacy Kry source remains; Workbook is Ziran (.zi)\n")
+        WriteText(2, "code in another language or legacy Kry source remains; Workbook uses Ziran (.zi and native .tsx)\n")
     }
     if PathExists(".gitmodules") || PathExists("vendor") {
         WriteText(2, "dependencies are Ziran packages in ziran.toml, not submodules or vendor/\n")

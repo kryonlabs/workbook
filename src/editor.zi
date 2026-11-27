@@ -11,7 +11,6 @@ TabBar :: #import "kryon/tab_bar";
 TextField :: #import "kryon/text_field";
 Box :: #import "kryon/box";
 Text :: #import "kryon/text";
-Button :: #import "kryon/button";
 #import "kryon/system_clipboard"
 #if !#defined(KRYON_HOSTED_UI) {
     #import "kryon/key_input"
@@ -39,22 +38,6 @@ Grid :: #import "grid";
 #import "std/vec"
 #import "std/number_text"
 
-SaveIcon :: #import "mingcute/mingcute_regular_save_2";
-RowAddIcon :: #import "mingcute/mingcute_extra_table_row_add";
-RowRemoveIcon :: #import "mingcute/mingcute_extra_table_row_remove";
-ColumnAddIcon :: #import "mingcute/mingcute_extra_table_column_add";
-ColumnRemoveIcon :: #import "mingcute/mingcute_extra_table_column_remove";
-LeftIcon :: #import "mingcute/mingcute_regular_arrow_left";
-RightIcon :: #import "mingcute/mingcute_regular_arrow_right";
-UpIcon :: #import "mingcute/mingcute_regular_arrow_up";
-DownIcon :: #import "mingcute/mingcute_regular_arrow_down";
-
-using ButtonEmphasis;
-using ButtonTone;
-using ControlSize;
-using TabBar.TabBarPlacement;
-using Text.Wrap;
-
 #scope_file
 
 #if !#defined(KRYON_HOSTED_UI) {
@@ -77,12 +60,8 @@ MaxColumns :: 16384; // GNM_MAX_COLS
 CellTextMax :: 256;
 // Relative to the editor's own bounds: toolbar (2..30), formula bar (32..58),
 // grid (60..height-28), sheet tabs (height-28..height).
-ToolbarTop :: 2.0;
 FormulaTop :: 32.0;
-TableTop :: 60.0;
-Margin :: 0.0;
 TabsBottom :: 28.0;
-GridBottom :: 28.0;
 
 KeyA :: 65;
 KeyC :: 67;
@@ -772,9 +751,18 @@ EditorCreateFormulaChart :: (editor: *Editor) {
 
 // ------------------------------------------------------------------- frame
 
-// Draws the editor inside bounds and handles one frame of input. Returns true
-// when the editor handled this frame's pointer, wheel, or keyboard input.
-EditorFrame :: (session: Session, bounds: Rectangle, editor: *Editor, input: EditorInput) -> bool {
+// Input and focus state shared by the frame and its widgets.
+EditorFrameState :: struct {
+    input: EditorInput;
+    typed: [128]u8;
+    typed_length: s32;
+    handled: bool;
+    was_editing: bool;
+    key: s32;
+    control: bool;
+}
+
+EditorPrepareFrame :: (bounds: Rectangle, editor: *Editor, input: EditorInput, state: *EditorFrameState) -> bool {
     if editor == null || editor.workbook == null { return false }
     if editor.key_base == 0 { editor.key_base = DefaultKeyBase }
     if input.blocked { input.wheel = 0.0 }
@@ -809,15 +797,14 @@ EditorFrame :: (session: Session, bounds: Rectangle, editor: *Editor, input: Edi
 
     key: s32 = 0
     control: bool = false
-    typed_buf: [128]u8
     typed_length: s32 = 0
     if editor.focused && !input.blocked {
         key = input.key
         control = (input.modifiers & KeyModifierControl) != 0
         editor.shift_held = (input.modifiers & KeyModifierShift) != 0
         if input.typed.count > 0 {
-            SetText(typed_buf[:], input.typed)
-            typed_length = cast(s32)TextUntilNul(typed_buf[:]).count
+            SetText(state.typed[:], input.typed)
+            typed_length = cast(s32)TextUntilNul(state.typed[:]).count
         }
         if key != 0 || typed_length > 0 { handled = true }
     } else {
@@ -852,25 +839,29 @@ EditorFrame :: (session: Session, bounds: Rectangle, editor: *Editor, input: Edi
         editor.edit_refocus = true
     }
 
-    DrawBackground(session, editor, bounds)
-    DrawToolbar(session, editor, bounds)
-    // The formula field consumes this frame's keys while it is being edited;
-    // the grid takes them otherwise, never both.
-    was_editing: bool = editor.edit_focused
-    DrawFormulaBar(session, editor, bounds, key, control, typed_buf[:], typed_length)
-    if !was_editing && editor.focused && !input.blocked {
-        HandleGridKeys(editor, key, control, typed_buf[:], typed_length)
+    state.input = input
+    state.handled = handled
+    state.key = key
+    state.control = control
+    state.typed_length = typed_length
+    return true
+}
+
+EditorApplyGridKeys :: (editor: *Editor, state: *EditorFrameState) {
+    if !state.was_editing && editor.focused && !state.input.blocked {
+        HandleGridKeys(editor, state.key, state.control, state.typed[:], state.typed_length)
     }
-    DrawGrid(session, editor, bounds, input)
-    DrawSheetTabs(session, editor, bounds, input)
-    DrawGridMenu(session, editor, key == KeyEscape)
+}
+
+EditorAutosave :: (editor: *Editor) {
     if editor.autosave && editor.dirty && editor.data_path[0] != 0 &&
     MonotonicMilliseconds() >= editor.save_retry_at {
         unused EditorSave(editor, false)
     }
-    DrawStatus(session, editor, bounds)
+}
+
+EditorFinishFrame :: (editor: *Editor, pointer: PointerFrame) {
     if editor.edit_refocus && !pointer.down && !pointer.pressed { editor.edit_refocus = false }
-    return handled
 }
 
 #scope_file
@@ -995,7 +986,11 @@ SelectionLastRow :: (editor: *Editor) -> s32 { return ifx editor.selection_axis 
 SelectionFirstColumn :: (editor: *Editor) -> s32 { return ifx editor.selection_axis == 1 then 0 else Min(editor.selected_column, editor.range_column) }
 SelectionLastColumn :: (editor: *Editor) -> s32 { return ifx editor.selection_axis == 1 then Engine.WorkbookSheetColumns(editor.workbook, editor.sheet_index) - 1 else Max(editor.selected_column, editor.range_column) }
 
+#scope_export
+
 Min :: (a: s32, b: s32) -> s32 { return ifx a < b then a else b }
+#scope_file
+
 Max :: (a: s32, b: s32) -> s32 { return ifx a > b then a else b }
 MinFloat :: (a: float32, b: float32) -> float32 { return ifx a < b then a else b }
 
@@ -1373,60 +1368,6 @@ PutEditText :: (editor: *Editor, state: *EditTextState) {
 
 // -------------------------------------------------------------------- view
 
-DrawBackground :: (session: Session, editor: *Editor, bounds: Rectangle) {
-    background: Box.Props
-    background.key = editor.key_base + 7
-    background.bounds = bounds
-    background.fill = Grid.GridColor("canvas")
-    Box.Draw(session, background)
-}
-
-DrawToolbar :: (session: Session, editor: *Editor, bounds: Rectangle) {
-    x: float32 = bounds.x + 4.0
-    if ToolbarIcon(session, editor, 1001, SaveIcon.Shape, bounds.y + ToolbarTop, *x, editor.dirty) {
-        unused EditorSave(editor, true)
-    }
-    if ToolbarIcon(session, editor, 1002, RowAddIcon.Shape, bounds.y + ToolbarTop, *x, false) {
-        RecordChange(editor)
-        Engine.WorkbookInsertRow(editor.workbook, editor.sheet_index, editor.selected_row)
-        Changed(editor)
-    }
-    if ToolbarIcon(session, editor, 1003, RowRemoveIcon.Shape, bounds.y + ToolbarTop, *x, false) {
-        RecordChange(editor)
-        Engine.WorkbookDeleteRow(editor.workbook, editor.sheet_index, editor.selected_row)
-        Changed(editor)
-    }
-    if ToolbarIcon(session, editor, 1004, ColumnAddIcon.Shape, bounds.y + ToolbarTop, *x, false) {
-        RecordChange(editor)
-        Engine.WorkbookInsertColumn(editor.workbook, editor.sheet_index, editor.selected_column)
-        Changed(editor)
-    }
-    if ToolbarIcon(session, editor, 1005, ColumnRemoveIcon.Shape, bounds.y + ToolbarTop, *x, false) {
-        RecordChange(editor)
-        Engine.WorkbookDeleteColumn(editor.workbook, editor.sheet_index, editor.selected_column)
-        Changed(editor)
-    }
-    chart: Button.Props
-    chart.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + 1010
-    chart.label = "Chart"
-    chart.size = cast(ControlSize)ControlSizeSmall
-    chart.bounds = Rectangle.{x, bounds.y + ToolbarTop, 58.0, 28.0}
-    x += 60.0
-    if Button.Draw(session, chart) != 0 { CreateFormulaChart(editor) }
-    if bounds.width < 600.0 {
-        row := editor.selected_row; column := editor.selected_column
-        if ToolbarIcon(session, editor, 1006, LeftIcon.Shape, bounds.y + ToolbarTop, *x, false) { column = Max(0, column - 1) }
-        if ToolbarIcon(session, editor, 1007, UpIcon.Shape, bounds.y + ToolbarTop, *x, false) { row = NextVisibleRow(editor, row, -1) }
-        if ToolbarIcon(session, editor, 1008, DownIcon.Shape, bounds.y + ToolbarTop, *x, false) { row = NextVisibleRow(editor, row, 1) }
-        if ToolbarIcon(session, editor, 1009, RightIcon.Shape, bounds.y + ToolbarTop, *x, false) { column = Min(MaxColumns - 1, column + 1) }
-        if row != editor.selected_row || column != editor.selected_column {
-            if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
-            SelectCell(editor, row, column)
-            EnsureVisible(editor)
-        }
-    }
-}
-
 CreateFormulaChart :: (editor: *Editor) {
     if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
     first_row: s32 = Min(editor.selected_row, editor.range_row)
@@ -1485,33 +1426,6 @@ CreateFormulaChart :: (editor: *Editor) {
     Changed(editor)
 }
 
-DrawStatus :: (session: Session, editor: *Editor, bounds: Rectangle) {
-    if editor.status[0] == 0 { return }
-    label: Text.Props
-    label.key = editor.key_base + 5
-    label.text = TextUntilNul(editor.status[:])
-    label.size = Text.Text14
-    label.bounds = Rectangle.{bounds.x + 180.0, bounds.y + bounds.height - 24.0,
-        bounds.width - 184.0, 20.0}
-    Text.Draw(session, label)
-}
-
-ToolbarIcon :: (session: Session, editor: *Editor, id: s32, shape: string, y: float32,
-    x: *float32, primary: bool) -> bool {
-    button: Button.Props
-    button.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + id
-    button.icon_shape = shape
-    button.icon_only = true
-    button.size = cast(ControlSize)ControlSizeSmall
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    if primary {
-        button.tone = cast(ButtonTone)ButtonToneAccent
-    }
-    button.bounds = Rectangle.{x.*, y, 28.0, 28.0}
-    x.* = x.* + 30.0
-    return Button.Draw(session, button) != 0
-}
-
 Changed :: (editor: *Editor) {
     Engine.WorkbookEvaluate(editor.workbook)
     editor.dirty = true
@@ -1544,6 +1458,8 @@ CollectShownSheets :: (editor: *Editor, out: []s32) -> s32 {
     return count
 }
 
+#scope_export
+
 SheetTabsBounds :: (editor: *Editor, bounds: Rectangle) -> Rectangle {
     shown: [64]s32
     shown_count := CollectShownSheets(editor, shown[:])
@@ -1554,38 +1470,19 @@ SheetTabsBounds :: (editor: *Editor, bounds: Rectangle) -> Rectangle {
     return Rectangle.{bounds.x + left_offset, bounds.y + bounds.height - TabsBottom, MinFloat(available, 104.0 * cast(float32)count), 28.0}
 }
 
-DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle, input: EditorInput) {
-    shown: [64]s32
-    shown_count := CollectShownSheets(editor, shown[:])
-    if shown_count < 1 { return }
-    strip: Box.Props
-    strip.key = editor.key_base + 1098
-    strip.bounds = Rectangle.{bounds.x, bounds.y + bounds.height - TabsBottom, bounds.width, TabsBottom}
-    strip.fill = Grid.GridHeaderBackground()
-    strip.border = Grid.GridLineColor()
-    Box.Draw(session, strip)
+EditorTabList :: struct {
+    sheets: [64]s32;
+    tabs: [MaxShownTabs]TabBar.Tab;
+}
 
-    max_scroll: s32 = Max(0, shown_count - MaxShownTabs)
-    if editor.tab_scroll > max_scroll { editor.tab_scroll = max_scroll }
-    if editor.tab_scroll < 0 { editor.tab_scroll = 0 }
-    if shown_count > MaxShownTabs {
-        prev_btn: Button.Props
-        prev_btn.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + 1096
-        prev_btn.label = "<"
-        prev_btn.size = cast(ControlSize)ControlSizeSmall
-        prev_btn.disabled = editor.tab_scroll <= 0
-        prev_btn.bounds = Rectangle.{bounds.x + 2.0, bounds.y + bounds.height - TabsBottom + 2.0, 22.0, 24.0}
-        if Button.Draw(session, prev_btn) != 0 && editor.tab_scroll > 0 { editor.tab_scroll -= 1 }
-        next_btn: Button.Props
-        next_btn.id = cast(s32)(editor.key_base & 0x3FFFFFFF) + 1097
-        next_btn.label = ">"
-        next_btn.size = cast(ControlSize)ControlSizeSmall
-        next_btn.disabled = editor.tab_scroll >= max_scroll
-        next_btn.bounds = Rectangle.{bounds.x + 26.0, bounds.y + bounds.height - TabsBottom + 2.0, 22.0, 24.0}
-        if Button.Draw(session, next_btn) != 0 && editor.tab_scroll < max_scroll { editor.tab_scroll += 1 }
-    }
+EditorShownSheets :: (editor: *Editor, shown: []s32) -> s32 {
+    count := CollectShownSheets(editor, shown)
+    editor.tab_scroll = Min(Max(0, editor.tab_scroll), Max(0, count - MaxShownTabs))
+    return count
+}
 
-    count: s32 = Min(shown_count - editor.tab_scroll, MaxShownTabs)
+EditorDrawColoredTabs :: (session: Session, editor: *Editor, bounds: Rectangle, input: EditorInput,
+    shown: []s32, count: s32) -> bool {
     has_tab_colors: bool = false
     #if !#defined(KRYON_HOSTED_UI) {
         for index: 0..count - 1 {
@@ -1634,64 +1531,67 @@ DrawSheetTabs :: (session: Session, editor: *Editor, bounds: Rectangle, input: E
                 PaintClippedLabel(session, -1, label, cast(s32)tx, cast(s32)ty, Text.Text12, ink, clip)
                 if active { PaintClippedEmphasis(session, -1, label, cast(s32)tx, cast(s32)ty, Text.Text12, ink, clip) }
             }
-            if picked >= 0 && picked != editor.sheet_index {
-                editor.sheet_index = picked
-                editor.scroll_row = 0
-                editor.scroll_column = 0
-                if !FormulaEditing(editor) && !editor.edit_refocus {
-                    first_vis_row: s32 = ifx RowHidden(editor, 0) then NextVisibleRow(editor, 0, 1) else 0
-                    first_vis_col: s32 = ifx ColHidden(editor, 0) then NextVisibleColumn(editor, 0, 1) else 0
-                    SelectCell(editor, first_vis_row, first_vis_col)
-                }
-            }
-            return
+            EditorPickSheet(editor, picked)
+            return true
         }
     }
 
-    tabs: [MaxShownTabs]TabBar.Tab
-    selected_tab: s32 = -1
-    index: s32 = 0
-    while index < count {
-        sheet_id := shown[editor.tab_scroll + index]
-        tabs[index].key = editor.key_base + cast(u64)(1100 + index)
-        tabs[index].label = EditorString(Engine.WorkbookSheetName(editor.workbook, sheet_id))
-        if sheet_id == editor.sheet_index { selected_tab = index }
-        index += 1
-    }
-    bar: TabBar.Props
-    bar.key = editor.key_base + 1099
-    bar.placement = cast(TabBar.TabBarPlacement)TabBarBottom
-    bar.selected_index = ifx selected_tab >= 0 then selected_tab else 0
-    bar.bounds = SheetTabsBounds(editor, bounds)
-    bar.min_tab_width = 72
-    bar.max_tab_width = 104
-    result: TabBar.Result = TabBar.Draw(session, bar, tabs[0:count])
-    if result.selected_index >= 0 && result.selected_index < count {
-        picked := shown[editor.tab_scroll + result.selected_index]
-        if picked != editor.sheet_index {
-            editor.sheet_index = picked
-            editor.scroll_row = 0
-            editor.scroll_column = 0
-            if !FormulaEditing(editor) && !editor.edit_refocus {
-                first_vis_row: s32 = ifx RowHidden(editor, 0) then NextVisibleRow(editor, 0, 1) else 0
-                first_vis_col: s32 = ifx ColHidden(editor, 0) then NextVisibleColumn(editor, 0, 1) else 0
-                SelectCell(editor, first_vis_row, first_vis_col)
-            }
-        }
+    return false
+}
+
+EditorSheetTabName :: (editor: *Editor, sheet: s32) -> string {
+    return EditorString(Engine.WorkbookSheetName(editor.workbook, sheet))
+}
+
+EditorPickSheet :: (editor: *Editor, picked: s32) {
+    if picked < 0 || picked == editor.sheet_index { return }
+    editor.sheet_index = picked
+    editor.scroll_row = 0
+    editor.scroll_column = 0
+    if !FormulaEditing(editor) && !editor.edit_refocus {
+        first_vis_row: s32 = ifx RowHidden(editor, 0) then NextVisibleRow(editor, 0, 1) else 0
+        first_vis_col: s32 = ifx ColHidden(editor, 0) then NextVisibleColumn(editor, 0, 1) else 0
+        SelectCell(editor, first_vis_row, first_vis_col)
     }
 }
 
-DrawFormulaBar :: (session: Session, editor: *Editor, bounds: Rectangle, key: s32,
-    control: bool, typed: []u8, typed_length: s32) {
-    label: Text.Props
-    label.key = editor.key_base + 3
-    label.text = "fx"
-    label.size = Text.Text16
-    label.disabled = true
-    label.bounds = Rectangle.{bounds.x + 8.0, bounds.y + FormulaTop + 3.0, 24.0, 20.0}
-    Text.Draw(session, label)
-    result: FormulaFieldResult = RunFormulaField(session, editor, bounds, key, control,
-        typed, typed_length)
+EditorControlKeyBase :: (editor: *Editor) -> s32 { return cast(s32)(editor.key_base & 0x3FFFFFFF) }
+
+EditorMoveSelection :: (editor: *Editor, left: bool, up: bool, down: bool, right: bool) {
+    row := editor.selected_row
+    column := editor.selected_column
+    if left { column = Max(0, column - 1) }
+    if up { row = NextVisibleRow(editor, row, -1) }
+    if down { row = NextVisibleRow(editor, row, 1) }
+    if right { column = Min(MaxColumns - 1, column + 1) }
+    if row == editor.selected_row && column == editor.selected_column { return }
+    if editor.edit_focused { CommitCell(editor); EndEdit(editor) }
+    SelectCell(editor, row, column)
+    EnsureVisible(editor)
+}
+
+EditorCopyFormulaFieldResult :: (drawn: TextField.Result) -> FormulaFieldResult {
+    result: FormulaFieldResult
+    result.start = drawn.edit.start
+    result.end = drawn.edit.end
+    result.changed = drawn.edit.changed
+    SetText(result.replacement[:], drawn.edit.replacement)
+    result.replacement_length = cast(s32)TextUntilNul(result.replacement[:]).count
+    result.cursor = drawn.cursor
+    result.anchor = drawn.anchor
+    result.scroll_x = drawn.scroll_x
+    result.focused = drawn.focused
+    result.committed = drawn.committed
+    result.escaped = drawn.escaped
+    result.composition_active = drawn.composition.active
+    result.composition_cursor = drawn.composition.cursor
+    result.composition_selection_length = drawn.composition.selection_length
+    SetText(result.composition_text[:], drawn.composition.text)
+    result.composition_text_length = cast(s32)TextUntilNul(result.composition_text[:]).count
+    return result
+}
+
+EditorApplyFormulaField :: (editor: *Editor, control: bool, result: FormulaFieldResult) {
     editor.edit_claim = false
     if result.changed || result.cursor != editor.edit_cursor || result.anchor != editor.edit_anchor {
         editor.pick_start = -1
@@ -1729,6 +1629,8 @@ DrawFormulaBar :: (session: Session, editor: *Editor, bounds: Rectangle, key: s3
         SelectCell(editor, editor.selected_row, editor.selected_column)
     }
 }
+
+#scope_file
 
 // --------------------------------------------------------- formula picking
 
@@ -1805,6 +1707,8 @@ WritePick :: (editor: *Editor, start: s32, end: s32, new_step: bool) {
 // The parts of TextField.Result the formula bar uses, with the replacement
 // text copied into owned storage so the value can leave a function holding
 // the editor.
+#scope_export
+
 FormulaFieldResult :: struct {
     start: s32;
     end: s32;
@@ -1824,12 +1728,10 @@ FormulaFieldResult :: struct {
     composition_selection_length: s32;
 }
 
-RunFormulaField :: (session: Session, editor: *Editor, bounds: Rectangle, key: s32,
-    control: bool, typed: []u8, typed_length: s32) -> FormulaFieldResult {
+EditorFormulaField :: (editor: *Editor, bounds: Rectangle, state: *EditorFrameState) -> TextField.Props {
     field: TextField.Props
     field.key = editor.key_base + 4
     field.bounds = Rectangle.{bounds.x + 40.0, bounds.y + FormulaTop, bounds.width - 42.0, 26.0}
-    field.value = TextUntilNul(editor.edit[:])
     field.label = "Cell value"
     field.placeholder = "Value or =formula"
     field.cursor = editor.edit_cursor
@@ -1839,12 +1741,12 @@ RunFormulaField :: (session: Session, editor: *Editor, bounds: Rectangle, key: s
     field.composition.active = editor.edit_composition.active
     field.composition.cursor = editor.edit_composition.cursor
     field.composition.selection_length = editor.edit_composition.selection_length
-    field.composition.text = TextView(editor.edit_composition_text[0:editor.edit_composition_length])
     field.max_bytes = CellTextMax - 1
     field.input.focus = editor.focused && (editor.edit_refocus || editor.edit_claim)
     field.input.blur = !editor.focused || (!editor.edit_focused && !editor.edit_refocus)
+    key := state.key
+    control := state.control
     if editor.focused && editor.edit_focused {
-        field.input.text = TextView(typed[0:typed_length])
         field.input.left = key == KeyLeft
         field.input.right = key == KeyRight
         field.input.home = key == KeyHome
@@ -1858,26 +1760,10 @@ RunFormulaField :: (session: Session, editor: *Editor, bounds: Rectangle, key: s
         field.input.commit = key == KeyEnter
         field.input.escape = key == KeyEscape
     }
-    drawn: TextField.Result = TextField.Draw(session, field)
-    result: FormulaFieldResult
-    result.start = drawn.edit.start
-    result.end = drawn.edit.end
-    result.changed = drawn.edit.changed
-    SetText(result.replacement[:], drawn.edit.replacement)
-    result.replacement_length = cast(s32)TextUntilNul(result.replacement[:]).count
-    result.cursor = drawn.cursor
-    result.anchor = drawn.anchor
-    result.scroll_x = drawn.scroll_x
-    result.focused = drawn.focused
-    result.committed = drawn.committed
-    result.escaped = drawn.escaped
-    result.composition_active = drawn.composition.active
-    result.composition_cursor = drawn.composition.cursor
-    result.composition_selection_length = drawn.composition.selection_length
-    SetText(result.composition_text[:], drawn.composition.text)
-    result.composition_text_length = cast(s32)TextUntilNul(result.composition_text[:]).count
-    return result
+    return field
 }
+
+#scope_file
 
 // -------------------------------------------------------------------- grid
 
@@ -1945,6 +1831,8 @@ ChartExtentColumn :: (editor: *Editor) -> s32 {
 
 PickShown :: (editor: *Editor) -> bool { return FormulaEditing(editor) && editor.pick_start >= 0 && editor.pick_sheet == editor.sheet_index }
 
+#scope_export
+
 RowHidden :: (editor: *Editor, row: s32) -> bool { return Engine.WorkbookRowHidden(editor.workbook, editor.sheet_index, row) != 0 }
 ColHidden :: (editor: *Editor, column: s32) -> bool { return Engine.WorkbookColHidden(editor.workbook, editor.sheet_index, column) != 0 }
 
@@ -1974,6 +1862,8 @@ GridColWidth :: (editor: *Editor, column: s32) -> float32 {
     }
     return Grid.GridColumnWidth
 }
+
+#scope_file
 
 NextVisibleRow :: (editor: *Editor, row: s32, step: s32) -> s32 {
     next: s32 = row + step
@@ -2030,9 +1920,21 @@ EnsureVisible :: (editor: *Editor) {
     }
 }
 
-DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: EditorInput) {
-    table: Rectangle = Rectangle.{bounds.x + Margin, bounds.y + TableTop,
-        bounds.width - Margin * 2.0, bounds.height - TableTop - GridBottom}
+#scope_export
+
+EditorGrid :: struct {
+    rows: s32;
+    columns: s32;
+    here: bool;
+    is_ods: bool;
+    first_row: s32;
+    last_row: s32;
+    first_column: s32;
+    last_column: s32;
+    spans: bool;
+}
+
+EditorPrepareGrid :: (editor: *Editor, table: Rectangle, input: EditorInput) -> EditorGrid {
     editor.grid_right = table.x + table.width
     editor.grid_bottom = table.y + table.height
     editor.grid_body_height = table.height - Grid.GridHeaderHeight
@@ -2082,179 +1984,132 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     if rows < editor.scroll_row + editor.visible_rows { rows = editor.scroll_row + editor.visible_rows }
     if columns < editor.scroll_column + editor.visible_columns { columns = editor.scroll_column + editor.visible_columns }
 
-    here: bool = editor.sheet_index == editor.edit_sheet
-    is_ods: bool = Engine.WorkbookIsOds(editor.workbook) != 0
-    ods_paper: Color = Color.{255, 255, 255, 255}
-    ods_grid_line: Color = Color.{217, 225, 235, 255}
-    ods_ink: Color = Color.{17, 24, 39, 255}
-    first_row: s32 = SelectionFirstRow(editor)
-    last_row: s32 = SelectionLastRow(editor)
-    first_column: s32 = SelectionFirstColumn(editor)
-    last_column: s32 = SelectionLastColumn(editor)
-    spans: bool = editor.selection_axis == 0 && (first_row != last_row || first_column != last_column)
+    grid: EditorGrid
+    grid.rows = rows
+    grid.columns = columns
+    grid.here = editor.sheet_index == editor.edit_sheet
+    grid.is_ods = Engine.WorkbookIsOds(editor.workbook) != 0
+    grid.first_row = SelectionFirstRow(editor)
+    grid.last_row = SelectionLastRow(editor)
+    grid.first_column = SelectionFirstColumn(editor)
+    grid.last_column = SelectionLastColumn(editor)
+    grid.spans = editor.selection_axis == 0 && (grid.first_row != grid.last_row || grid.first_column != grid.last_column)
+    return grid
+}
 
-    GridSquare(session, editor, 10, Rectangle.{table.x, table.y, Grid.GridRowHeaderWidth, Grid.GridHeaderHeight},
-        Grid.GridHeaderBackground(), "")
-    column: s32 = editor.scroll_column
-    while column < editor.scroll_column + editor.visible_columns && column < columns {
-        col_w := GridColWidth(editor, column)
-        if col_w > 0.0 {
-            name: [8]u8
-            AppendCellColumn(name[:], column)
-            GridSquare(session, editor, 20 + column - editor.scroll_column, Rectangle.{ColumnX(editor, table, column), table.y,
-                    col_w, Grid.GridHeaderHeight}, ifx here && editor.selection_axis == 2 && column == editor.selected_column then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(name[:]))
-        }
-        column += 1
-    }
-    shown: s32 = 0
-    while shown < editor.visible_rows && editor.scroll_row + shown < rows {
-        row: s32 = editor.scroll_row + shown
-        y: float32 = RowY(editor, table, row)
-        row_h: float32 = GridRowHeight(editor, row)
-        if RowHidden(editor, row) {
-            if row_h > 0.0 {
-                GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, table.width, row_h}, Grid.GridHeaderBackground(), "")
-                strip: Box.Props
-                strip.key = editor.key_base + cast(u64)(500000 + shown)
-                strip.bounds = Rectangle.{table.x, y + 2.0, table.width, 1.0}
-                strip.fill = Grid.GridLineColor()
-                Box.Draw(session, strip)
-            }
-            shown += 1
-            continue
-        }
-        number: [16]u8
-        row_digits: [16]u8
-        SetText(number[:], FormatInteger(cast(s64)row + 1, row_digits[:]))
-        GridSquare(session, editor, 1000 + shown, Rectangle.{table.x, y, Grid.GridRowHeaderWidth, row_h},
-            ifx here && editor.selection_axis == 1 && row == editor.selected_row then Grid.GridSelectedBackground() else Grid.GridHeaderBackground(), TextUntilNul(number[:]))
-        column = editor.scroll_column
-        while column < editor.scroll_column + editor.visible_columns && column < columns {
-            col_w := GridColWidth(editor, column)
-            if col_w <= 0.0 { column += 1; continue }
-            src_row: s32 = row
-            src_col: s32 = column
-            cell_w: float32 = col_w
-            cell_h: float32 = row_h
-            merge: Engine.CellMerge
-            if Engine.WorkbookCellMerge(editor.workbook, editor.sheet_index, row, column, *merge) != 0 && merge.merged != 0 {
-                vis_r0 := Max(merge.start_row, editor.scroll_row)
-                while vis_r0 <= merge.end_row && RowHidden(editor, vis_r0) { vis_r0 += 1 }
-                vis_c0 := Max(merge.start_col, editor.scroll_column)
-                while vis_c0 <= merge.end_col && ColHidden(editor, vis_c0) { vis_c0 += 1 }
-                if row != vis_r0 || column != vis_c0 { column += 1; continue }
-                src_row = merge.start_row
-                src_col = merge.start_col
-                cell_w = 0.0
-                mc := vis_c0
-                max_c := Min(merge.end_col, editor.scroll_column + editor.visible_columns - 1)
-                while mc <= max_c { cell_w += GridColWidth(editor, mc); mc += 1 }
-                cell_h = 0.0
-                mr := vis_r0
-                max_r := Min(merge.end_row, editor.scroll_row + editor.visible_rows - 1)
-                while mr <= max_r { cell_h += GridRowHeight(editor, mr); mr += 1 }
-                if cell_w <= 0.0 || cell_h <= 0.0 { column += 1; continue }
-            }
-            display: [256]u8
-            EditorCellDisplay(editor, src_row, src_col, display[:])
-            #if !#defined(KRYON_HOSTED_UI) {
-                if editor.workbook.native == null { Engine.RoundForDisplay(cast(*s8)*display[0], 256) }
-            }
-            text := TextUntilNul(display[:])
-            style: Engine.CellStyle
-            has_style := Engine.WorkbookCellStyle(editor.workbook, editor.sheet_index, src_row, src_col, *style) != 0
-            fill: Color = ifx is_ods then ods_paper else Grid.GridCellBackground()
-            if has_style && style.has_bg != 0 { fill = ColorFromPacked(style.bg_rgba) }
-            active: bool = row == editor.selected_row && column == editor.selected_column
-            in_rows: bool = editor.selection_axis == 2 || (row >= first_row && row <= last_row)
-            in_columns: bool = editor.selection_axis == 1 || (column >= first_column && column <= last_column)
-            if here && in_rows && in_columns && !(spans && active) {
-                if (has_style && style.has_bg != 0) || is_ods {
-                    if spans || editor.selection_axis != 0 {
-                        fill = BlendColor(fill, Grid.GridAccentColor(), 56)
-                    }
-                } else {
-                    fill = Grid.GridSelectedBackground()
-                }
-            }
-            has_fg: bool = false
-            fg: Color = Color.{0, 0, 0, 255}
-            bold: bool = false
-            italic: bool = false
-            align: s32 = 0
-            font_size: s32 = Text.Text14
-            if has_style {
-                if style.has_fg != 0 {
-                    fg = ColorFromPacked(style.fg_rgba)
-                    has_fg = true
-                } else if style.has_bg != 0 {
-                    fg = AutoContrastInk(fill)
-                    has_fg = true
-                } else if is_ods {
-                    fg = ods_ink
-                    has_fg = true
-                }
-                bold = style.bold != 0
-                italic = style.italic != 0
-                if style.align_h == 4 { align = 2 }
-                else if style.align_h == 8 || style.align_h == 64 { align = 1 }
-                else if style.align_h == 2 { align = 0 }
-                else if LooksNumeric(text) { align = 2 }
-                if style.font_size > 0.0 {
-                    font_size = cast(s32)(style.font_size * 1.33 + 0.5)
-                    if font_size < 11 { font_size = 11 }
-                    if font_size > 22 { font_size = 22 }
-                }
-            } else if is_ods {
-                fg = ods_ink
-                has_fg = true
-            }
-            cell_grid_line := ifx is_ods || (has_style && style.has_bg != 0 && AutoContrastInk(fill).r < 128) then ods_grid_line else Grid.GridLineColor()
-            GridSquareStyled(session, editor, 10000 + shown * editor.visible_columns + column - editor.scroll_column,
-                Rectangle.{ColumnX(editor, table, column), y, cell_w, cell_h},
-                fill, cell_grid_line, text, has_fg, fg, bold, italic, align, font_size, *style)
-            column += 1
-        }
-        shown += 1
-    }
+EditorGridCell :: struct {
+    bounds: Rectangle;
+    display: [256]u8;
+    fill: Color;
+    line: Color;
+    has_fg: bool;
+    fg: Color;
+    bold: bool;
+    italic: bool;
+    align: s32;
+    font_size: s32;
+    style: Engine.CellStyle;
+}
 
-    if here && editor.selection_axis == 0 && !editor.edit_focused {
-        out_r1 := first_row
-        out_c1 := first_column
-        out_r2 := last_row
-        out_c2 := last_column
-        if !spans {
-            sel_merge: Engine.CellMerge
-            if Engine.WorkbookCellMerge(editor.workbook, editor.sheet_index, first_row, first_column, *sel_merge) != 0 && sel_merge.merged != 0 {
-                out_r1 = sel_merge.start_row
-                out_c1 = sel_merge.start_col
-                out_r2 = sel_merge.end_row
-                out_c2 = sel_merge.end_col
+EditorReadGridCell :: (editor: *Editor, table: Rectangle, grid: EditorGrid, row: s32, column: s32,
+    y: float32, row_h: float32, col_w: float32, cell: *EditorGridCell) -> bool {
+    src_row: s32 = row
+    src_col: s32 = column
+    cell_w: float32 = col_w
+    cell_h: float32 = row_h
+    merge: Engine.CellMerge
+    if Engine.WorkbookCellMerge(editor.workbook, editor.sheet_index, row, column, *merge) != 0 && merge.merged != 0 {
+        vis_r0 := Max(merge.start_row, editor.scroll_row)
+        while vis_r0 <= merge.end_row && RowHidden(editor, vis_r0) { vis_r0 += 1 }
+        vis_c0 := Max(merge.start_col, editor.scroll_column)
+        while vis_c0 <= merge.end_col && ColHidden(editor, vis_c0) { vis_c0 += 1 }
+        if row != vis_r0 || column != vis_c0 { return false }
+        src_row = merge.start_row
+        src_col = merge.start_col
+        cell_w = 0.0
+        mc := vis_c0
+        max_c := Min(merge.end_col, editor.scroll_column + editor.visible_columns - 1)
+        while mc <= max_c { cell_w += GridColWidth(editor, mc); mc += 1 }
+        cell_h = 0.0
+        mr := vis_r0
+        max_r := Min(merge.end_row, editor.scroll_row + editor.visible_rows - 1)
+        while mr <= max_r { cell_h += GridRowHeight(editor, mr); mr += 1 }
+        if cell_w <= 0.0 || cell_h <= 0.0 { return false }
+    }
+    EditorCellDisplay(editor, src_row, src_col, cell.display[:])
+    #if !#defined(KRYON_HOSTED_UI) {
+        if editor.workbook.native == null { Engine.RoundForDisplay(cast(*s8)*cell.display[0], 256) }
+    }
+    text := TextUntilNul(cell.display[:])
+    has_style := Engine.WorkbookCellStyle(editor.workbook, editor.sheet_index, src_row, src_col, *cell.style) != 0
+    fill: Color = ifx grid.is_ods then Color.{255, 255, 255, 255} else Grid.GridCellBackground()
+    if has_style && cell.style.has_bg != 0 { fill = ColorFromPacked(cell.style.bg_rgba) }
+    active: bool = row == editor.selected_row && column == editor.selected_column
+    in_rows: bool = editor.selection_axis == 2 || (row >= grid.first_row && row <= grid.last_row)
+    in_columns: bool = editor.selection_axis == 1 || (column >= grid.first_column && column <= grid.last_column)
+    if grid.here && in_rows && in_columns && !(grid.spans && active) {
+        if (has_style && cell.style.has_bg != 0) || grid.is_ods {
+            if grid.spans || editor.selection_axis != 0 {
+                fill = BlendColor(fill, Grid.GridAccentColor(), 56)
             }
-        }
-        CellOutline(session, editor, 400000, table, out_r1, out_c1, out_r2, out_c2, Grid.GridAccentColor(), 2)
-        handle: Rectangle = FillHandleBounds(editor, table)
-        if handle.width > 0.0 {
-            mark: Box.Props
-            mark.key = editor.key_base + 400008
-            mark.bounds = Rectangle.{handle.x + 2.0, handle.y + 2.0, 7.0, 7.0}
-            mark.fill = Grid.GridAccentColor()
-            mark.border = Grid.GridCellBackground()
-            Box.Draw(session, mark)
+        } else {
+            fill = Grid.GridSelectedBackground()
         }
     }
-    if editor.drag_mode == DragFill && editor.fill_axis != 0 {
-        top: s32 = ifx editor.fill_axis == 1 then Min(first_row, editor.fill_row) else first_row
-        bottom: s32 = ifx editor.fill_axis == 1 then Max(last_row, editor.fill_row) else last_row
-        left: s32 = ifx editor.fill_axis == 2 then Min(first_column, editor.fill_column) else first_column
-        right: s32 = ifx editor.fill_axis == 2 then Max(last_column, editor.fill_column) else last_column
-        CellOutline(session, editor, 400010, table, top, left, bottom, right, Grid.GridAccentColor(), 1)
+    has_fg: bool = false
+    fg: Color = Color.{0, 0, 0, 255}
+    bold: bool = false
+    italic: bool = false
+    align: s32 = 0
+    font_size: s32 = Text.Text14
+    if has_style {
+        if cell.style.has_fg != 0 {
+            fg = ColorFromPacked(cell.style.fg_rgba)
+            has_fg = true
+        } else if cell.style.has_bg != 0 {
+            fg = AutoContrastInk(fill)
+            has_fg = true
+        } else if grid.is_ods {
+            fg = Color.{17, 24, 39, 255}
+            has_fg = true
+        }
+        bold = cell.style.bold != 0
+        italic = cell.style.italic != 0
+        if cell.style.align_h == 4 { align = 2 }
+        else if cell.style.align_h == 8 || cell.style.align_h == 64 { align = 1 }
+        else if cell.style.align_h == 2 { align = 0 }
+        else if LooksNumeric(text) { align = 2 }
+        if cell.style.font_size > 0.0 {
+            font_size = cast(s32)(cell.style.font_size * 1.33 + 0.5)
+            if font_size < 11 { font_size = 11 }
+            if font_size > 22 { font_size = 22 }
+        }
+    } else if grid.is_ods {
+        fg = Color.{17, 24, 39, 255}
+        has_fg = true
     }
-    DrawReferenceOutlines(session, editor, table)
-    DrawEmbeddedCharts(session, editor, table)
-    DrawCellEditor(session, editor, table)
+    cell_grid_line := ifx grid.is_ods || (has_style && cell.style.has_bg != 0 && AutoContrastInk(fill).r < 128) then Color.{217, 225, 235, 255} else Grid.GridLineColor()
+    cell.bounds = Rectangle.{ColumnX(editor, table, column), y, cell_w, cell_h}
+    cell.fill = fill
+    cell.line = cell_grid_line
+    cell.has_fg = has_fg
+    cell.fg = fg
+    cell.bold = bold
+    cell.italic = italic
+    cell.align = align
+    cell.font_size = font_size
+    return true
+}
 
+EditorHandleGridPointer :: (editor: *Editor, table: Rectangle, grid: EditorGrid, input: EditorInput) {
     if input.blocked { return }
+    rows := grid.rows
+    columns := grid.columns
+    here := grid.here
+    first_row := grid.first_row
+    last_row := grid.last_row
+    first_column := grid.first_column
+    last_column := grid.last_column
     pointer: PointerFrame = input.pointer
     body: Rectangle = Rectangle.{table.x + Grid.GridRowHeaderWidth, table.y + Grid.GridHeaderHeight,
         table.width - Grid.GridRowHeaderWidth, table.height - Grid.GridHeaderHeight}
@@ -2314,7 +2169,7 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
         row: s32 = editor.scroll_row
         if pointer.y > body.y { row = GridRowAt(editor, table, pointer.y) }
         row = Min(row, Min(editor.scroll_row + editor.visible_rows - 1, MaxRows - 1))
-        column = editor.scroll_column
+        column := editor.scroll_column
         if pointer.x > body.x { column = GridColumnAt(editor, table, pointer.x) }
         column = Min(column, Min(editor.scroll_column + editor.visible_columns - 1, MaxColumns - 1))
         if editor.drag_mode == DragRange && !editor.edit_focused && here {
@@ -2364,6 +2219,45 @@ DrawGrid :: (session: Session, editor: *Editor, bounds: Rectangle, input: Editor
     if editor.frames_since_click < 1000 { editor.frames_since_click += 1 }
 }
 
+
+EditorColumnLabelBuffer :: struct { bytes: [8]u8; }
+EditorRowLabelBuffer :: struct { bytes: [16]u8; }
+
+EditorColumnLabel :: (column: s32, buffer: []u8) -> string {
+    AppendCellColumn(buffer, column)
+    return TextUntilNul(buffer)
+}
+
+EditorRowLabel :: (row: s32, buffer: []u8) -> string {
+    return FormatInteger(cast(s64)row + 1, buffer)
+}
+
+EditorSelectionOutline :: (editor: *Editor, table: Rectangle, grid: EditorGrid) -> Rectangle {
+    first_row := grid.first_row
+    first_column := grid.first_column
+    last_row := grid.last_row
+    last_column := grid.last_column
+    if !grid.spans {
+        merge: Engine.CellMerge
+        if Engine.WorkbookCellMerge(editor.workbook, editor.sheet_index, first_row, first_column, *merge) != 0 && merge.merged != 0 {
+            first_row = merge.start_row
+            first_column = merge.start_col
+            last_row = merge.end_row
+            last_column = merge.end_col
+        }
+    }
+    return EditorOutlineBounds(editor, table, first_row, first_column, last_row, last_column)
+}
+
+EditorFillOutline :: (editor: *Editor, table: Rectangle, grid: EditorGrid) -> Rectangle {
+    if editor.drag_mode != DragFill || editor.fill_axis == 0 { return Rectangle.{} }
+    top := ifx editor.fill_axis == 1 then Min(grid.first_row, editor.fill_row) else grid.first_row
+    bottom := ifx editor.fill_axis == 1 then Max(grid.last_row, editor.fill_row) else grid.last_row
+    left := ifx editor.fill_axis == 2 then Min(grid.first_column, editor.fill_column) else grid.first_column
+    right := ifx editor.fill_axis == 2 then Max(grid.last_column, editor.fill_column) else grid.last_column
+    return EditorOutlineBounds(editor, table, top, left, bottom, right)
+}
+
 FillHandleBounds :: (editor: *Editor, table: Rectangle) -> Rectangle {
     none: Rectangle = Rectangle.{0.0, 0.0, 0.0, 0.0}
     if editor.selection_axis != 0 || editor.edit_focused || editor.sheet_index != editor.edit_sheet { return none }
@@ -2376,6 +2270,8 @@ FillHandleBounds :: (editor: *Editor, table: Rectangle) -> Rectangle {
     y: float32 = RowY(editor, table, row) + GridRowHeight(editor, row)
     return Rectangle.{x - 6.0, y - 6.0, 11.0, 11.0}
 }
+
+#scope_file
 
 AimFill :: (editor: *Editor, row: s32, column: s32) {
     down: s32 = row - SelectionLastRow(editor)
@@ -2428,28 +2324,34 @@ Wrap :: (a: s32, n: s32) -> s32 {
     return ifx r < 0 then r + n else r
 }
 
-DrawReferenceOutlines :: (session: Session, editor: *Editor, table: Rectangle) {
-    if !FormulaEditing(editor) { return }
-    ref: Engine.FormulaRef
-    at: s32 = 0
-    index: s32 = 0
-    while index < 32 && Engine.FormulaFindRef(editor.workbook, Engine.CText(TextUntilNul(editor.edit[:])), at, *ref) != 0 {
-        sheet: s32 = ifx ref.sheet == -1 then editor.edit_sheet else ref.sheet
-        if sheet == editor.sheet_index {
-            CellOutline(session, editor, 400100 + index * 4, table, Min(ref.row1, ref.row2), Min(ref.col1, ref.col2),
-                Max(ref.row1, ref.row2), Max(ref.col1, ref.col2), ReferenceColor(index), 2)
-        }
-        at = ref.end
-        index += 1
-    }
+#scope_export
+
+EditorReferenceOutline :: struct {
+    at: s32;
+    bounds: Rectangle;
+    color: Color;
 }
 
-DrawCellEditor :: (session: Session, editor: *Editor, table: Rectangle) {
-    if !editor.edit_focused || editor.sheet_index != editor.edit_sheet { return }
-    if RowHidden(editor, editor.selected_row) { return }
+EditorReadReferenceOutline :: (editor: *Editor, table: Rectangle, index: s32, outline: *EditorReferenceOutline) -> bool {
+    if !FormulaEditing(editor) { return false }
+    ref: Engine.FormulaRef
+    if Engine.FormulaFindRef(editor.workbook, Engine.CText(TextUntilNul(editor.edit[:])), outline.at, *ref) == 0 { return false }
+    outline.at = ref.end
+    outline.bounds = Rectangle.{}
+    sheet := ifx ref.sheet == -1 then editor.edit_sheet else ref.sheet
+    if sheet == editor.sheet_index {
+        outline.bounds = EditorOutlineBounds(editor, table, Min(ref.row1, ref.row2), Min(ref.col1, ref.col2),
+            Max(ref.row1, ref.row2), Max(ref.col1, ref.col2))
+        outline.color = ReferenceColor(index)
+    }
+    return true
+}
+
+EditorInlineBounds :: (editor: *Editor, table: Rectangle, text: string) -> Rectangle {
+    if !editor.edit_focused || editor.sheet_index != editor.edit_sheet { return Rectangle.{} }
+    if RowHidden(editor, editor.selected_row) { return Rectangle.{} }
     if editor.selected_row < editor.scroll_row || editor.selected_row >= editor.scroll_row + editor.visible_rows ||
-    editor.selected_column < editor.scroll_column || editor.selected_column >= editor.scroll_column + editor.visible_columns { return }
-    text: string = TextUntilNul(editor.edit[:])
+    editor.selected_column < editor.scroll_column || editor.selected_column >= editor.scroll_column + editor.visible_columns { return Rectangle.{} }
     x: float32 = ColumnX(editor, table, editor.selected_column)
     y: float32 = RowY(editor, table, editor.selected_row)
     cell_h: float32 = GridRowHeight(editor, editor.selected_row)
@@ -2458,54 +2360,31 @@ DrawCellEditor :: (session: Session, editor: *Editor, table: Rectangle) {
     if width < col_w { width = col_w }
     limit: float32 = ColumnX(editor, table, editor.scroll_column + editor.visible_columns) - x
     if width > limit { width = limit }
-    box: Box.Props
-    box.key = editor.key_base + 400500
-    box.bounds = Rectangle.{x, y, width, cell_h}
-    box.fill = Grid.GridCellBackground()
-    box.border = Grid.GridAccentColor()
-    Box.Draw(session, box)
-    label: Text.Props
-    label.key = editor.key_base + 400501
-    label.text = text
-    label.size = Text.Text14
-    label.wrap = cast(Text.Wrap)TextWrapNone
-    label.bounds = Rectangle.{x + 4.0, y + 3.0, width - 8.0, cell_h - 4.0}
-    Text.Draw(session, label)
-    cursor: s32 = Min(editor.edit_cursor, cast(s32)text.count)
-    caret_x: float32 = x + 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
-    if caret_x < x + width - 2.0 {
-        caret: Box.Props
-        caret.key = editor.key_base + 400502
-        caret.bounds = Rectangle.{caret_x, y + 5.0, 1.0, cell_h - 10.0}
-        caret.fill = Grid.GridAccentColor()
-        caret.border = Grid.GridAccentColor()
-        Box.Draw(session, caret)
-    }
+    return Rectangle.{x, y, width, cell_h}
 }
 
-CellOutline :: (session: Session, editor: *Editor, key: s32, table: Rectangle, first_row: s32, first_column: s32,
-    last_row: s32, last_column: s32, color: Color, thickness: s32) {
+EditorCaretX :: (editor: *Editor, text: string) -> float32 {
+    cursor := Min(editor.edit_cursor, cast(s32)text.count)
+    return 4.0 + cast(float32)EditorGlyphWidth(text[0:cursor])
+}
+
+EditorOutlineBounds :: (editor: *Editor, table: Rectangle, first_row: s32, first_column: s32,
+    last_row: s32, last_column: s32) -> Rectangle {
     top: s32 = Max(first_row, editor.scroll_row)
     bottom: s32 = Min(last_row, editor.scroll_row + editor.visible_rows - 1)
     left: s32 = Max(first_column, editor.scroll_column)
     right: s32 = Min(last_column, editor.scroll_column + editor.visible_columns - 1)
-    if top > bottom || left > right { return }
+    if top > bottom || left > right { return Rectangle.{} }
     x: float32 = ColumnX(editor, table, left)
     y: float32 = RowY(editor, table, top)
     width: float32 = ColumnX(editor, table, right) + GridColWidth(editor, right) - x
     height: float32 = RowY(editor, table, bottom) + GridRowHeight(editor, bottom) - y
     width = MinFloat(width, editor.grid_right - x)
     height = MinFloat(height, editor.grid_bottom - y)
-    for line: 0..thickness - 1 {
-        inset: float32 = cast(float32)line
-        outline: Box.Props
-        outline.key = editor.key_base + cast(u64)(key + line)
-        outline.bounds = Rectangle.{x + inset, y + inset, width - inset * 2.0, height - inset * 2.0}
-        outline.fill = Color.{0, 0, 0, 0}
-        outline.border = color
-        Box.Draw(session, outline)
-    }
+    return Rectangle.{x, y, width, height}
 }
+
+#scope_file
 
 ReferenceColor :: (index: s32) -> Color {
     which: s32 = index % 6
@@ -2517,9 +2396,11 @@ ReferenceColor :: (index: s32) -> Color {
     return Color.{22, 160, 133, 255}
 }
 
-DrawGridMenu :: (session: Session, editor: *Editor, escape: bool) {
-    if !editor.grid_menu_open { return }
-    items: [10]ContextMenu.ContextMenuItem
+#scope_export
+
+EditorGridMenuItems :: struct { items: [10]ContextMenu.ContextMenuItem; }
+
+EditorGridCommands :: (editor: *Editor, items: []ContextMenu.ContextMenuItem) -> s32 {
     items[0].id = 1
     items[0].label = "Cut"
     items[1].id = 2
@@ -2548,16 +2429,15 @@ DrawGridMenu :: (session: Session, editor: *Editor, escape: bool) {
         items[3].id = 11; items[3].label = "Hide rows"
         count = 4
     }
-    props: ContextMenu.Props
-    props.key = editor.key_base + 1200
-    props.open = true
-    props.x = editor.grid_menu_x
-    props.y = editor.grid_menu_y
-    props.escape = escape
-    result: ContextMenu.ContextMenuResult = ContextMenu.Draw(session, props, items[0:count])
+    return count
+}
+
+EditorApplyGridCommand :: (editor: *Editor, result: ContextMenu.ContextMenuResult) {
     if !result.open { editor.grid_menu_open = false }
     GridCommand(editor, result.activated_id)
 }
+
+#scope_file
 
 GridCommand :: (editor: *Editor, id: s32) {
     if id == 1 { CutCell(editor) }
@@ -2593,6 +2473,8 @@ GridCommand :: (editor: *Editor, id: s32) {
     }
 }
 
+#scope_export
+
 ColumnX :: (editor: *Editor, table: Rectangle, column: s32) -> float32 {
     x: float32 = table.x + Grid.GridRowHeaderWidth
     at: s32 = editor.scroll_column
@@ -2607,15 +2489,7 @@ RowY :: (editor: *Editor, table: Rectangle, row: s32) -> float32 {
     return y
 }
 
-GridSquare :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, text: string) {
-    Grid.GridSquare(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom, fill, text)
-}
-
-GridSquareStyled :: (session: Session, editor: *Editor, key: s32, bounds: Rectangle, fill: Color, grid_line: Color, text: string,
-    has_fg: bool, fg: Color, bold: bool, italic: bool, align: s32, font_size: s32, borders: *Engine.CellStyle) {
-    Grid.GridSquareStyled(session, editor.key_base + 1000000 + cast(u64)key * 2, bounds, editor.grid_right, editor.grid_bottom,
-        fill, grid_line, text, has_fg, fg, bold, italic, align, font_size, borders)
-}
+#scope_file
 
 BlendColor :: (base: Color, tint: Color, weight: s32) -> Color {
     inv := 255 - weight
@@ -2730,7 +2604,9 @@ SheetPtsToScreenY :: (editor: *Editor, table: Rectangle, target_pts: float64) ->
     return y + cast(float32)((target_pts - cur_pts) * (96.0 / 72.0))
 }
 
-DrawEmbeddedCharts :: (session: Session, editor: *Editor, table: Rectangle) {
+#scope_export
+
+EditorDrawEmbeddedCharts :: (session: Session, editor: *Editor, table: Rectangle) {
     #if #defined(KRYON_HOSTED_UI) {
         unused session; unused editor; unused table
         return
@@ -2822,6 +2698,8 @@ DrawEmbeddedCharts :: (session: Session, editor: *Editor, table: Rectangle) {
         }
     }
 }
+
+#scope_file
 
 // -------------------------------------------------------------------- text
 

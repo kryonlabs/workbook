@@ -10,9 +10,10 @@ The window title shows the document's filename. Edits save back to that file;
 when you drop another document, Workbook saves the current edit before opening
 it. Launching without a file uses the profile described below.
 
-Everything in the repository is Ziran (`.zi`) apart from the Makefile and
-configuration. `src/app.zi` is the desktop application, `src/engine.zi` is the
-spreadsheet engine, and `src/cell.zi` is the headless driver. Imported documents
+The document host and editor compose their interface in native TSX. `src/app.zi`
+handles profiles and documents, `src/editor.zi` handles editor state and actions,
+`src/engine.zi` is the spreadsheet engine, and `src/cell.zi` is the headless
+driver. Imported documents
 use the installed `gnumeric` library for loading, calculation and saving.
 New workbooks and CSV use the independent Ziran engine. Document format,
 dependencies and rendering limitations are covered in
@@ -269,7 +270,8 @@ needs a chart view over the document's chart objects.
 ## Werkzeug app bundle
 
 `make bundle` builds `build/workbook.zib`, the spreadsheet editor for a host
-with the `spreadsheet.v1` capability. Werkzeug on Linux includes the native
+with the `spreadsheet.v1` capability. Werkzeug builds `workbook.zx` from the
+same `src/app.zi` entry and its `Main` export. Werkzeug on Linux includes the native
 calculation service and keeps Workbook documents in its own private folder.
 The bundle runs in Werkzeug on Linux, Android and the web, with the same compact grid, bottom sheet tabs and editing commands
 as the desktop editor. Its File menu imports and exports documents with the

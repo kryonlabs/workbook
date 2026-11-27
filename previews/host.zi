@@ -1,7 +1,7 @@
 // A minimal Kryon host with Workbook's editor embedded beside host-owned UI.
 // The host test starts this program on a private display and drives it through
 // Kryon's test driver; the sidebar buttons stand in for a real host's pages.
-using Editor :: #import "editor";
+using Editor :: #import "workbook/editor";
 Engine :: #import "engine";
 App :: #import "kryon/app";
 Box :: #import "kryon/box";

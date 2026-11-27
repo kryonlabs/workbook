@@ -1,11 +1,7 @@
 // Workbook desktop application: profile selection, documents, window title,
 // menus and theme around the embeddable editor in src/editor.zi.
 Menu :: #import "kryon/menu";
-App :: #import "kryon/app";
-ContextMenu :: #import "kryon/context_menu";
-Box :: #import "kryon/box";
-Text :: #import "kryon/text";
-Button :: #import "kryon/button";
+View :: #import "app_view";
 #import "kryon/geometry"
 #import "kryon/session"
 #import "kryon/drawing_props"
@@ -13,7 +9,6 @@ Button :: #import "kryon/button";
 #import "kryon/text_input"
 #import "kryon/input_protocol"
 #import "kryon/app_protocol"
-Grid :: #import "grid";
 using Editor :: #import "editor";
 #import "std/byte_text_linux"
 #import "std/text_buffer"
@@ -22,8 +17,10 @@ RowAddIcon :: #import "mingcute/mingcute_extra_table_row_add";
 
 #if #defined(KRYON_HOSTED_UI) {
     Engine :: #import "portable_engine";
+    ContextMenu :: #import "kryon/context_menu";
     #import "kryon/app_context"
 } else {
+    App :: #import "kryon/app";
     Engine :: #import "engine";
     Desktop :: #import "kryon/desktop_runtime";
     Picker :: #import "kryon/file_picker";
@@ -59,7 +56,6 @@ menu_state: Menu.MenuState;
 menu_key: s32;
 menu_modifiers: s32;
 menus_block_input: bool;
-menu_x: float32;
 typed_storage: [128]u8;
 dropped_path: [4096]u8;
 #if !#defined(KRYON_HOSTED_UI) {
@@ -84,7 +80,7 @@ dropped_path: [4096]u8;
         if mode == APP_IDENTIFY { AppIdentity("workbook", 1); AppDescribe("Workbook", RowAddIcon.Shape); return APP_PROTOCOL }
         if mode == APP_FRAME {
             if !AppSupports("spreadsheet.v1") {
-                Text.Draw(AppSession(), Text.Props.{.bounds = AppBounds(), .text = "Update Werkzeug to open Workbook.", .size = Text.Text16})
+                View.DrawUpdateMessage(AppSession(), AppBounds())
                 return 0
             }
             if !app_started { StartHostedWorkbook(); app_started = true }
@@ -132,14 +128,6 @@ EditorBounds :: (viewport: Rectangle) -> Rectangle {
     return Rectangle.{viewport.x, viewport.y + MenuBarHeight, viewport.width, viewport.height - MenuBarHeight}
 }
 
-DrawHostBackground :: (session: Session, viewport: Rectangle) {
-    bar: Box.Props
-    bar.key = cast(u64)990000
-    bar.bounds = Rectangle.{viewport.x, viewport.y, viewport.width, MenuBarHeight}
-    bar.fill = Grid.GridColor("canvas")
-    Box.Draw(session, bar)
-}
-
 RunHostFrame :: (session: Session, viewport: Rectangle, input: EditorInput) {
     #if #defined(KRYON_HOSTED_UI) {
         if document_pending {
@@ -182,8 +170,8 @@ RunHostFrame :: (session: Session, viewport: Rectangle, input: EditorInput) {
     PointInBounds(input.pointer.x, input.pointer.y, Rectangle.{viewport.x, viewport.y, viewport.width, MenuBarHeight}) {
         input.blocked = true
     }
-    DrawHostBackground(session, viewport)
-    unused EditorFrame(session, EditorBounds(viewport), editor, input)
+    menu_bounds := Rectangle.{viewport.x, viewport.y, viewport.width, MenuBarHeight}
+    View.DrawDocument(session, menu_bounds, EditorBounds(viewport), editor, input)
     DrawMenus(session, viewport)
 }
 
@@ -258,8 +246,13 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
     props.input.right = menu_key == KeyRight
     props.input.enter = menu_key == KeyEnter
     props.input.escape = menu_key == KeyEscape
-    result := EditorMenu(session, props, groups[:], *menu_state)
-    id := result.activated_id
+    #if #defined(KRYON_HOSTED_UI) {
+        items: [9]ContextMenu.ContextMenuItem
+        id := View.DrawHostedMenu(session, props, groups[:], *menu_state, items[:])
+    } else {
+        result := Menu.Draw(session, props, groups[:], *menu_state)
+        id := result.activated_id
+    }
     if id == 101 { PickDocument(false) }
     if id == 102 { unused EditorSave(editor, true) }
     if id == 103 { PickDocument(true) }
@@ -285,47 +278,6 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
     if id == 7 { EditorDeleteRow(editor) }
     if id == 8 { EditorInsertColumn(editor) }
     if id == 9 { EditorDeleteColumn(editor) }
-}
-
-EditorMenu :: (session: Session, props: Menu.Props, groups: []Menu.MenuGroup, state: *Menu.MenuState) -> Menu.MenuResult {
-    #if #defined(KRYON_HOSTED_UI) {
-        if !state.initialized { Menu.MenuStateInit(state) }
-        result: Menu.MenuResult
-        x := props.bounds.x + 2.0
-        for index: 0..groups.count - 1 {
-            button: Button.Props
-            button.key = cast(u64)(1310 + index)
-            button.label = groups[index].label
-            button.bounds = Rectangle.{x, props.bounds.y, 58.0, 26.0}
-            button.size = ControlSize.ControlSizeSmall
-            if Button.Draw(session, button) != 0 { state.open_index = ifx state.open_index == index then -1 else cast(s32)index }
-            if state.open_index == index { menu_x = x }
-            x += 58.0
-        }
-        if state.open_index >= 0 && state.open_index < groups.count {
-            items: [16]ContextMenu.ContextMenuItem
-            commands := groups[state.open_index].items
-            for index: 0..commands.count - 1 {
-                items[index].id = commands[index].id
-                items[index].label = commands[index].label
-                items[index].disabled = commands[index].disabled
-                items[index].separator = commands[index].kind == Menu.MenuItemKind.MenuSeparator
-            }
-            menu: ContextMenu.Props
-            menu.key = cast(u64)(1350 + state.open_index)
-            menu.open = true
-            menu.x = menu_x
-            menu.y = props.bounds.y + 26.0
-            menu.escape = props.input.escape
-            drawn := ContextMenu.Draw(session, menu, items[:commands.count])
-            if !drawn.open { state.open_index = -1 }
-            result.activated_id = drawn.activated_id
-        }
-        result.open_index = state.open_index
-        return result
-    } else {
-        return Menu.Draw(session, props, groups, state)
-    }
 }
 
 // --------------------------------------------------------------------- text

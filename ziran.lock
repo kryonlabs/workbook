@@ -141,8 +141,8 @@
     "name": "workbook"
   },
   "toolchain": {
-    "commit": "bb0323cef6c7b144eeea5ad1670ccf7a3fbde253",
-    "ref": "bb0323cef6c7b144eeea5ad1670ccf7a3fbde253",
+    "commit": "23dece1339d51cf51730be438325605e6ec29c87",
+    "ref": "23dece1339d51cf51730be438325605e6ec29c87",
     "url": "https://git.waozi.xyz/ziranlang/ziran.git"
   }
 }
