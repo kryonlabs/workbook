@@ -49,7 +49,7 @@ $(TEST_PROGRAMS): build/%: tests/%.zi $(SOURCES) $(wildcard tests/*.zi)
 check:
 	@$(ZIRAN) check
 	@$(ZIRAN) check --project src/cell.zi
-	@$(ZIRAN) check --project previews/host.zi
+	@$(ZIRAN) check --project previews/host.tsx
 	@for test in $(TESTS); do $(ZIRAN) check --project tests/$$test.zi || exit 1; done
 
 run:
@@ -74,7 +74,7 @@ hidden-rows-test: build build/desktop_test
 host-test: $(HOST_APP) build/host_test
 	@build/host_test
 
-$(HOST_APP): $(SOURCES) previews/host.zi
+$(HOST_APP): $(SOURCES) previews/host.tsx
 	@KRYON_TEST_DRIVER=1 $(ZIRAN) tool kryon preview host --output build/host-preview.png --width 960 --height 640 --theme light
 
 test-ci: build service-test grid-test audit structure-test conversion-test gnumeric-test desktop-test host-test

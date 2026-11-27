@@ -10,10 +10,11 @@ The window title shows the document's filename. Edits save back to that file;
 when you drop another document, Workbook saves the current edit before opening
 it. Launching without a file uses the profile described below.
 
-The document host and editor compose their interface in native TSX. `src/app.zi`
-handles profiles and documents, `src/editor.zi` handles editor state and actions,
-`src/engine.zi` is the spreadsheet engine, and `src/cell.zi` is the headless
-driver. Imported documents
+The document host, editor and read-only grid compose their interface in native
+TSX using Kryon's public components. `src/desktop.tsx` is the desktop entry;
+`src/app.zi` handles profiles and documents,
+`src/editor.zi` handles editor state and actions, `src/engine.zi` is the
+spreadsheet engine, and `src/cell.zi` is the headless driver. Imported documents
 use the installed `gnumeric` library for loading, calculation and saving.
 New workbooks and CSV use the independent Ziran engine. Document format,
 dependencies and rendering limitations are covered in
@@ -258,7 +259,7 @@ Commands a host can place in its own menus: `EditorUndo`, `EditorRedo`,
 
 The standalone Workbook app uses this same module; `src/app.zi` adds profile
 selection, documents, the window title, menus and the theme. `make host-test`
-builds `previews/host.zi`, a minimal host with a host-owned sidebar, and drives
+builds `previews/host.tsx`, a minimal host with a host-owned sidebar, and drives
 it on a private X display: open a `.gnumeric` and a `.csv`, type a value and a
 formula, undo/redo, save, close, reopen and hand focus between host and editor.
 

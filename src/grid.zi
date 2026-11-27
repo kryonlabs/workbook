@@ -2,7 +2,6 @@
 // and cell squares, and a read-only view of a workbook with column letters,
 // row numbers, the cells of one sheet and its sheet tabs. The Workbook editor
 // paints its own grid with the same squares and colors.
-Box :: #import "kryon/box";
 Styles :: #import "kryon/style";
 TabBar :: #import "kryon/tab_bar";
 View :: #import "grid_view";
@@ -402,104 +401,98 @@ GridInside :: (x: float32, y: float32, bounds: Rectangle) -> bool {
     }
 }
 
-// Draws the sheet tabs along the bottom when the workbook has more than one
-// sheet, and the shown sheet's grid above them: frozen rows first, then the
-// scrolled rows, filling bounds with empty cells as the editor does unless the
-// view is trimmed. The wheel scrolls; see GridScroll.
-GridDraw :: (session: Session, bounds: Rectangle, book: *Engine.Workbook, view: *GridView, input: GridInput) {
-    sheets := Engine.WorkbookSheetCount(book)
-    if book == null || sheets < 1 { return }
-    table := bounds
-    if sheets > 1 { table.height -= GridTabsHeight }
-    right := table.x + table.width
-    bottom := table.y + table.height
-    view.visible_rows = cast(s32)((table.height - GridHeaderHeight) / GridRowHeight)
+// Per-frame workbook data and geometry for the TSX grid.
+GridFrame :: struct {
+    book: *Engine.Workbook;
+    table: Rectangle;
+    sheets: s32;
+    rows: s32;
+    right: float32;
+    bottom: float32;
+    frozen: s32;
+    shown_rows: s32;
+}
+
+GridTabList :: struct {
+    sheets: [16]s32;
+    tabs: [16]TabBar.Tab;
+    count: s32;
+    selected: s32;
+}
+
+GridTextBuffer :: struct { bytes: [256]u8; }
+GridLabel :: struct { text: string; numeric: bool; }
+
+// Geometry, scroll clamping and workbook access stay in the native model.
+GridPrepareFrame :: (bounds: Rectangle, book: *Engine.Workbook, view: *GridView, input: GridInput) -> GridFrame {
+    frame: GridFrame
+    frame.book = book
+    if book == null { return frame }
+    frame.sheets = Engine.WorkbookSheetCount(book)
+    if frame.sheets < 1 { return frame }
+    frame.table = bounds
+    if frame.sheets > 1 { frame.table.height -= GridTabsHeight }
+    frame.right = frame.table.x + frame.table.width
+    frame.bottom = frame.table.y + frame.table.height
+    view.visible_rows = cast(s32)((frame.table.height - GridHeaderHeight) / GridRowHeight)
     if view.visible_rows < 1 { view.visible_rows = 1 }
     GridClamp(book, view)
-    GridScroll(book, view, input, table)
-    rows := Engine.WorkbookSheetRows(book, view.sheet)
+    GridScroll(book, view, input, frame.table)
+    frame.rows = Engine.WorkbookSheetRows(book, view.sheet)
     columns := Engine.WorkbookSheetColumns(book, view.sheet)
-    frozen := view.frozen_rows
-    if frozen < 0 { frozen = 0 }
-    if frozen > rows { frozen = rows }
+    frame.frozen = view.frozen_rows
+    if frame.frozen < 0 { frame.frozen = 0 }
+    if frame.frozen > frame.rows { frame.frozen = frame.rows }
     view.visible_columns = 0
-    at := table.x + GridRowHeaderWidth
-    while at < right && view.visible_columns < GridColumnsMax {
+    at := frame.table.x + GridRowHeaderWidth
+    while at < frame.right && view.visible_columns < GridColumnsMax {
         if view.trim && view.scroll_column + view.visible_columns >= columns { break }
         at += GridWidth(view, view.scroll_column + view.visible_columns)
         view.visible_columns += 1
     }
-    // A trimmed grid ends at its last column and row.
-    if view.trim && at < right { right = at }
+    if view.trim && at < frame.right { frame.right = at }
+    frame.shown_rows = cast(s32)((frame.table.height - GridHeaderHeight + GridRowHeight - 1.0) / GridRowHeight)
+    return frame
+}
 
-    GridSquare(session, view.key, Rectangle.{table.x, table.y, GridRowHeaderWidth, GridHeaderHeight}, right, bottom, GridHeaderBackground(), "")
-    for shown: 0..view.visible_columns - 1 {
-        column := view.scroll_column + shown
-        name := GridColumnName(column)
-        GridSquare(session, view.key + cast(u64)(2 + shown * 2), Rectangle.{GridColumnX(view, table.x, column), table.y, GridWidth(view, column), GridHeaderHeight},
-            right, bottom, GridHeaderBackground(), name)
-    }
-    // Every row that fits, past the sheet's last row as well unless trimmed.
-    shown_rows := cast(s32)((table.height - GridHeaderHeight + GridRowHeight - 1.0) / GridRowHeight)
-    for shown: 0..shown_rows - 1 {
-        row := ifx shown < frozen then shown else view.scroll_row + shown
-        if view.trim && row >= rows { break }
-        heading := shown < frozen || (view.total_rows > 0 && row >= rows - view.total_rows && row < rows)
-        fill := ifx heading then GridHeaderBackground() else GridCellBackground()
-        y := table.y + GridHeaderHeight + cast(float32)shown * GridRowHeight
-        number: Vec(u8)
-        BuilderPrint(*number, "%", row + 1)
-        GridSquare(session, view.key + cast(u64)(2000 + shown * 2), Rectangle.{table.x, y, GridRowHeaderWidth, GridRowHeight},
-            right, bottom, GridHeaderBackground(), BuilderFinish(number))
-        for index: 0..view.visible_columns - 1 {
-            column := view.scroll_column + index
-            display: [256]u8
-            text, numeric := GridCellText(book, view, row, column, display[:])
-            GridSquare(session, view.key + cast(u64)(100000 + (shown * GridColumnsMax + index) * 2),
-                Rectangle.{GridColumnX(view, table.x, column), y, GridWidth(view, column), GridRowHeight},
-                right, bottom, fill, text, numeric)
+GridReadCellLabel :: (frame: GridFrame, view: *GridView, row: s32, column: s32, out: []u8) -> GridLabel {
+    text, numeric := GridCellText(frame.book, view, row, column, out)
+    return GridLabel.{text, numeric}
+}
+
+GridRowLabel :: (row: s32) -> string {
+    number: Vec(u8)
+    BuilderPrint(*number, "%", row + 1)
+    return BuilderFinish(number)
+}
+
+GridReadTabs :: (frame: GridFrame, view: *GridView, list: *GridTabList) {
+    list.count = 0
+    list.selected = 0
+    for index: 0..frame.sheets - 1 {
+        if Engine.WorkbookSheetVisible(frame.book, index) != 0 && list.count < 16 {
+            list.sheets[list.count] = index
+            list.count += 1
         }
     }
+    if list.count == 0 {
+        list.count = ifx frame.sheets > 16 then 16 else frame.sheets
+        for index: 0..list.count - 1 { list.sheets[index] = index }
+    }
+    for index: 0..list.count - 1 {
+        sheet := list.sheets[index]
+        list.tabs[index].key = view.key + cast(u64)(90000 + index)
+        list.tabs[index].label = GridSheetName(frame.book, sheet)
+        if sheet == view.sheet { list.selected = index }
+    }
+}
 
-    if sheets < 2 { return }
-    shown_indices: [16]s32
-    count: s32 = 0
-    for index: 0..sheets - 1 {
-        if Engine.WorkbookSheetVisible(book, index) != 0 && count < 16 {
-            shown_indices[count] = index
-            count += 1
-        }
-    }
-    if count == 0 {
-        count = ifx sheets > 16 then 16 else sheets
-        for index: 0..count - 1 { shown_indices[index] = index }
-    }
-    tabs: [16]TabBar.Tab
-    selected_tab: s32 = 0
-    for index: 0..count - 1 {
-        sheet_id := shown_indices[index]
-        tabs[index].key = view.key + cast(u64)(90000 + index)
-        tabs[index].label = GridSheetName(book, sheet_id)
-        if sheet_id == view.sheet { selected_tab = index }
-    }
-    strip: Box.Props
-    strip.key = view.key + 89998
-    strip.bounds = Rectangle.{bounds.x, bottom, bounds.width, GridTabsHeight}
-    strip.fill = GridHeaderBackground()
-    strip.border = GridLineColor()
-    Box.Draw(session, strip)
-    bar: TabBar.Props
-    bar.key = view.key + 89999
-    bar.placement = TabBar.TabBarPlacement.TabBarBottom
-    bar.selected_index = selected_tab
-    width := 140.0 * cast(float32)count
-    bar.bounds = Rectangle.{bounds.x, bottom, ifx width < bounds.width then width else bounds.width, GridTabsHeight}
-    bar.min_tab_width = 96
-    bar.max_tab_width = 160
-    result := TabBar.Draw(session, bar, tabs[0:count])
-    if result.selected_index >= 0 && result.selected_index < count && shown_indices[result.selected_index] != view.sheet {
-        view.sheet = shown_indices[result.selected_index]
-        view.scroll_row = 0
-        view.scroll_column = 0
-    }
+// Draws the sheet tabs along the bottom when the workbook has more than one
+// sheet, and the shown sheet's grid above them: frozen rows first, then the
+// scrolled rows, filling bounds with empty cells as the editor does unless the
+// view is trimmed. The wheel scrolls; see GridScroll.
+// Preserve the public host API; all grid and tab composition is in TSX.
+GridDraw :: (session: Session, bounds: Rectangle, book: *Engine.Workbook, view: *GridView, input: GridInput) {
+    frame := GridPrepareFrame(bounds, book, view, input)
+    View.WorkbookGrid(session, bounds, view, frame)
 }

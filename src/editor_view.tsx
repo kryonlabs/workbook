@@ -10,7 +10,14 @@ import { Rectangle } from "kryon/geometry";
 import { KeyEscape } from "kryon/input_protocol";
 import { Session } from "kryon/session";
 import { TextUntilNul } from "std/text_buffer";
-import { Box, Button, ContextMenu, ControlledTextField, TabBar, Text } from "widgets";
+import { Box } from "kryon/tsx/box";
+import { Button } from "kryon/tsx/button";
+import { ContextMenu } from "kryon/tsx/context_menu";
+import { ControlledTextField } from "kryon/tsx/text_field";
+import { TabBar } from "kryon/tsx/tab_bar";
+import { Text } from "kryon/tsx/text";
+import { Image } from "kryon/tsx/image";
+import * as NativeImage from "kryon/image";
 
 import { Shape as Save } from "mingcute/mingcute_regular_save_2";
 import { Shape as AddRow } from "mingcute/mingcute_extra_table_row_add";
@@ -25,13 +32,13 @@ import { Shape as Down } from "mingcute/mingcute_regular_arrow_down";
 interface EditorRegion {
     session: Session;
     bounds: Rectangle;
-    editor: *Model.Editor;
+    editor: NativeRef<Model.Editor>;
 }
 
 export interface EditorInputRegion {
     session: Session;
     bounds: Rectangle;
-    editor: *Model.Editor;
+    editor: NativeRef<Model.Editor>;
     input: Model.EditorInput;
 }
 
@@ -43,7 +50,7 @@ function IconButton(session: Session, base: s32, id: s32, x: float32, y: float32
         bounds: {x: x, y: y, width: 28.0, height: 28.0},
     };
     if (accent) { button.tone = ButtonTone.ButtonToneAccent; }
-    return <Button session={session} props={button}/> !== s32(0);
+    return Button({session: session, props: button});
 }
 
 function Toolbar(view: EditorRegion): void {
@@ -61,7 +68,8 @@ function Toolbar(view: EditorRegion): void {
         id: base + s32(1010), label: "Chart", size: ControlSize.ControlSizeSmall,
         bounds: {x: x + float32(150), y: y, width: 58.0, height: 28.0},
     };
-    if (<Button session={session} props={chart}/> !== s32(0)) { Model.EditorCreateFormulaChart(editor); }
+    const chartPressed = Button({session: session, props: chart});
+    if (chartPressed) { Model.EditorCreateFormulaChart(editor); }
     if (view.bounds.width < float32(600)) {
         const left = IconButton(session, base, s32(1006), x + float32(210), y, Left, false);
         const up = IconButton(session, base, s32(1007), x + float32(240), y, Up, false);
@@ -71,7 +79,7 @@ function Toolbar(view: EditorRegion): void {
     }
 }
 
-function FormulaBar(session: Session, bounds: Rectangle, editor: *Model.Editor, state: *Model.EditorFrameState): void {
+function FormulaBar(session: Session, bounds: Rectangle, editor: NativeRef<Model.Editor>, state: NativeRef<Model.EditorFrameState>): void {
     const label: NativeText.Props = {
         key: editor.key_base + u64(3), text: "fx", size: NativeText.Text16, disabled: true,
         bounds: {x: bounds.x + float32(8), y: bounds.y + float32(35), width: 24.0, height: 20.0},
@@ -80,10 +88,11 @@ function FormulaBar(session: Session, bounds: Rectangle, editor: *Model.Editor, 
     let result: Model.FormulaFieldResult = {};
     {
         const field = Model.EditorFormulaField(editor, bounds, state);
-        field.value = TextUntilNul(editor.edit[:]);
-        field.composition.text = TextUntilNul(editor.edit_composition_text[:]);
-        if (field.focused) { field.input.text = TextUntilNul(state.typed[:]); }
-        result = Model.EditorCopyFormulaFieldResult(<ControlledTextField session={session} props={field}/>);
+        field.value = TextUntilNul(nativeSlice(editor.edit));
+        field.composition.text = TextUntilNul(nativeSlice(editor.edit_composition_text));
+        if (field.focused) { field.input.text = TextUntilNul(nativeSlice(state.typed)); }
+        const drawn = ControlledTextField({session: session, props: field});
+        result = Model.EditorCopyFormulaFieldResult(drawn);
     }
     Model.EditorApplyFormulaField(editor, state.control, result);
 }
@@ -100,7 +109,7 @@ function Outline(session: Session, key: u64, bounds: Rectangle, color: Color, th
     }
 }
 
-function GridSelection(session: Session, editor: *Model.Editor, table: Rectangle, grid: Model.EditorGrid): void {
+function GridSelection(session: Session, editor: NativeRef<Model.Editor>, table: Rectangle, grid: Model.EditorGrid): void {
     const accent = Grid.GridAccentColor();
     if (grid.here && editor.selection_axis === s32(0) && !editor.edit_focused) {
         Outline(session, editor.key_base + u64(400000), Model.EditorSelectionOutline(editor, table, grid), accent, s32(2));
@@ -115,13 +124,13 @@ function GridSelection(session: Session, editor: *Model.Editor, table: Rectangle
     Outline(session, editor.key_base + u64(400010), Model.EditorFillOutline(editor, table, grid), accent, s32(1));
     const ref: Model.EditorReferenceOutline = {};
     for (let index = s32(0); index < s32(32); index += s32(1)) {
-        if (!Model.EditorReadReferenceOutline(editor, table, index, &ref)) { break; }
+        if (!Model.EditorReadReferenceOutline(editor, table, index, nativeRef(ref))) { break; }
         Outline(session, editor.key_base + u64(400100) + u64(index) * u64(4), ref.bounds, ref.color, s32(2));
     }
 }
 
-function InlineEditor(session: Session, editor: *Model.Editor, table: Rectangle): void {
-    const text = TextUntilNul(editor.edit[:]);
+function InlineEditor(session: Session, editor: NativeRef<Model.Editor>, table: Rectangle): void {
+    const text = TextUntilNul(nativeSlice(editor.edit));
     const bounds = Model.EditorInlineBounds(editor, table, text);
     if (bounds.width <= float32(0) || bounds.height <= float32(0)) { return; }
     const accent = Grid.GridAccentColor();
@@ -141,11 +150,11 @@ function InlineEditor(session: Session, editor: *Model.Editor, table: Rectangle)
     }
 }
 
-function CellKey(editor: *Model.Editor, index: s32): u64 {
+function CellKey(editor: NativeRef<Model.Editor>, index: s32): u64 {
     return editor.key_base + u64(1000000) + u64(index) * u64(2);
 }
 
-function GridHeading(session: Session, editor: *Model.Editor, index: s32, bounds: Rectangle, selected: boolean, text: string): void {
+function GridHeading(session: Session, editor: NativeRef<Model.Editor>, index: s32, bounds: Rectangle, selected: boolean, text: string): void {
     const fill = selected ? Grid.GridSelectedBackground() : Grid.GridHeaderBackground();
     Grid.GridSquare(session, CellKey(editor, index), bounds, editor.grid_right, editor.grid_bottom, fill, text, false);
 }
@@ -165,7 +174,7 @@ function CellGrid(view: EditorInputRegion): void {
         const width = Model.GridColWidth(editor, column);
         if (width <= float32(0)) { continue; }
         const name: Model.EditorColumnLabelBuffer = {};
-        const text = Model.EditorColumnLabel(column, name.bytes[:]);
+        const text = Model.EditorColumnLabel(column, nativeSlice(name.bytes));
         const header: Rectangle = {x: Model.ColumnX(editor, table, column), y: table.y, width: width, height: headerHeight};
         const selected = grid.here && editor.selection_axis === s32(2) && column === editor.selected_column;
         GridHeading(session, editor, s32(20) + column - editor.scroll_column, header, selected, text);
@@ -185,18 +194,18 @@ function CellGrid(view: EditorInputRegion): void {
             continue;
         }
         const digits: Model.EditorRowLabelBuffer = {};
-        const label = Model.EditorRowLabel(row, digits.bytes[:]);
+        const label = Model.EditorRowLabel(row, nativeSlice(digits.bytes));
         const selected = grid.here && editor.selection_axis === s32(1) && row === editor.selected_row;
         GridHeading(session, editor, s32(1000) + shown, {x: table.x, y: y, width: headerWidth, height: height}, selected, label);
         for (let column = editor.scroll_column; column < columns; column += s32(1)) {
             const width = Model.GridColWidth(editor, column);
             if (width <= float32(0)) { continue; }
             const cell: Model.EditorGridCell = {};
-            if (!Model.EditorReadGridCell(editor, table, grid, row, column, y, height, width, &cell)) { continue; }
+            if (!Model.EditorReadGridCell(editor, table, grid, row, column, y, height, width, nativeRef(cell))) { continue; }
             const key = CellKey(editor, s32(10000) + shown * editor.visible_columns + column - editor.scroll_column);
             Grid.GridSquareStyled(session, key, cell.bounds, editor.grid_right, editor.grid_bottom,
-                cell.fill, cell.line, TextUntilNul(cell.display[:]), cell.has_fg, cell.fg, cell.bold, cell.italic,
-                cell.align, cell.font_size, &cell.style);
+                cell.fill, cell.line, TextUntilNul(nativeSlice(cell.display)), cell.has_fg, cell.fg, cell.bold, cell.italic,
+                cell.align, cell.font_size, nativeRef(cell.style));
         }
     }
     GridSelection(session, editor, table, grid);
@@ -205,12 +214,45 @@ function CellGrid(view: EditorInputRegion): void {
     Model.EditorHandleGridPointer(editor, table, grid, view.input);
 }
 
+function ColoredTabs(view: EditorInputRegion, shown: s32[], count: s32): boolean {
+    const editor = view.editor;
+    if (!Model.EditorHasColoredTabs(editor, shown, count)) { return false; }
+    const bounds = Model.SheetTabsBounds(editor, view.bounds);
+    let width = bounds.width / float32(count);
+    if (width < float32(72)) { width = float32(72); }
+    if (width > float32(104)) { width = float32(104); }
+    let picked = s32(-1);
+    for (let index = s32(0); index < count; index += s32(1)) {
+        const sheet = nativeAt(shown, editor.tab_scroll + index);
+        const style = Model.EditorSheetTabStyle(editor, sheet);
+        const rect: Rectangle = {x: bounds.x + float32(index) * width, y: bounds.y, width: width, height: 28.0};
+        if (!view.input.blocked && view.input.pointer.pressed &&
+            Grid.GridInside(view.input.pointer.x, view.input.pointer.y, rect)) { picked = sheet; }
+        <Box session={view.session} props={{key: editor.key_base + u64(1100) + u64(index),
+            bounds: rect, fill: style.fill, border: {r: u8(0), g: u8(0), b: u8(0), a: u8(50)}}}/>;
+        if (style.active) {
+            <Box session={view.session} props={{key: editor.key_base + u64(410000) + u64(index),
+                bounds: {x: rect.x + float32(1), y: rect.y, width: rect.width - float32(2), height: 3.0},
+                fill: style.accent}}/>;
+        }
+        Model.EditorPaintSheetTabLabel(view.session, editor, sheet, rect, style);
+    }
+    Model.EditorPickSheet(editor, picked);
+    return true;
+}
+
+// Native chart rendering supplies the cached texture and clipped source.
+export function DrawEmbeddedChart(session: Session, image: NativeImage.Props, border: Color): void {
+    <Image session={session} props={image}/>;
+    <Box session={session} props={{key: image.key + u64(1), bounds: image.bounds, border: border}}/>;
+}
+
 function SheetTabs(view: EditorInputRegion): void {
     const session = view.session;
     const editor = view.editor;
     const bounds = view.bounds;
     const visible: Model.EditorTabList = {};
-    const shown = Model.EditorShownSheets(editor, visible.sheets[:]);
+    const shown = Model.EditorShownSheets(editor, nativeSlice(visible.sheets));
     if (shown < s32(1)) { return; }
     const y = bounds.y + bounds.height - float32(28);
     <Box session={session} props={{
@@ -224,20 +266,22 @@ function SheetTabs(view: EditorInputRegion): void {
             id: base + s32(1096), label: "<", size: ControlSize.ControlSizeSmall, disabled: editor.tab_scroll <= s32(0),
             bounds: {x: bounds.x + float32(2), y: y + float32(2), width: 22.0, height: 24.0},
         };
-        if (<Button session={session} props={previous}/> !== s32(0) && editor.tab_scroll > s32(0)) { editor.tab_scroll = editor.tab_scroll - s32(1); }
+        const previousPressed = Button({session: session, props: previous});
+        if (previousPressed && editor.tab_scroll > s32(0)) { editor.tab_scroll = editor.tab_scroll - s32(1); }
         const next: NativeButton.Props = {
             id: base + s32(1097), label: ">", size: ControlSize.ControlSizeSmall, disabled: editor.tab_scroll >= maxScroll,
             bounds: {x: bounds.x + float32(26), y: y + float32(2), width: 22.0, height: 24.0},
         };
-        if (<Button session={session} props={next}/> !== s32(0) && editor.tab_scroll < maxScroll) { editor.tab_scroll = editor.tab_scroll + s32(1); }
+        const nextPressed = Button({session: session, props: next});
+        if (nextPressed && editor.tab_scroll < maxScroll) { editor.tab_scroll = editor.tab_scroll + s32(1); }
     }
     const count = Model.Min(shown - editor.tab_scroll, s32(16));
-    if (Model.EditorDrawColoredTabs(session, editor, bounds, view.input, visible.sheets[:], count)) { return; }
+    if (ColoredTabs(view, nativeSlice(visible.sheets), count)) { return; }
     let selected = s32(0);
     for (let index = s32(0); index < count; index += s32(1)) {
-        const sheet = visible.sheets[editor.tab_scroll + index];
-        visible.tabs[index].key = editor.key_base + u64(1100) + u64(index);
-        visible.tabs[index].label = Model.EditorSheetTabName(editor, sheet);
+        const sheet = nativeAt(visible.sheets, editor.tab_scroll + index);
+        nativeSet(visible.tabs, index, {key: editor.key_base + u64(1100) + u64(index),
+            label: Model.EditorSheetTabName(editor, sheet)});
         if (sheet === editor.sheet_index) { selected = index; }
     }
     const bar: NativeTabs.Props = {
@@ -245,25 +289,25 @@ function SheetTabs(view: EditorInputRegion): void {
         placement: NativeTabs.TabBarPlacement.TabBarBottom, bounds: Model.SheetTabsBounds(editor, bounds),
         min_tab_width: s32(72), max_tab_width: s32(104),
     };
-    const result = <TabBar session={session} props={bar} tabs={visible.tabs[s32(0):count]}/>;
+    const result = TabBar({session: session, props: bar, tabs: nativeSlice(visible.tabs, s32(0), count)});
     if (result.selected_index >= s32(0) && result.selected_index < count) {
-        Model.EditorPickSheet(editor, visible.sheets[editor.tab_scroll + result.selected_index]);
+        Model.EditorPickSheet(editor, nativeAt(visible.sheets, editor.tab_scroll + result.selected_index));
     }
 }
 
-function GridMenu(session: Session, editor: *Model.Editor, escape: boolean): void {
+function GridMenu(session: Session, editor: NativeRef<Model.Editor>, escape: boolean): void {
     if (!editor.grid_menu_open) { return; }
     const items: Model.EditorGridMenuItems = {};
-    const count = Model.EditorGridCommands(editor, items.items[:]);
+    const count = Model.EditorGridCommands(editor, nativeSlice(items.items));
     const props: NativeMenu.Props = {key: editor.key_base + u64(1200), open: true,
         x: editor.grid_menu_x, y: editor.grid_menu_y, escape: escape};
-    const result = <ContextMenu session={session} props={props} items={items.items[s32(0):count]}/>;
+    const result = ContextMenu({session: session, props: props, items: nativeSlice(items.items, s32(0), count)});
     Model.EditorApplyGridCommand(editor, result);
 }
 
 function EditorStatus(view: EditorRegion): void {
     const bounds = view.bounds;
-    const text = TextUntilNul(view.editor.status[:]);
+    const text = TextUntilNul(nativeSlice(view.editor.status));
     if (text.count === s64(0)) { return; }
     <Text session={view.session} props={{key: view.editor.key_base + u64(5), text: text, size: NativeText.Text14,
         bounds: {x: bounds.x + float32(180), y: bounds.y + bounds.height - float32(24),
@@ -276,12 +320,12 @@ export function WorkbookEditor(view: EditorInputRegion): boolean {
     const editor = view.editor;
     const session = view.session;
     const bounds = view.bounds;
-    if (!Model.EditorPrepareFrame(bounds, editor, view.input, &state)) { return false; }
+    if (!Model.EditorPrepareFrame(bounds, editor, view.input, nativeRef(state))) { return false; }
     <Box session={session} props={{key: editor.key_base + u64(7), bounds: bounds, fill: Grid.GridColor("canvas")}}/>;
     <Toolbar session={session} editor={editor} bounds={bounds}/>;
     state.was_editing = editor.edit_focused;
-    FormulaBar(session, bounds, editor, &state);
-    Model.EditorApplyGridKeys(editor, &state);
+    FormulaBar(session, bounds, editor, nativeRef(state));
+    Model.EditorApplyGridKeys(editor, nativeRef(state));
     <CellGrid session={session} editor={editor} bounds={bounds} input={state.input}/>;
     <SheetTabs session={session} editor={editor} bounds={bounds} input={state.input}/>;
     GridMenu(session, editor, state.key === KeyEscape);

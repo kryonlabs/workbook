@@ -9,7 +9,6 @@
 ContextMenu :: #import "kryon/context_menu";
 TabBar :: #import "kryon/tab_bar";
 TextField :: #import "kryon/text_field";
-Box :: #import "kryon/box";
 Text :: #import "kryon/text";
 #import "kryon/system_clipboard"
 #if !#defined(KRYON_HOSTED_UI) {
@@ -32,6 +31,7 @@ Text :: #import "kryon/text";
     Engine :: #import "engine";
 }
 Grid :: #import "grid";
+View :: #import "editor_view";
 #import "std/byte_text_linux"
 #import "kryon/font_metrics"
 #import "std/text_buffer"
@@ -1481,62 +1481,49 @@ EditorShownSheets :: (editor: *Editor, shown: []s32) -> s32 {
     return count
 }
 
-EditorDrawColoredTabs :: (session: Session, editor: *Editor, bounds: Rectangle, input: EditorInput,
-    shown: []s32, count: s32) -> bool {
-    has_tab_colors: bool = false
+EditorTabStyle :: struct {
+    active: bool;
+    fill: Color;
+    ink: Color;
+    accent: Color;
+}
+
+EditorHasColoredTabs :: (editor: *Editor, shown: []s32, count: s32) -> bool {
     #if !#defined(KRYON_HOSTED_UI) {
         for index: 0..count - 1 {
             tc: Engine.SheetTabColor
-            if Engine.WorkbookSheetTabColor(editor.workbook, shown[editor.tab_scroll + index], *tc) != 0 && tc.has_bg != 0 {
-                has_tab_colors = true
-                break
-            }
+            if Engine.WorkbookSheetTabColor(editor.workbook, shown[editor.tab_scroll + index], *tc) != 0 && tc.has_bg != 0 { return true }
         }
     }
-    if has_tab_colors {
-        #if !#defined(KRYON_HOSTED_UI) {
-            tabs_bounds := SheetTabsBounds(editor, bounds)
-            tab_w: float32 = tabs_bounds.width / cast(float32)count
-            if tab_w < 72.0 { tab_w = 72.0 }
-            if tab_w > 104.0 { tab_w = 104.0 }
-            picked: s32 = -1
-            for index: 0..count - 1 {
-                sheet_id := shown[editor.tab_scroll + index]
-                rect := Rectangle.{tabs_bounds.x + cast(float32)index * tab_w, tabs_bounds.y, tab_w, TabsBottom}
-                if !input.blocked && input.pointer.pressed && PointInBounds(input.pointer.x, input.pointer.y, rect) {
-                    picked = sheet_id
-                }
-                tc: Engine.SheetTabColor
-                colored := Engine.WorkbookSheetTabColor(editor.workbook, sheet_id, *tc) != 0 && tc.has_bg != 0
-                active := sheet_id == editor.sheet_index
-                fill := ifx colored then ColorFromPacked(tc.bg_rgba) else (ifx active then Color.{241, 245, 249, 255} else Grid.GridHeaderBackground())
-                ink := ifx colored && tc.has_fg != 0 then ColorFromPacked(tc.fg_rgba) else AutoContrastInk(fill)
-                if !colored && !active { ink = Color.{226, 232, 240, 255} }
-                tbox: Box.Props
-                tbox.key = editor.key_base + cast(u64)(1100 + index)
-                tbox.bounds = rect
-                tbox.fill = fill
-                tbox.border = Color.{0, 0, 0, 50}
-                Box.Draw(session, tbox)
-                if active {
-                    bar_color := ifx colored then Color.{255, 255, 255, 235} else Grid.GridAccentColor()
-                    PaintRoundedFill(session, -1, Rectangle.{rect.x + 1.0, rect.y, rect.width - 2.0, 3.0}, 0.0, 1, bar_color)
-                }
-                label := EditorString(Engine.WorkbookSheetName(editor.workbook, sheet_id))
-                tw := cast(float32)GlyphWidth(label, Text.Text12, "")
-                tx := rect.x + 6.0
-                if rect.width - 12.0 > tw { tx = rect.x + (rect.width - tw) * 0.5 }
-                ty := rect.y + 7.0
-                clip := Rectangle.{rect.x + 4.0, rect.y + 3.0, rect.width - 8.0, rect.height - 5.0}
-                PaintClippedLabel(session, -1, label, cast(s32)tx, cast(s32)ty, Text.Text12, ink, clip)
-                if active { PaintClippedEmphasis(session, -1, label, cast(s32)tx, cast(s32)ty, Text.Text12, ink, clip) }
-            }
-            EditorPickSheet(editor, picked)
-            return true
-        }
-    }
-
     return false
+}
+
+EditorSheetTabStyle :: (editor: *Editor, sheet: s32) -> EditorTabStyle {
+    result: EditorTabStyle
+    result.active = sheet == editor.sheet_index
+    colored := false
+    tc: Engine.SheetTabColor
+    #if !#defined(KRYON_HOSTED_UI) {
+        colored = Engine.WorkbookSheetTabColor(editor.workbook, sheet, *tc) != 0 && tc.has_bg != 0
+    }
+    result.fill = ifx colored then ColorFromPacked(tc.bg_rgba) else (ifx result.active then Color.{241, 245, 249, 255} else Grid.GridHeaderBackground())
+    result.ink = ifx colored && tc.has_fg != 0 then ColorFromPacked(tc.fg_rgba) else AutoContrastInk(result.fill)
+    if !colored && !result.active { result.ink = Color.{226, 232, 240, 255} }
+    result.accent = ifx colored then Color.{255, 255, 255, 235} else Grid.GridAccentColor()
+    return result
+}
+
+// Preserve native clipped glyph rendering for colored sheet labels.
+EditorPaintSheetTabLabel :: (session: Session, editor: *Editor, sheet: s32, rect: Rectangle, style: EditorTabStyle) {
+    #if !#defined(KRYON_HOSTED_UI) {
+        label := EditorString(Engine.WorkbookSheetName(editor.workbook, sheet))
+        tw := cast(float32)GlyphWidth(label, Text.Text12, "")
+        tx := rect.x + 6.0
+        if rect.width - 12.0 > tw { tx = rect.x + (rect.width - tw) * 0.5 }
+        clip := Rectangle.{rect.x + 4.0, rect.y + 3.0, rect.width - 8.0, rect.height - 5.0}
+        PaintClippedLabel(session, -1, label, cast(s32)tx, cast(s32)(rect.y + 7.0), Text.Text12, style.ink, clip)
+        if style.active { PaintClippedEmphasis(session, -1, label, cast(s32)tx, cast(s32)(rect.y + 7.0), Text.Text12, style.ink, clip) }
+    }
 }
 
 EditorSheetTabName :: (editor: *Editor, sheet: s32) -> string {
@@ -2688,13 +2675,7 @@ EditorDrawEmbeddedCharts :: (session: Session, editor: *Editor, table: Rectangle
             img.texture = slot.texture
             img.fit = Image.ImageFit.ImageFitStretch
             img.smooth = true
-            Image.Draw(session, img)
-            frame: Box.Props
-            frame.key = editor.key_base + cast(u64)(600001 + chart_index * 2)
-            frame.bounds = dest
-            frame.fill = Color.{0, 0, 0, 0}
-            frame.border = Grid.GridLineColor()
-            Box.Draw(session, frame)
+            View.DrawEmbeddedChart(session, img, Grid.GridLineColor())
         }
     }
 }

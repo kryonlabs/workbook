@@ -4,9 +4,6 @@
 using Editor :: #import "workbook/editor";
 Engine :: #import "engine";
 App :: #import "kryon/app";
-Box :: #import "kryon/box";
-Button :: #import "kryon/button";
-Text :: #import "kryon/text";
 Grid :: #import "grid";
 #import "kryon/geometry"
 #import "kryon/session"
@@ -97,24 +94,6 @@ Start :: () {
     OpenGnumeric()
 }
 
-ButtonAt :: (session: Session, x: float32, y: float32, id: s32, label: string) -> bool {
-    button: Button.Props
-    button.id = id
-    button.key = cast(u64)(100 + id)
-    button.label = label
-    button.bounds = Rectangle.{x, y, SidebarWidth - 24.0, 28.0}
-    return Button.Draw(session, button) != 0
-}
-
-LabelAt :: (session: Session, x: float32, y: float32, key: u64, text: string) {
-    label: Text.Props
-    label.key = key
-    label.text = text
-    label.size = Text.Text14
-    label.bounds = Rectangle.{x, y, SidebarWidth - 24.0, 20.0}
-    Text.Draw(session, label)
-}
-
 // Reads the shown cell's displayed value into output as "NAME=value".
 CellLabel :: (name: string, sheet: s32, row: s32, column: s32, output: []u8) {
     SetText(output, name)
@@ -126,53 +105,27 @@ CellLabel :: (name: string, sheet: s32, row: s32, column: s32, output: []u8) {
     AppendText(output, TextUntilNul(display[:]))
 }
 
-DrawSidebar :: (session: Session, viewport: Rectangle) {
-    panel: Box.Props
-    panel.key = cast(u64)900000
-    panel.bounds = Rectangle.{viewport.x, viewport.y, SidebarWidth, viewport.height}
-    panel.fill = Grid.GridColor("surface")
-    panel.border = Grid.GridColor("border-soft")
-    Box.Draw(session, panel)
+Begin :: () {
+    if !started { Start(); started = true }
     host_clicked = false
-    x: float32 = viewport.x + 12.0
-    y: float32 = viewport.y + 16.0
-    if ButtonAt(session, x, y, 1, "Host focus") {
-        host_clicked = true
+}
+
+Activate :: (action: s32) {
+    host_clicked = true
+    if action == 1 {
         host_focus = true
         if editor != null { EditorSetFocused(editor, false) }
-    }
-    y += 36.0
-    if ButtonAt(session, x, y, 2, "Editor focus") {
-        host_clicked = true
+    } else if action == 2 {
         host_focus = false
         if editor != null { EditorSetFocused(editor, true) }
-    }
-    y += 36.0
-    if ButtonAt(session, x, y, 3, "Save") {
-        host_clicked = true
+    } else if action == 3 {
         if editor != null { unused EditorSave(editor, true) }
-    }
-    y += 36.0
-    if ButtonAt(session, x, y, 4, "Close") {
-        host_clicked = true
-        CloseEditor()
-    }
-    y += 36.0
-    if ButtonAt(session, x, y, 5, "Open Gnumeric") {
-        host_clicked = true
-        OpenGnumeric()
-    }
-    y += 36.0
-    if ButtonAt(session, x, y, 6, "Open CSV") {
-        host_clicked = true
-        OpenCsv()
-    }
-    y += 36.0
-    if ButtonAt(session, x, y, 7, "Reopen") {
-        host_clicked = true
-        OpenGnumeric()
-    }
+    } else if action == 4 { CloseEditor() }
+    else if action == 6 { OpenCsv() }
+    else { OpenGnumeric() }
+}
 
+UpdateLabels :: () {
     SetText(state_text[:], ifx editor == null then "state=closed" else "state=open")
     if editor == null {
         SetText(focus_text[:], "focus=closed")
@@ -191,23 +144,21 @@ DrawSidebar :: (session: Session, viewport: Rectangle) {
     CellLabel("A1", 0, 0, 0, a1_text[:])
     CellLabel("B1", 0, 0, 1, b1_text[:])
 
-    y = viewport.y + 16.0 + 7.0 * 36.0 + 12.0
-    LabelAt(session, x, y, cast(u64)910001, TextUntilNul(state_text[:])); y += 24.0
-    LabelAt(session, x, y, cast(u64)910002, TextUntilNul(focus_text[:])); y += 24.0
-    LabelAt(session, x, y, cast(u64)910003, TextUntilNul(doc_text[:])); y += 24.0
-    LabelAt(session, x, y, cast(u64)910004, TextUntilNul(a1_text[:])); y += 24.0
-    LabelAt(session, x, y, cast(u64)910005, TextUntilNul(b1_text[:])); y += 24.0
-    LabelAt(session, x, y, cast(u64)910006, TextUntilNul(save_text[:])); y += 24.0
-    LabelAt(session, x, y, cast(u64)910007, TextUntilNul(editing_text[:]))
 }
 
-Frame :: (frame: App.Frame) {
-    session := Session.{.slot = frame.slot, .epoch = frame.epoch}
-    viewport := frame.viewport
-    if !started { Start(); started = true }
-    DrawSidebar(session, viewport)
-    bounds: Rectangle = Rectangle.{viewport.x + SidebarWidth, viewport.y,
-        viewport.width - SidebarWidth, viewport.height}
+Label :: (index: s32) -> string {
+    if index == 0 { return TextUntilNul(state_text[:]) }
+    if index == 1 { return TextUntilNul(focus_text[:]) }
+    if index == 2 { return TextUntilNul(doc_text[:]) }
+    if index == 3 { return TextUntilNul(a1_text[:]) }
+    if index == 4 { return TextUntilNul(b1_text[:]) }
+    if index == 5 { return TextUntilNul(save_text[:]) }
+    return TextUntilNul(editing_text[:])
+}
+
+EditorHandle :: () -> *Editor { return editor }
+
+SampleInput :: (session: Session, bounds: Rectangle) -> EditorInput {
     input := EditorSample(session, bounds, editor, typed_storage[:], false)
     if host_focus {
         // The host owns the keyboard while it has focus; its own widgets would
@@ -219,8 +170,10 @@ Frame :: (frame: App.Frame) {
         input.blocked = true
         host_clicked = false
     }
-    unused EditorFrame(session, bounds, editor, input)
+    return input
+}
+
+AfterFrame :: () {
     if editor != null && EditorFocused(editor) { host_focus = false }
 }
 
-main :: () -> s32 { return App.Run(App.Window.{.title = "workbook-host"}, Frame) }

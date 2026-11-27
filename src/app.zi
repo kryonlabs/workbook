@@ -2,6 +2,9 @@
 // menus and theme around the embeddable editor in src/editor.zi.
 Menu :: #import "kryon/menu";
 View :: #import "app_view";
+#if !#defined(KRYON_HOSTED_UI) {
+    DesktopMenuView :: #import "desktop_menu_view";
+}
 #import "kryon/geometry"
 #import "kryon/session"
 #import "kryon/drawing_props"
@@ -103,7 +106,7 @@ dropped_path: [4096]u8;
         return 0
     }
 } else {
-    Frame :: (frame: App.Frame) {
+    DesktopFrame :: (frame: App.Frame) {
         session := Session.{.slot = frame.slot, .epoch = frame.epoch}
         viewport := frame.viewport
         FollowSystemTheme()
@@ -115,9 +118,6 @@ dropped_path: [4096]u8;
         RunHostFrame(session, viewport, input)
     }
 
-// The desktop program entry sits at column zero so Kryon's project check
-// finds it; the hosted build above still enters through its `Main` protocol.
-main :: () -> s32 { return App.Run(App.Window.{.title = "Workbook"}, Frame) }
 }
 
 #scope_file
@@ -250,8 +250,7 @@ DrawMenus :: (session: Session, viewport: Rectangle) {
         items: [9]ContextMenu.ContextMenuItem
         id := View.DrawHostedMenu(session, props, groups[:], *menu_state, items[:])
     } else {
-        result := Menu.Draw(session, props, groups[:], *menu_state)
-        id := result.activated_id
+        id := DesktopMenuView.DrawMenu(session, props, groups[:], *menu_state)
     }
     if id == 101 { PickDocument(false) }
     if id == 102 { unused EditorSave(editor, true) }

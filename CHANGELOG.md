@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Use public Kryon TSX components throughout the editor, read-only grid and
+  menus, retaining native chart rendering and the embedded editor API. Use TSX
+  application and preview entries with the published renderer/compiler, and
+  remove the unused CSS dependency.
+
 - Compose Workbook's hosted document menus and spreadsheet editor in native
   TSX. The `Main` bundle entry and `workbook/editor` API keep their signatures.
 

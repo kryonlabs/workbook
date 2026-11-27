@@ -1,25 +1,21 @@
 [package]
 tool = "kryon"
 name = "workbook"
-entry = "src/app.zi"
+entry = "src/desktop.tsx"
 module_roots = ["src", "tests", "previews"]
 bridge_modules = ["app"]
 
 [toolchain]
 git = "https://git.waozi.xyz/ziranlang/ziran.git"
-ref = "23dece1339d51cf51730be438325605e6ec29c87"
+ref = "dc3ecf0aabd1630881c13783a660ca8b298eff88"
 
 [dependencies.kryon]
 git = "https://git.waozi.xyz/kryonlabs/kryon.git"
-ref = "3fc33496121382cc31a53a8c3178e0f2c90977fb"
+ref = "e2b0fbd89167f9bf599efed1865f198ba715786e"
 
 [dependencies.mingcute]
 git = "https://git.waozi.xyz/kryonlabs/mingcute.git"
 ref = "9cc6872f75447c3a24c16764f9829d0f58751cb0"
-
-[dependencies.css]
-git = "https://git.waozi.xyz/kryonlabs/css.git"
-ref = "452a760f7a5befc5d01f28a922f48e3ce1687e7f"
 
 [install]
 bin = "workbook"
