@@ -330,7 +330,11 @@ UpdateDocumentTitle :: () {
             if theme_frames < 120 { return }
             theme_frames = 0
         }
-        name: string = SystemThemeLinux.SystemThemeName()
+        // Copy the theme name out of the module's shared buffer before the
+        // palette read refills it.
+        name_storage: [128]u8
+        SetText(name_storage[:], SystemThemeLinux.SystemThemeName())
+        name: string = TextUntilNul(name_storage[:])
         if theme_installed && name == TextUntilNul(theme_name[:]) { return }
         unused SystemStyle.SystemPaletteInstall(SystemThemeLinux.SystemPaletteRead())
         SetText(theme_name[:], name)

@@ -50,34 +50,46 @@ main :: () -> s32 {
     unused Good("{\"op\":\"set\",\"id\":1,\"text\":\"12\"}")
     unused Good("{\"op\":\"set\",\"id\":1,\"col\":1,\"text\":\"=A1*2\"}")
     unused Good("{\"op\":\"evaluate\",\"id\":1}")
-    reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
-    Check(Contains(reply, "=A1*224"), "formula and its result cross the service boundary")
     expected: [33]u8
-    Check(StartsWith(reply[5:], ExpectedMask(-1, -1, expected[:])), "visible rows start unhidden")
+    {
+        reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
+        Check(Contains(reply, "=A1*224"), "formula and its result cross the service boundary")
+        Check(StartsWith(reply[5:], ExpectedMask(-1, -1, expected[:])), "visible rows start unhidden")
+    }
     unused Good("{\"op\":\"set-rows-hidden\",\"id\":1,\"row\":2,\"last\":3,\"hidden\":1}")
-    reply = Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
-    Check(StartsWith(reply[5:], ExpectedMask(2, 3, expected[:])), "hidden row mask crosses the service boundary")
+    {
+        reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
+        Check(StartsWith(reply[5:], ExpectedMask(2, 3, expected[:])), "hidden row mask crosses the service boundary")
+    }
     unused Good("{\"op\":\"set-rows-hidden\",\"id\":1,\"row\":2,\"last\":3,\"hidden\":0}")
-    reply = Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
-    Check(StartsWith(reply[5:], ExpectedMask(-1, -1, expected[:])), "rows can be shown again")
+    {
+        reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1}")
+        Check(StartsWith(reply[5:], ExpectedMask(-1, -1, expected[:])), "rows can be shown again")
+    }
     unused Good("{\"op\":\"clone\",\"id\":1}")
     unused Good("{\"op\":\"set\",\"id\":2,\"text\":\"99\"}")
     unused Good("{\"op\":\"save\",\"id\":1,\"name\":\"test.gnumeric\"}")
     Check(Contains(Service.Call(*context, *files, "{\"op\":\"save\",\"id\":1,\"name\":\"../escape.gnumeric\"}"), "\"ok\":false"), "reject a parent path")
     unused Good("{\"op\":\"new\"}")
     unused Good("{\"op\":\"load\",\"id\":3,\"name\":\"test.gnumeric\"}")
-    loaded := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
-    Check(Contains(loaded, "=A1*224"), "native document save and reload")
-    Check(!Contains(loaded, "99"), "cloned edits do not change the original")
+    {
+        loaded := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
+        Check(Contains(loaded, "=A1*224"), "native document save and reload")
+        Check(!Contains(loaded, "99"), "cloned edits do not change the original")
+    }
     Check(Contains(Service.Call(*other, *other_files, "{\"op\":\"info\",\"id\":1}"), "\"ok\":false"), "IDs are local to their app")
     unused Service.Call(*context, *files, "{\"op\":\"load\",\"id\":3,\"name\":\"missing.gnumeric\"}")
     Check(files.status == 0, "missing document status is distinct")
-    loaded = Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
-    Check(Contains(loaded, "=A1*224"), "failed load preserves the open document")
+    {
+        loaded := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
+        Check(Contains(loaded, "=A1*224"), "failed load preserves the open document")
+    }
     Check(Files.AppFileWrite(*files, "invalid.gnumeric", "not a spreadsheet"), "write invalid fixture")
     Check(Contains(Service.Call(*context, *files, "{\"op\":\"load\",\"id\":3,\"name\":\"invalid.gnumeric\"}"), "\"ok\":false"), "invalid document rejected")
-    loaded = Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
-    Check(Contains(loaded, "=A1*224"), "invalid import preserves cells")
+    {
+        loaded := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3}")
+        Check(Contains(loaded, "=A1*224"), "invalid import preserves cells")
+    }
     unused Good("{\"op\":\"add-sheet\",\"id\":1,\"text\":\"Second\"}")
     unused Good("{\"op\":\"set\",\"id\":1,\"sheet\":1,\"text\":\"=SUM(Sheet1!A1:B1)\"}")
     unused Good("{\"op\":\"evaluate\",\"id\":1}")
@@ -94,14 +106,18 @@ main :: () -> s32 {
     unused Good(TextUntilNul(request[:]))
     SetText(request[:], "{\"op\":\"set-rows-hidden\",\"id\":1,\"sheet\":2,\"row\":0,\"last\":98,\"hidden\":1}")
     unused Good(TextUntilNul(request[:]))
-    reply = Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1,\"sheet\":2,\"row\":96}")
-    Check(StartsWith(reply[5:], ExpectedMask(0, 2, expected[:])), "hidden state follows view paging")
-    Check(Subtotal10(reply), "hidden rows are excluded from a 109-row sum")
+    {
+        reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":1,\"sheet\":2,\"row\":96}")
+        Check(StartsWith(reply[5:], ExpectedMask(0, 2, expected[:])), "hidden state follows view paging")
+        Check(Subtotal10(reply), "hidden rows are excluded from a 109-row sum")
+    }
     unused Good("{\"op\":\"save\",\"id\":1,\"name\":\"hidden.gnumeric\"}")
     unused Good("{\"op\":\"load\",\"id\":3,\"name\":\"hidden.gnumeric\"}")
-    reply = Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3,\"sheet\":2,\"row\":96}")
-    Check(StartsWith(reply[5:], ExpectedMask(0, 2, expected[:])), "hidden rows survive save and load")
-    Check(Subtotal10(reply), "hidden-row totals survive save and load")
+    {
+        reply := Service.Call(*context, *files, "{\"op\":\"view\",\"id\":3,\"sheet\":2,\"row\":96}")
+        Check(StartsWith(reply[5:], ExpectedMask(0, 2, expected[:])), "hidden rows survive save and load")
+        Check(Subtotal10(reply), "hidden-row totals survive save and load")
+    }
     Say("spreadsheet service: calculation, clone, save/reload, failed imports and private paths passed")
     return 0
 }

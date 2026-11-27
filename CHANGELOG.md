@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Pin Ziran e265c54e and Kryon f4bda473 so the desktop app keeps one Kryon in the graph.
+
 - Use public Kryon TSX components throughout the editor, read-only grid and
   menus, retaining native chart rendering and the embedded editor API. Use TSX
   application and preview entries with the published renderer/compiler, and

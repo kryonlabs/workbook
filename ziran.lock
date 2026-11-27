@@ -65,12 +65,12 @@
       "url": "https://github.com/xiph/opus.git"
     },
     {
-      "commit": "e2b0fbd89167f9bf599efed1865f198ba715786e",
+      "commit": "f4bda4733366bea32e64fa632906410242230122",
       "dependencies": {"audio": "waozi_xyz_ziranlang_audio_b5c6b56b7117", "avif": "waozi_xyz_ziranlang_avif_6ff696d436b6", "image_codec": "waozi_xyz_ziranlang_image_codec_3017f0d1cc56", "libaom": "src_aomedia_googlesource_com_aom_b141d9c45db2", "libavif": "src_github_com_AOMediaCodec_libavif_1aadfad932c9", "libwebp": "src_github_com_webmproject_libwebp_1844042d1ca7", "sdl3": "src_github_com_libsdl_org_SDL_829a65d769d9", "webp": "waozi_xyz_ziranlang_webp_4b9a61d32460"},
       "dependency_refs": {"audio": "b5c6b56b71172c4361ae01e3afdd2118bdac0975", "avif": "6ff696d436b6b4f142eb1e3ecf210de7adfa048f", "image_codec": "3017f0d1cc56975aa29c600a1f55a62e1193cf7b", "libaom": "b141d9c45db236335351c8a4b2a14b3ade27c937", "libavif": "1aadfad932c98c069a1204261b1856f81f3bc199", "libwebp": "1844042d1ca751e62e61df7617dba19c98588339", "sdl3": "829a65d769d935c4852f8159e964312c0957260a", "webp": "4b9a61d32460d481624fe0f83996a7de50327dfe"},
-      "id": "waozi_xyz_kryonlabs_kryon_e2b0fbd89167",
+      "id": "waozi_xyz_kryonlabs_kryon_f4bda4733366",
       "name": "kryon",
-      "ref": "e2b0fbd89167f9bf599efed1865f198ba715786e",
+      "ref": "f4bda4733366bea32e64fa632906410242230122",
       "url": "https://git.waozi.xyz/kryonlabs/kryon.git"
     },
     {
@@ -127,13 +127,13 @@
     }
   ],
   "root": {
-    "dependencies": {"kryon": "waozi_xyz_kryonlabs_kryon_e2b0fbd89167", "mingcute": "waozi_xyz_kryonlabs_mingcute_9cc6872f7544"},
-    "dependency_refs": {"kryon": "e2b0fbd89167f9bf599efed1865f198ba715786e", "mingcute": "9cc6872f75447c3a24c16764f9829d0f58751cb0"},
+    "dependencies": {"kryon": "waozi_xyz_kryonlabs_kryon_f4bda4733366", "mingcute": "waozi_xyz_kryonlabs_mingcute_9cc6872f7544"},
+    "dependency_refs": {"kryon": "f4bda4733366bea32e64fa632906410242230122", "mingcute": "9cc6872f75447c3a24c16764f9829d0f58751cb0"},
     "name": "workbook"
   },
   "toolchain": {
-    "commit": "dc3ecf0aabd1630881c13783a660ca8b298eff88",
-    "ref": "dc3ecf0aabd1630881c13783a660ca8b298eff88",
+    "commit": "e265c54ed682caa23422ecec597c073dff61dc1e",
+    "ref": "e265c54ed682caa23422ecec597c073dff61dc1e",
     "url": "https://git.waozi.xyz/ziranlang/ziran.git"
   }
 }
