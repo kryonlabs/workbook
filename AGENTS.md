@@ -33,8 +33,8 @@ make install    # install workbook, cell and geld under ~/.local
 ## Pins
 
 - Ziran toolchain: `c041afb6de9b5f5f8be13c367563c267841e1cb6`
-- Kryon: `09664f076d3e8ea8db2013fb46fbcd9eda45c54b`
-- mingcute: `9cc6872f75447c3a24c16764f9829d0f58751cb0`; css: `7dd9fff21bd1721deea91071a2317d106e901208`
+- Kryon: `58c3aed94c8592a8fa556f647c372b98787e2680`
+- mingcute: `9cc6872f75447c3a24c16764f9829d0f58751cb0`; css: `46a3396a5baae4970a2d40641a95e178f82cdc85`
 
 Commit as Waozi <waozi@proton.me>; ordinary changes stay in CHANGELOG's
 `Unreleased` section.

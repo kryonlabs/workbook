@@ -11,7 +11,7 @@ ref = "c041afb6de9b5f5f8be13c367563c267841e1cb6"
 
 [dependencies.kryon]
 git = "https://git.waozi.xyz/kryonlabs/kryon.git"
-ref = "09664f076d3e8ea8db2013fb46fbcd9eda45c54b"
+ref = "58c3aed94c8592a8fa556f647c372b98787e2680"
 
 [dependencies.mingcute]
 git = "https://git.waozi.xyz/kryonlabs/mingcute.git"
@@ -19,7 +19,7 @@ ref = "9cc6872f75447c3a24c16764f9829d0f58751cb0"
 
 [dependencies.css]
 git = "https://git.waozi.xyz/kryonlabs/css.git"
-ref = "095874a1fd099d8810450785a1d96e6bce111246"
+ref = "46a3396a5baae4970a2d40641a95e178f82cdc85"
 
 [install]
 bin = "workbook"

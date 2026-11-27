@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Build on Kryon 58c3aed9 and Css 46a3396a (Css now pins Kryon 58c3aed9; the previous Css 095874a1 pinned a Kryon revision the mirror does not serve).
 - Build with Ziran c041afb6 and Kryon 09664f07: the desktop app and the preview host declare `main` and run `App.Run` like every Kryon program now that the program-export program entry is gone; the Werkzeug hosted `Main` protocol keeps its C-ABI export.
 - Full OpenDocument Spreadsheet (`.ods`) support via Gnumeric's OpenCalc
   engine: open, evaluate, edit, undo/redo, and save `.ods` workbooks directly
